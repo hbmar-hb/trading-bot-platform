@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { Link } from 'react-router-dom'
 import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
@@ -217,73 +217,88 @@ function DailyPnlChart({ data, isDark }) {
 
 // ─── Activity Heatmap (GitHub style) ──────────────────────────
 
-function ActivityHeatmap({ data, isDark }) {
-  // Agrupar por semanas
+const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
+  const dayLabels = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+  
+  // Calcular semanas
   const weeks = useMemo(() => {
-    if (!data?.length) return []
+    if (!Array.isArray(data) || data.length === 0) return []
     
-    const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
-    const firstDate = new Date(sorted[0].date)
-    const lastDate = new Date(sorted[sorted.length - 1].date)
-    
-    // Ajustar al domingo anterior
-    const startDate = new Date(firstDate)
-    startDate.setDate(startDate.getDate() - firstDate.getDay())
-    
-    const weeks = []
-    let currentWeek = []
-    let currentDate = new Date(startDate)
-    
-    while (currentDate <= lastDate) {
-      const dateStr = currentDate.toISOString().slice(0, 10)
-      const dayData = data.find(d => d.date === dateStr)
+    try {
+      const sorted = [...data].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      if (!sorted[0]?.date) return []
       
-      currentWeek.push({
-        date: dateStr,
-        count: dayData?.count || 0,
-        pnl: dayData?.pnl || 0,
-      })
+      const firstDate = new Date(sorted[0].date)
+      const lastDate = new Date(sorted[sorted.length - 1].date)
       
-      if (currentWeek.length === 7) {
+      if (isNaN(firstDate.getTime()) || isNaN(lastDate.getTime())) return []
+      
+      // Ajustar al domingo anterior
+      const startDate = new Date(firstDate)
+      startDate.setDate(startDate.getDate() - firstDate.getDay())
+      
+      const weeks = []
+      let currentWeek = []
+      let currentDate = new Date(startDate)
+      
+      while (currentDate <= lastDate) {
+        const dateStr = currentDate.toISOString().slice(0, 10)
+        const dayData = data.find(d => d.date === dateStr)
+        
+        currentWeek.push({
+          date: dateStr,
+          count: dayData?.count || 0,
+          pnl: dayData?.pnl || 0,
+        })
+        
+        if (currentWeek.length === 7) {
+          weeks.push(currentWeek)
+          currentWeek = []
+        }
+        
+        currentDate.setDate(currentDate.getDate() + 1)
+      }
+      
+      if (currentWeek.length > 0) {
+        while (currentWeek.length < 7) {
+          currentWeek.push({ date: null, count: 0, pnl: 0 })
+        }
         weeks.push(currentWeek)
-        currentWeek = []
       }
       
-      currentDate.setDate(currentDate.getDate() + 1)
+      return weeks
+    } catch (e) {
+      console.error('Error computing heatmap weeks:', e)
+      return []
     }
-    
-    if (currentWeek.length > 0) {
-      // Rellenar hasta 7 días
-      while (currentWeek.length < 7) {
-        currentWeek.push({ date: null, count: 0, pnl: 0 })
-      }
-      weeks.push(currentWeek)
-    }
-    
-    return weeks
   }, [data])
 
   const maxCount = useMemo(() => {
-    if (!data?.length) return 0
-    return Math.max(...data.map(d => d.count))
+    if (!Array.isArray(data) || data.length === 0) return 0
+    try {
+      return Math.max(...data.map(d => d.count || 0))
+    } catch (e) {
+      return 0
+    }
   }, [data])
 
-  const getIntensity = (count) => {
+  const getIntensity = useCallback((count) => {
     if (count === 0) return isDark ? 'bg-gray-800' : 'bg-slate-100'
     const intensity = maxCount > 0 ? count / maxCount : 0
     if (intensity <= 0.25) return 'bg-green-300 dark:bg-green-900'
     if (intensity <= 0.5) return 'bg-green-400 dark:bg-green-700'
     if (intensity <= 0.75) return 'bg-green-500 dark:bg-green-600'
     return 'bg-green-600 dark:bg-green-500'
+  }, [maxCount, isDark])
+
+  // Render
+  if (!Array.isArray(data) || data.length === 0) {
+    return (
+      <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+        Sin datos de actividad
+      </div>
+    )
   }
-
-  const dayLabels = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
-
-  if (!data?.length) return (
-    <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
-      Sin datos de actividad
-    </div>
-  )
 
   return (
     <div className="space-y-2">
@@ -329,26 +344,44 @@ function ActivityHeatmap({ data, isDark }) {
       </div>
     </div>
   )
-}
+})
 
 // ─── Hourly Distribution Chart ────────────────────────────────
 
-function HourlyChart({ data, isDark }) {
+const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
   const maxTrades = useMemo(() => {
-    if (!data?.length) return 1
-    return Math.max(...data.map(d => d.trades))
+    if (!Array.isArray(data) || data.length === 0) return 1
+    try {
+      return Math.max(...data.map(d => d.trades || 0), 1)
+    } catch (e) {
+      return 1
+    }
   }, [data])
 
   const maxPnl = useMemo(() => {
-    if (!data?.length) return 1
-    return Math.max(...data.map(d => Math.abs(parseFloat(d.pnl))))
+    if (!Array.isArray(data) || data.length === 0) return 1
+    try {
+      return Math.max(...data.map(d => Math.abs(parseFloat(d.pnl) || 0)), 1)
+    } catch (e) {
+      return 1
+    }
   }, [data])
 
-  if (!data?.length) return (
-    <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
-      Sin datos horarios
-    </div>
-  )
+  const topHours = useMemo(() => {
+    if (!Array.isArray(data)) return []
+    return data
+      .filter(d => (d.trades || 0) > 0)
+      .sort((a, b) => (b.trades || 0) - (a.trades || 0))
+      .slice(0, 4)
+  }, [data])
+
+  if (!Array.isArray(data) || data.length === 0) {
+    return (
+      <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+        Sin datos horarios
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -405,23 +438,19 @@ function HourlyChart({ data, isDark }) {
 
       {/* Tabla resumen */}
       <div className="grid grid-cols-4 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-gray-700">
-        {data
-          .filter(d => d.trades > 0)
-          .sort((a, b) => b.trades - a.trades)
-          .slice(0, 4)
-          .map(hour => (
-            <div key={hour.hour} className="text-center">
-              <p className="text-slate-400">{hour.hour}:00</p>
-              <p className="font-mono font-semibold">{hour.trades} trades</p>
-              <p className={`font-mono ${parseFloat(hour.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                {signed(hour.pnl)}
-              </p>
-            </div>
-          ))}
+        {topHours.map(hour => (
+          <div key={hour.hour} className="text-center">
+            <p className="text-slate-400">{hour.hour}:00</p>
+            <p className="font-mono font-semibold">{hour.trades} trades</p>
+            <p className={`font-mono ${parseFloat(hour.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {signed(hour.pnl)}
+            </p>
+          </div>
+        ))}
       </div>
     </div>
   )
-}
+})
 
 // ─── Period Comparison ────────────────────────────────────────
 
