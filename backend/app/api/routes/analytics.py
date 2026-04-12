@@ -29,7 +29,6 @@ async def get_summary(
 ):
     """Estadísticas globales + por bot + curva de equity."""
 
-    # ── Posiciones cerradas del usuario ──────────────────────
     closed = await db.execute(
         select(Position, BotConfig)
         .join(BotConfig, Position.bot_id == BotConfig.id)
@@ -42,7 +41,6 @@ async def get_summary(
     )
     rows = closed.all()
 
-    # ── Stats globales ────────────────────────────────────────
     global_stats = _compute_summary([pos for pos, _ in rows])
 
     # ── Stats por bot ─────────────────────────────────────────
@@ -50,15 +48,19 @@ async def get_summary(
     for pos, bot in rows:
         bots_map.setdefault(bot.id, []).append(pos)
 
-    # Añadir bots sin trades (para que aparezcan en la lista)
     all_bots_result = await db.execute(
-        select(BotConfig).where(BotConfig.user_id == user_id)
+        select(BotConfig).where(
+            BotConfig.user_id == user_id,
+            ~BotConfig.bot_name.like("[MANUAL]%"),
+        )
     )
     all_bots = {b.id: b for b in all_bots_result.scalars()}
 
     by_bot: list[BotStats] = []
     for bot_id, positions in bots_map.items():
-        bot = all_bots[bot_id]
+        bot = all_bots.get(bot_id)
+        if not bot:
+            continue
         stats = _compute_summary(positions)
         by_bot.append(BotStats(
             bot_id=bot.id,
@@ -68,24 +70,28 @@ async def get_summary(
             total_trades=stats.total_trades,
             winning_trades=stats.winning_trades,
             win_rate=stats.win_rate,
+            profit_factor=stats.profit_factor,
             total_pnl=stats.total_pnl,
+            avg_pnl=stats.average_pnl,
+            best_trade=stats.best_trade,
+            worst_trade=stats.worst_trade,
         ))
 
     # Bots sin trades
     for bot_id, bot in all_bots.items():
         if bot_id not in bots_map:
+            zero = Decimal("0")
             by_bot.append(BotStats(
-                bot_id=bot.id,
-                bot_name=bot.bot_name,
-                symbol=bot.symbol,
-                status=bot.status,
-                total_trades=0,
-                winning_trades=0,
-                win_rate=0.0,
-                total_pnl=Decimal("0"),
+                bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
+                status=bot.status, total_trades=0, winning_trades=0,
+                win_rate=0.0, profit_factor=None, total_pnl=zero,
+                avg_pnl=zero, best_trade=zero, worst_trade=zero,
             ))
 
-    # ── Curva de equity (PnL acumulado cronológico) ───────────
+    # Ordenar: más trades primero
+    by_bot.sort(key=lambda b: b.total_trades, reverse=True)
+
+    # ── Curva de equity ───────────────────────────────────────
     equity_curve: list[EquityPoint] = []
     cumulative = Decimal("0")
     for pos, _ in rows:
@@ -112,7 +118,6 @@ async def get_bot_stats(
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stats de un bot específico."""
     result = await db.execute(
         select(Position, BotConfig)
         .join(BotConfig, Position.bot_id == BotConfig.id)
@@ -123,6 +128,7 @@ async def get_bot_stats(
         )
     )
     rows = result.all()
+    zero = Decimal("0")
 
     if not rows:
         bot_result = await db.execute(
@@ -132,7 +138,8 @@ async def get_bot_stats(
         return BotStats(
             bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
             status=bot.status, total_trades=0, winning_trades=0,
-            win_rate=0.0, total_pnl=Decimal("0"),
+            win_rate=0.0, profit_factor=None, total_pnl=zero,
+            avg_pnl=zero, best_trade=zero, worst_trade=zero,
         )
 
     positions = [pos for pos, _ in rows]
@@ -140,14 +147,12 @@ async def get_bot_stats(
     stats = _compute_summary(positions)
 
     return BotStats(
-        bot_id=bot.id,
-        bot_name=bot.bot_name,
-        symbol=bot.symbol,
-        status=bot.status,
-        total_trades=stats.total_trades,
-        winning_trades=stats.winning_trades,
-        win_rate=stats.win_rate,
-        total_pnl=stats.total_pnl,
+        bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
+        status=bot.status, total_trades=stats.total_trades,
+        winning_trades=stats.winning_trades, win_rate=stats.win_rate,
+        profit_factor=stats.profit_factor, total_pnl=stats.total_pnl,
+        avg_pnl=stats.average_pnl, best_trade=stats.best_trade,
+        worst_trade=stats.worst_trade,
     )
 
 
@@ -156,7 +161,6 @@ async def get_traded_symbols(
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Devuelve todos los símbolos con trades registrados."""
     result = await db.execute(
         select(ExchangeTrade.symbol)
         .where(ExchangeTrade.user_id == user_id)
@@ -171,11 +175,11 @@ async def get_pnl_chart(
     from_date: date | None = Query(None),
     to_date:   date | None = Query(None),
     symbol:    str | None  = Query(None),
-    source:    str | None  = Query(None, description="'manual', 'bots', o None para todos"),
+    source:    str | None  = Query(None),
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """PnL diario + acumulado desde exchange_trades (datos reales de BingX)."""
+    """PnL diario + acumulado desde exchange_trades."""
     day_col = cast(ExchangeTrade.closed_at, Date).label("day")
 
     query = (
@@ -219,31 +223,90 @@ async def get_pnl_chart(
 # ─── Helpers ─────────────────────────────────────────────────
 
 def _compute_summary(positions: list[Position]) -> TradeSummary:
+    zero = Decimal("0")
+
     if not positions:
         return TradeSummary(
             total_trades=0, winning_trades=0, losing_trades=0,
-            win_rate=0.0, total_pnl=Decimal("0"), average_pnl=Decimal("0"),
-            best_trade=Decimal("0"), worst_trade=Decimal("0"),
+            win_rate=0.0, profit_factor=None, total_pnl=zero,
+            average_pnl=zero, best_trade=zero, worst_trade=zero,
+            max_drawdown=zero, avg_duration_hours=0.0, current_streak=0,
+            long_trades=0, short_trades=0, long_win_rate=0.0,
+            short_win_rate=0.0, long_pnl=zero, short_pnl=zero,
         )
 
     pnls = [p.realized_pnl for p in positions if p.realized_pnl is not None]
     total = len(pnls)
     if total == 0:
-        return TradeSummary(
-            total_trades=0, winning_trades=0, losing_trades=0,
-            win_rate=0.0, total_pnl=Decimal("0"), average_pnl=Decimal("0"),
-            best_trade=Decimal("0"), worst_trade=Decimal("0"),
-        )
+        return _compute_summary([])
 
-    wins = sum(1 for p in pnls if p > 0)
+    wins   = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p <= 0]
+    n_wins = len(wins)
+
+    total_win  = sum(wins,   zero)
+    total_loss = abs(sum(losses, zero))
+    profit_factor = round(float(total_win / total_loss), 2) if total_loss > 0 else None
+
+    # Max drawdown (desde el pico de equity acumulado)
+    cumulative = zero
+    peak       = zero
+    max_dd     = zero
+    for pnl in pnls:
+        cumulative += pnl
+        if cumulative > peak:
+            peak = cumulative
+        dd = peak - cumulative
+        if dd > max_dd:
+            max_dd = dd
+
+    # Duración media
+    durations = []
+    for p in positions:
+        if p.realized_pnl is not None and p.opened_at and p.closed_at:
+            durations.append((p.closed_at - p.opened_at).total_seconds() / 3600)
+    avg_duration = round(sum(durations) / len(durations), 1) if durations else 0.0
+
+    # Racha actual (+ wins, - losses)
+    streak = 0
+    for p in reversed(positions):
+        if p.realized_pnl is None:
+            break
+        if p.realized_pnl > 0:
+            if streak < 0:
+                break
+            streak += 1
+        else:
+            if streak > 0:
+                break
+            streak -= 1
+
+    # Long vs Short
+    longs  = [p for p in positions if p.side == "long"  and p.realized_pnl is not None]
+    shorts = [p for p in positions if p.side == "short" and p.realized_pnl is not None]
+
+    long_wins  = sum(1 for p in longs  if p.realized_pnl > 0)
+    short_wins = sum(1 for p in shorts if p.realized_pnl > 0)
+    long_pnl   = sum((p.realized_pnl for p in longs),  zero)
+    short_pnl  = sum((p.realized_pnl for p in shorts), zero)
 
     return TradeSummary(
         total_trades=total,
-        winning_trades=wins,
-        losing_trades=total - wins,
-        win_rate=round(wins / total, 4),
-        total_pnl=sum(pnls, Decimal("0")),
-        average_pnl=sum(pnls, Decimal("0")) / total,
+        winning_trades=n_wins,
+        losing_trades=total - n_wins,
+        win_rate=round(n_wins / total, 4),
+        profit_factor=profit_factor,
+        total_pnl=sum(pnls, zero),
+        average_pnl=sum(pnls, zero) / total,
         best_trade=max(pnls),
         worst_trade=min(pnls),
+        max_drawdown=max_dd,
+        avg_duration_hours=avg_duration,
+        current_streak=streak,
+        long_trades=len(longs),
+        short_trades=len(shorts),
+        long_win_rate=round(long_wins  / len(longs),  4) if longs  else 0.0,
+        short_win_rate=round(short_wins / len(shorts), 4) if shorts else 0.0,
+        long_pnl=long_pnl,
+        short_pnl=short_pnl,
     )

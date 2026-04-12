@@ -1,6 +1,7 @@
 import uuid
 from datetime import datetime
 from decimal import Decimal
+from typing import Optional
 
 from pydantic import BaseModel
 
@@ -10,10 +11,20 @@ class TradeSummary(BaseModel):
     winning_trades: int
     losing_trades: int
     win_rate: float                 # 0.0 – 1.0
+    profit_factor: Optional[float]  # ganancia_total / pérdida_total
     total_pnl: Decimal
     average_pnl: Decimal
     best_trade: Decimal
     worst_trade: Decimal
+    max_drawdown: Decimal           # máxima caída desde un pico de equity acumulado
+    avg_duration_hours: float       # duración media de trades (horas)
+    current_streak: int             # + = racha de wins, - = racha de losses
+    long_trades: int
+    short_trades: int
+    long_win_rate: float
+    short_win_rate: float
+    long_pnl: Decimal
+    short_pnl: Decimal
 
 
 class BotStats(BaseModel):
@@ -24,7 +35,11 @@ class BotStats(BaseModel):
     total_trades: int
     winning_trades: int
     win_rate: float
+    profit_factor: Optional[float]
     total_pnl: Decimal
+    avg_pnl: Decimal
+    best_trade: Decimal
+    worst_trade: Decimal
 
 
 class EquityPoint(BaseModel):
