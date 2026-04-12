@@ -341,106 +341,176 @@ function ActivityHeatmap({ data, isDark }) {
   )
 }
 
-// ─── Hourly Distribution Chart ────────────────────────────────
+// ─── Hourly Distribution Chart (Lineal) ───────────────────────
 
 function HourlyChart({ data, isDark }) {
+  const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
-  
-  const maxTrades = useMemo(() => {
-    if (safeData.length === 0) return 1
-    try {
-      return Math.max(...safeData.map(d => d.trades || 0), 1)
-    } catch (e) {
-      return 1
-    }
-  }, [safeData])
 
-  const maxPnl = useMemo(() => {
-    if (safeData.length === 0) return 1
-    try {
-      return Math.max(...safeData.map(d => Math.abs(parseFloat(d.pnl) || 0)), 1)
-    } catch (e) {
-      return 1
-    }
-  }, [safeData])
+  useEffect(() => {
+    if (!ref.current || safeData.length === 0) return
 
-  const topHours = useMemo(() => {
-    return safeData
-      .filter(d => (d.trades || 0) > 0)
-      .sort((a, b) => (b.trades || 0) - (a.trades || 0))
-      .slice(0, 4)
-  }, [safeData])
+    const bg   = isDark ? '#030712' : '#ffffff'
+    const text = isDark ? '#9ca3af' : '#64748b'
+    const grid = isDark ? '#1f2937' : '#e2e8f0'
+
+    const chart = createChart(ref.current, {
+      layout:     { background: { color: bg }, textColor: text },
+      grid:       { vertLines: { color: grid }, horzLines: { color: grid } },
+      timeScale:  { 
+        borderColor: grid,
+        tickMarkFormatter: (time) => `${time}:00`,
+      },
+      rightPriceScale: { borderColor: grid },
+      leftPriceScale:  { visible: true, borderColor: grid },
+      height: 200,
+    })
+
+    // Serie de PnL (línea principal)
+    const pnlSeries = chart.addLineSeries({
+      color: '#22c55e',
+      lineWidth: 2,
+      title: 'PnL',
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceScaleId: 'right',
+    })
+
+    // Serie de trades (barras en el eje izquierdo)
+    const tradesSeries = chart.addHistogramSeries({
+      color: 'rgba(59, 130, 246, 0.5)',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'left',
+    })
+
+    // Preparar datos para las 24 horas
+    const hourlyPoints = Array.from({ length: 24 }, (_, hour) => {
+      const hourData = safeData.find(d => d.hour === hour)
+      return {
+        time: hour,
+        pnl: parseFloat(hourData?.pnl || 0),
+        trades: hourData?.trades || 0,
+        winRate: hourData?.win_rate || 0,
+      }
+    })
+
+    pnlSeries.setData(hourlyPoints.map(p => ({
+      time: p.time,
+      value: p.pnl,
+    })))
+
+    tradesSeries.setData(hourlyPoints.map(p => ({
+      time: p.time,
+      value: p.trades,
+      color: p.trades > 0 ? 'rgba(59, 130, 246, 0.4)' : 'transparent',
+    })))
+
+    // Tooltip personalizado
+    const toolTip = document.createElement('div')
+    toolTip.style.cssText = `
+      position: absolute;
+      display: none;
+      padding: 8px 12px;
+      box-sizing: border-box;
+      font-size: 12px;
+      text-align: left;
+      z-index: 1000;
+      pointer-events: none;
+      border-radius: 6px;
+      background: ${isDark ? '#1f2937' : '#ffffff'};
+      color: ${isDark ? '#e5e7eb' : '#1f2937'};
+      border: 1px solid ${isDark ? '#374151' : '#e5e7eb'};
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `
+    ref.current.appendChild(toolTip)
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || param.point === undefined) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const hourData = hourlyPoints.find(p => p.time === param.time)
+      if (!hourData) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const pnlColor = hourData.pnl >= 0 ? '#22c55e' : '#ef4444'
+      
+      toolTip.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 4px;">${param.time}:00 - ${param.time}:59</div>
+        <div>Trades: <span style="font-weight: 600;">${hourData.trades}</span></div>
+        <div>Win Rate: <span style="font-weight: 600;">${(hourData.winRate * 100).toFixed(1)}%</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)} USDT</span></div>
+      `
+
+      const rect = ref.current.getBoundingClientRect()
+      toolTip.style.left = `${param.point.x + 10}px`
+      toolTip.style.top = `${param.point.y - 10}px`
+      toolTip.style.display = 'block'
+    })
+
+    chart.timeScale().fitContent()
+
+    const obs = new ResizeObserver(() => {
+      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+    })
+    obs.observe(ref.current)
+
+    return () => { 
+      chart.remove()
+      toolTip.remove()
+      obs.disconnect() 
+    }
+  }, [safeData, isDark])
 
   if (safeData.length === 0) {
     return (
-      <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+      <div className="h-[200px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
         Sin datos horarios
       </div>
     )
   }
 
   return (
-    <div className="space-y-4">
-      <div>
-        <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">Trades por hora</p>
-        <div className="flex items-end gap-1 h-20">
-          {Array.from({ length: 24 }, (_, hour) => {
-            const hourData = safeData.find(d => d.hour === hour)
-            const trades = hourData?.trades || 0
-            const height = maxTrades > 0 ? (trades / maxTrades) * 100 : 0
-            
-            return (
-              <div key={hour} className="flex-1 flex flex-col items-center gap-1">
-                <div
-                  className="w-full bg-blue-500/60 rounded-t-sm min-h-[2px]"
-                  style={{ height: `${Math.max(height, 2)}%` }}
-                  title={`${hour}:00 - ${trades} trades`}
-                />
-                {hour % 4 === 0 && (
-                  <span className="text-[9px] text-slate-400">{hour}h</span>
-                )}
-              </div>
-            )
-          })}
+    <div className="space-y-3">
+      <div ref={ref} className="w-full" />
+      
+      {/* Leyenda */}
+      <div className="flex items-center justify-center gap-6 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded bg-blue-500/40" />
+          <span className="text-slate-500 dark:text-gray-400">Trades (barras)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-0.5 bg-green-500" />
+          <span className="text-slate-500 dark:text-gray-400">PnL (línea)</span>
         </div>
       </div>
 
-      <div>
-        <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">PnL por hora</p>
-        <div className="flex items-center gap-1 h-16">
-          {Array.from({ length: 24 }, (_, hour) => {
-            const hourData = safeData.find(d => d.hour === hour)
-            const pnl = parseFloat(hourData?.pnl || 0)
-            const height = maxPnl > 0 ? (Math.abs(pnl) / maxPnl) * 100 : 0
-            const isPositive = pnl >= 0
-            
-            return (
-              <div key={hour} className="flex-1 flex flex-col items-center">
-                <div
-                  className={`w-full rounded-sm min-h-[2px] ${
-                    pnl === 0 ? 'bg-slate-200 dark:bg-gray-700' :
-                    isPositive ? 'bg-green-500/60' : 'bg-red-500/60'
-                  }`}
-                  style={{ height: `${Math.max(height, 2)}%` }}
-                  title={`${hour}:00 - ${signed(pnl)} USDT`}
-                />
+      {/* Top 3 horas */}
+      {(() => {
+        const topHours = safeData
+          .filter(d => (d.trades || 0) > 0)
+          .sort((a, b) => (b.trades || 0) - (a.trades || 0))
+          .slice(0, 3)
+        
+        if (topHours.length === 0) return null
+        
+        return (
+          <div className="grid grid-cols-3 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-gray-700">
+            {topHours.map(hour => (
+              <div key={hour.hour} className="text-center">
+                <p className="text-slate-400 text-[10px]">{hour.hour}:00 - {hour.hour}:59</p>
+                <p className="font-mono font-semibold">{hour.trades} trades</p>
+                <p className={`font-mono ${parseFloat(hour.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                  {signed(hour.pnl)}
+                </p>
               </div>
-            )
-          })}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-4 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-gray-700">
-        {topHours.map(hour => (
-          <div key={hour.hour} className="text-center">
-            <p className="text-slate-400">{hour.hour}:00</p>
-            <p className="font-mono font-semibold">{hour.trades} trades</p>
-            <p className={`font-mono ${parseFloat(hour.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-              {signed(hour.pnl)}
-            </p>
+            ))}
           </div>
-        ))}
-      </div>
+        )
+      })()}
     </div>
   )
 }
