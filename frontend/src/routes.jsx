@@ -7,6 +7,7 @@ import DashboardPage       from '@/pages/DashboardPage'
 import BotsListPage        from '@/pages/BotsListPage'
 import BotEditPage         from '@/pages/BotEditPage'
 import BotActivityPage     from '@/pages/BotActivityPage'
+import BotOptimizerPage   from '@/pages/BotOptimizerPage'
 import PositionsPage       from '@/pages/PositionsPage'
 import AnalyticsPage       from '@/pages/AnalyticsPage'
 import ExchangeAccountsPage from '@/pages/ExchangeAccountsPage'
@@ -35,6 +36,7 @@ export default function AppRoutes() {
         <Route path="/bots/new"                     element={guard(BotEditPage)} />
         <Route path="/bots/:botId/edit"             element={guard(BotEditPage)} />
         <Route path="/bots/:botId/activity"         element={guard(BotActivityPage)} />
+        <Route path="/bots/:botId/optimizer"        element={guard(BotOptimizerPage)} />
         <Route path="/positions"                    element={guard(PositionsPage)} />
         <Route path="/analytics"                    element={guard(AnalyticsPage)} />
         <Route path="/exchange-accounts"            element={guard(ExchangeAccountsPage)} />

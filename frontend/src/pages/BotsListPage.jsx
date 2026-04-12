@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, Edit, Plus, Trash2, TrendingUp, TrendingDown } from 'lucide-react'
+import { Activity, Edit, Plus, Sparkles, Trash2, TrendingUp, TrendingDown } from 'lucide-react'
 import { useBots } from '@/hooks/useBotConfig'
 import usePositionStore from '@/store/positionStore'
 import BotStatusBadge from '@/components/Common/BotStatusBadge'
@@ -120,10 +120,13 @@ export default function BotsListPage() {
                   {toggling === bot.id ? '...' : bot.status === 'active' ? 'Pausar' : 'Activar'}
                 </button>
 
-                <Link to={`/bots/${bot.id}/activity`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded">
+                <Link to={`/bots/${bot.id}/activity`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded" title="Actividad">
                   <Activity size={16} />
                 </Link>
-                <Link to={`/bots/${bot.id}/edit`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded">
+                <Link to={`/bots/${bot.id}/optimizer`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-blue-400 rounded" title="Optimizador">
+                  <Sparkles size={16} />
+                </Link>
+                <Link to={`/bots/${bot.id}/edit`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded" title="Editar">
                   <Edit size={16} />
                 </Link>
                 <button
