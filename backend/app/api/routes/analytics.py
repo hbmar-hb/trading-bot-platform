@@ -11,10 +11,12 @@ from app.models.bot_config import BotConfig
 from app.models.exchange_trade import ExchangeTrade
 from app.models.position import Position
 from app.schemas.analytics import (
+    ActivityPoint,
     AnalyticsSummaryResponse,
     BotStats,
     DailyPnlPoint,
     EquityPoint,
+    HourlyStats,
     TradeSummary,
 )
 from app.services.database import get_db
@@ -176,6 +178,7 @@ async def get_pnl_chart(
     to_date:   date | None = Query(None),
     symbol:    str | None  = Query(None),
     source:    str | None  = Query(None),
+    bot_id:    uuid.UUID | None = Query(None),
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -202,6 +205,8 @@ async def get_pnl_chart(
         query = query.where(ExchangeTrade.source == "manual")
     elif source == "bots":
         query = query.where(ExchangeTrade.source == "bot")
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
 
     query = query.group_by(day_col).order_by(day_col)
     result = await db.execute(query)
@@ -218,6 +223,120 @@ async def get_pnl_chart(
             cumulative_pnl=cumulative,
         ))
     return points
+
+
+@router.get("/activity-heatmap", response_model=list[ActivityPoint])
+async def get_activity_heatmap(
+    from_date: date | None = Query(None),
+    to_date:   date | None = Query(None),
+    bot_id:    uuid.UUID | None = Query(None),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Heatmap de actividad: trades por día (para gráfico tipo GitHub)."""
+    day_col = cast(ExchangeTrade.closed_at, Date).label("day")
+
+    query = (
+        select(
+            day_col,
+            func.count().label("trade_count"),
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("daily_pnl")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+        )
+    )
+
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+
+    query = query.group_by(day_col).order_by(day_col)
+    result = await db.execute(query)
+    rows = result.all()
+
+    return [
+        ActivityPoint(
+            date=str(row.day),
+            count=row.trade_count,
+            pnl=row.daily_pnl or Decimal("0")
+        )
+        for row in rows
+    ]
+
+
+@router.get("/hourly-distribution", response_model=list[HourlyStats])
+async def get_hourly_distribution(
+    from_date: date | None = Query(None),
+    to_date:   date | None = Query(None),
+    bot_id:    uuid.UUID | None = Query(None),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Distribución de trades por hora del día (0-23)."""
+    hour_col = func.extract('hour', ExchangeTrade.closed_at).label("hour")
+
+    query = (
+        select(
+            hour_col,
+            func.count().label("trade_count"),
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("hourly_pnl")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl.is_not(None),
+        )
+    )
+
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+
+    query = query.group_by(hour_col).order_by(hour_col)
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Calcular wins por hora (subquery separada para accuracy)
+    wins_query = (
+        select(
+            func.extract('hour', ExchangeTrade.closed_at).label("hour"),
+            func.count().label("win_count")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl > 0,
+        )
+    )
+    if from_date:
+        wins_query = wins_query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        wins_query = wins_query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        wins_query = wins_query.where(ExchangeTrade.bot_id == bot_id)
+    wins_query = wins_query.group_by(func.extract('hour', ExchangeTrade.closed_at))
+
+    wins_result = await db.execute(wins_query)
+    wins_by_hour = {int(row.hour): row.win_count for row in wins_result.all()}
+
+    return [
+        HourlyStats(
+            hour=int(row.hour),
+            trades=row.trade_count,
+            wins=wins_by_hour.get(int(row.hour), 0),
+            pnl=row.hourly_pnl or Decimal("0"),
+            win_rate=round(wins_by_hour.get(int(row.hour), 0) / row.trade_count, 4) if row.trade_count > 0 else 0.0
+        )
+        for row in rows
+    ]
 
 
 # ─── Helpers ─────────────────────────────────────────────────

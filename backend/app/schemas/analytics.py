@@ -60,3 +60,17 @@ class AnalyticsSummaryResponse(BaseModel):
     global_stats: TradeSummary
     by_bot: list[BotStats]
     equity_curve: list[EquityPoint]
+
+
+class ActivityPoint(BaseModel):
+    date: str           # "YYYY-MM-DD"
+    count: int          # número de trades
+    pnl: Decimal        # PnL del día
+
+
+class HourlyStats(BaseModel):
+    hour: int           # 0-23
+    trades: int
+    wins: int
+    pnl: Decimal
+    win_rate: float

@@ -2,8 +2,9 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
+import { botsService } from '@/services/bots'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
-import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw } from 'lucide-react'
+import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw, Filter, Clock, Calendar } from 'lucide-react'
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -130,7 +131,6 @@ function EquityChart({ data, isDark }) {
       priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)} USDT` },
     })
 
-    // Área bajo la línea
     const area = chart.addAreaSeries({
       topColor:    'rgba(59,130,246,0.15)',
       bottomColor: 'rgba(59,130,246,0)',
@@ -215,14 +215,294 @@ function DailyPnlChart({ data, isDark }) {
   return <div ref={ref} className="w-full" />
 }
 
+// ─── Activity Heatmap (GitHub style) ──────────────────────────
+
+function ActivityHeatmap({ data, isDark }) {
+  // Agrupar por semanas
+  const weeks = useMemo(() => {
+    if (!data?.length) return []
+    
+    const sorted = [...data].sort((a, b) => a.date.localeCompare(b.date))
+    const firstDate = new Date(sorted[0].date)
+    const lastDate = new Date(sorted[sorted.length - 1].date)
+    
+    // Ajustar al domingo anterior
+    const startDate = new Date(firstDate)
+    startDate.setDate(startDate.getDate() - firstDate.getDay())
+    
+    const weeks = []
+    let currentWeek = []
+    let currentDate = new Date(startDate)
+    
+    while (currentDate <= lastDate) {
+      const dateStr = currentDate.toISOString().slice(0, 10)
+      const dayData = data.find(d => d.date === dateStr)
+      
+      currentWeek.push({
+        date: dateStr,
+        count: dayData?.count || 0,
+        pnl: dayData?.pnl || 0,
+      })
+      
+      if (currentWeek.length === 7) {
+        weeks.push(currentWeek)
+        currentWeek = []
+      }
+      
+      currentDate.setDate(currentDate.getDate() + 1)
+    }
+    
+    if (currentWeek.length > 0) {
+      // Rellenar hasta 7 días
+      while (currentWeek.length < 7) {
+        currentWeek.push({ date: null, count: 0, pnl: 0 })
+      }
+      weeks.push(currentWeek)
+    }
+    
+    return weeks
+  }, [data])
+
+  const maxCount = useMemo(() => {
+    if (!data?.length) return 0
+    return Math.max(...data.map(d => d.count))
+  }, [data])
+
+  const getIntensity = (count) => {
+    if (count === 0) return isDark ? 'bg-gray-800' : 'bg-slate-100'
+    const intensity = maxCount > 0 ? count / maxCount : 0
+    if (intensity <= 0.25) return 'bg-green-300 dark:bg-green-900'
+    if (intensity <= 0.5) return 'bg-green-400 dark:bg-green-700'
+    if (intensity <= 0.75) return 'bg-green-500 dark:bg-green-600'
+    return 'bg-green-600 dark:bg-green-500'
+  }
+
+  const dayLabels = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+
+  if (!data?.length) return (
+    <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+      Sin datos de actividad
+    </div>
+  )
+
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-1">
+        {/* Labels de días */}
+        <div className="flex flex-col gap-1 mr-2">
+          {dayLabels.map((label, i) => (
+            <span key={i} className="text-[10px] text-slate-400 w-3 h-3 flex items-center justify-center">
+              {label}
+            </span>
+          ))}
+        </div>
+        
+        {/* Grid */}
+        <div className="flex gap-1 overflow-x-auto pb-2">
+          {weeks.map((week, weekIdx) => (
+            <div key={weekIdx} className="flex flex-col gap-1">
+              {week.map((day, dayIdx) => (
+                <div
+                  key={dayIdx}
+                  className={`w-3 h-3 rounded-sm ${getIntensity(day.count)} ${
+                    day.date ? 'cursor-pointer hover:ring-2 hover:ring-slate-400' : ''
+                  }`}
+                  title={day.date ? `${day.date}: ${day.count} trades, ${signed(day.pnl)} USDT` : ''}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+      
+      {/* Leyenda */}
+      <div className="flex items-center gap-2 text-xs text-slate-400">
+        <span>Menos</span>
+        <div className="flex gap-1">
+          <div className={`w-3 h-3 rounded-sm ${isDark ? 'bg-gray-800' : 'bg-slate-100'}`} />
+          <div className="w-3 h-3 rounded-sm bg-green-300 dark:bg-green-900" />
+          <div className="w-3 h-3 rounded-sm bg-green-400 dark:bg-green-700" />
+          <div className="w-3 h-3 rounded-sm bg-green-500 dark:bg-green-600" />
+          <div className="w-3 h-3 rounded-sm bg-green-600 dark:bg-green-500" />
+        </div>
+        <span>Más</span>
+      </div>
+    </div>
+  )
+}
+
+// ─── Hourly Distribution Chart ────────────────────────────────
+
+function HourlyChart({ data, isDark }) {
+  const maxTrades = useMemo(() => {
+    if (!data?.length) return 1
+    return Math.max(...data.map(d => d.trades))
+  }, [data])
+
+  const maxPnl = useMemo(() => {
+    if (!data?.length) return 1
+    return Math.max(...data.map(d => Math.abs(parseFloat(d.pnl))))
+  }, [data])
+
+  if (!data?.length) return (
+    <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+      Sin datos horarios
+    </div>
+  )
+
+  return (
+    <div className="space-y-4">
+      {/* Trades por hora */}
+      <div>
+        <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">Trades por hora</p>
+        <div className="flex items-end gap-1 h-20">
+          {Array.from({ length: 24 }, (_, hour) => {
+            const hourData = data.find(d => d.hour === hour)
+            const trades = hourData?.trades || 0
+            const height = maxTrades > 0 ? (trades / maxTrades) * 100 : 0
+            
+            return (
+              <div key={hour} className="flex-1 flex flex-col items-center gap-1">
+                <div
+                  className="w-full bg-blue-500/60 rounded-t-sm min-h-[2px]"
+                  style={{ height: `${Math.max(height, 2)}%` }}
+                  title={`${hour}:00 - ${trades} trades`}
+                />
+                {hour % 4 === 0 && (
+                  <span className="text-[9px] text-slate-400">{hour}h</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* PnL por hora */}
+      <div>
+        <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">PnL por hora</p>
+        <div className="flex items-center gap-1 h-16">
+          {Array.from({ length: 24 }, (_, hour) => {
+            const hourData = data.find(d => d.hour === hour)
+            const pnl = parseFloat(hourData?.pnl || 0)
+            const height = maxPnl > 0 ? (Math.abs(pnl) / maxPnl) * 100 : 0
+            const isPositive = pnl >= 0
+            
+            return (
+              <div key={hour} className="flex-1 flex flex-col items-center">
+                <div
+                  className={`w-full rounded-sm min-h-[2px] ${
+                    pnl === 0 ? 'bg-slate-200 dark:bg-gray-700' :
+                    isPositive ? 'bg-green-500/60' : 'bg-red-500/60'
+                  }`}
+                  style={{ height: `${Math.max(height, 2)}%` }}
+                  title={`${hour}:00 - ${signed(pnl)} USDT`}
+                />
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Tabla resumen */}
+      <div className="grid grid-cols-4 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-gray-700">
+        {data
+          .filter(d => d.trades > 0)
+          .sort((a, b) => b.trades - a.trades)
+          .slice(0, 4)
+          .map(hour => (
+            <div key={hour.hour} className="text-center">
+              <p className="text-slate-400">{hour.hour}:00</p>
+              <p className="font-mono font-semibold">{hour.trades} trades</p>
+              <p className={`font-mono ${parseFloat(hour.pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                {signed(hour.pnl)}
+              </p>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+}
+
+// ─── Period Comparison ────────────────────────────────────────
+
+function PeriodComparison({ summary }) {
+  const periods = [
+    { label: '7d', days: 7 },
+    { label: '30d', days: 30 },
+  ]
+
+  const [periodData, setPeriodData] = useState({})
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    const fetchPeriods = async () => {
+      setLoading(true)
+      const data = {}
+      for (const period of periods) {
+        const { from, to } = rangeFromDays(period.days)
+        try {
+          const res = await analyticsService.pnlChart({ from_date: from, to_date: to })
+          const pnlData = res.data
+          const totalPnl = pnlData.reduce((acc, d) => acc + parseFloat(d.daily_pnl), 0)
+          const positive = pnlData.filter(d => parseFloat(d.daily_pnl) > 0).length
+          data[period.label] = {
+            pnl: totalPnl,
+            days: pnlData.length,
+            positive,
+            negative: pnlData.length - positive,
+          }
+        } catch {
+          data[period.label] = null
+        }
+      }
+      setPeriodData(data)
+      setLoading(false)
+    }
+
+    fetchPeriods()
+  }, [])
+
+  if (loading) return (
+    <div className="h-[100px] flex items-center justify-center">
+      <LoadingSpinner size="sm" />
+    </div>
+  )
+
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      {periods.map(period => {
+        const d = periodData[period.label]
+        if (!d) return null
+        
+        return (
+          <div key={period.label} className="bg-slate-50 dark:bg-gray-800/40 rounded-lg p-3">
+            <p className="text-xs text-slate-400 mb-2">Últimos {period.label}</p>
+            <p className={`text-lg font-bold font-mono ${d.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+              {signed(d.pnl)} USDT
+            </p>
+            <div className="flex gap-2 text-xs text-slate-400 mt-1">
+              <span className="text-green-400">{d.positive}d ↑</span>
+              <span className="text-red-400">{d.negative}d ↓</span>
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
 // ─── Página principal ──────────────────────────────────────────
 
 export default function AnalyticsPage() {
   const [summary, setSummary]     = useState(null)
   const [dailyPnl, setDailyPnl]   = useState([])
+  const [heatmapData, setHeatmapData] = useState([])
+  const [hourlyData, setHourlyData] = useState([])
+  const [bots, setBots]           = useState([])
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState(null)
-  const [range, setRange]         = useState(RANGES[1])   // 30d por defecto
+  const [range, setRange]         = useState(RANGES[1])
+  const [selectedBot, setSelectedBot] = useState('')
   const [isDark, setIsDark]       = useState(false)
 
   useEffect(() => {
@@ -233,16 +513,30 @@ export default function AnalyticsPage() {
     return () => obs.disconnect()
   }, [])
 
-  const load = useCallback(async (selectedRange) => {
+  // Cargar lista de bots
+  useEffect(() => {
+    botsService.list().then(res => setBots(res.data)).catch(() => {})
+  }, [])
+
+  const load = useCallback(async (selectedRange, botId = '') => {
     setLoading(true)
+    setError(null)
     try {
       const { from, to } = rangeFromDays(selectedRange.days)
-      const [summaryRes, pnlRes] = await Promise.all([
+      const params = { from_date: from, to_date: to }
+      if (botId) params.bot_id = botId
+
+      const [summaryRes, pnlRes, heatmapRes, hourlyRes] = await Promise.all([
         analyticsService.summary(),
-        analyticsService.pnlChart({ from_date: from, to_date: to }),
+        analyticsService.pnlChart(params),
+        analyticsService.activityHeatmap(params),
+        analyticsService.hourlyDistribution(params),
       ])
+      
       setSummary(summaryRes.data)
       setDailyPnl(pnlRes.data)
+      setHeatmapData(heatmapRes.data)
+      setHourlyData(hourlyRes.data)
     } catch (err) {
       console.error('Error cargando analytics:', err)
       setError('No se pudieron cargar las estadísticas')
@@ -251,7 +545,7 @@ export default function AnalyticsPage() {
     }
   }, [])
 
-  useEffect(() => { load(range) }, [range, load])
+  useEffect(() => { load(range, selectedBot) }, [range, selectedBot, load])
 
   // Exportar datos a CSV
   const exportToCSV = useCallback(() => {
@@ -263,17 +557,17 @@ export default function AnalyticsPage() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `analytics_${range.label}_${new Date().toISOString().slice(0,10)}.csv`
+    a.download = `analytics_${range.label}_${selectedBot || 'all'}_${new Date().toISOString().slice(0,10)}.csv`
     a.click()
     URL.revokeObjectURL(url)
-  }, [dailyPnl, range.label])
+  }, [dailyPnl, range.label, selectedBot])
 
   if (loading) return <div className="flex justify-center py-20"><LoadingSpinner /></div>
   if (error || !summary) return (
     <div className="text-center py-20">
       <p className="text-slate-400 mb-4">{error || 'No se pudieron cargar las estadísticas'}</p>
       <button
-        onClick={() => load(range)}
+        onClick={() => load(range, selectedBot)}
         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
       >
         <RefreshCw size={16} /> Reintentar
@@ -283,7 +577,6 @@ export default function AnalyticsPage() {
 
   const g = summary.global_stats
 
-  // Optimizar cálculos de estadísticas diarias
   const dailyStats = useMemo(() => {
     if (!dailyPnl?.length) return null
     const positive = dailyPnl.filter(d => parseFloat(d.daily_pnl) > 0).length
@@ -299,25 +592,53 @@ export default function AnalyticsPage() {
   return (
     <div className="space-y-6">
 
-      {/* Header + rango */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      {/* Header + filtros */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">Analytics</h1>
-        <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
-          {RANGES.map(r => (
-            <button
-              key={r.label}
-              onClick={() => setRange(r)}
-              aria-pressed={range.label === r.label}
-              className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                range.label === r.label
-                  ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
-                  : 'text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-200'
-              }`}
+        
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Selector de bot */}
+          <div className="relative">
+            <Filter size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
+            <select
+              value={selectedBot}
+              onChange={(e) => setSelectedBot(e.target.value)}
+              className="pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-gray-800 border-none rounded-lg text-slate-700 dark:text-gray-200 focus:ring-2 focus:ring-blue-500"
             >
-              {r.label}
-            </button>
-          ))}
+              <option value="">Todos los bots</option>
+              {bots.map(bot => (
+                <option key={bot.id} value={bot.id}>{bot.bot_name}</option>
+              ))}
+            </select>
+          </div>
+
+          {/* Selector de rango */}
+          <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
+            {RANGES.map(r => (
+              <button
+                key={r.label}
+                onClick={() => setRange(r)}
+                aria-pressed={range.label === r.label}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                  range.label === r.label
+                    ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-200'
+                }`}
+              >
+                {r.label}
+              </button>
+            ))}
+          </div>
         </div>
+      </div>
+
+      {/* Comparación de períodos */}
+      <div className="card space-y-3">
+        <div className="flex items-center gap-2">
+          <Calendar size={14} className="text-slate-400" />
+          <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Comparación de períodos</h2>
+        </div>
+        <PeriodComparison summary={summary} />
       </div>
 
       {/* Racha actual */}
@@ -388,6 +709,29 @@ export default function AnalyticsPage() {
           </div>
         </div>
       )}
+
+      {/* Heatmap de actividad */}
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock size={14} className="text-slate-400" />
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Actividad</h2>
+          </div>
+          <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
+        </div>
+        <ActivityHeatmap data={heatmapData} isDark={isDark} />
+      </div>
+
+      {/* Distribución horaria */}
+      <div className="card space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Clock size={14} className="text-slate-400" />
+            <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
+          </div>
+        </div>
+        <HourlyChart data={hourlyData} isDark={isDark} />
+      </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
