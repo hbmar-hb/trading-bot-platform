@@ -103,3 +103,57 @@ def should_move_trailing_sl(
         return new_sl > current_sl
     else:
         return new_sl < current_sl
+
+
+def calculate_dynamic_sl_price(
+    entry_price: Decimal,
+    side: str,
+    sl_percentage: Decimal,
+    step_percent: Decimal,
+    steps_taken: int,
+) -> Decimal:
+    """
+    Calcula el precio de SL para el stop dinámico por pasos.
+
+    Cada step mueve el SL step_percent% a favor del trader desde la entrada.
+    Con N pasos dados:
+      Long:  SL = entry * (1 - sl_pct/100 + steps_taken * step_pct/100)
+      Short: SL = entry * (1 + sl_pct/100 - steps_taken * step_pct/100)
+
+    El SL nunca puede cruzar la entrada en dirección adversa.
+    """
+    sl_factor   = sl_percentage  / Decimal("100")
+    step_factor = step_percent   / Decimal("100") * steps_taken
+
+    if side == "long":
+        price = entry_price * (Decimal("1") - sl_factor + step_factor)
+        # El SL no puede subir por encima de la entrada (protección)
+        price = min(price, entry_price * Decimal("0.9999"))
+    else:
+        price = entry_price * (Decimal("1") + sl_factor - step_factor)
+        # El SL no puede bajar por debajo de la entrada (protección)
+        price = max(price, entry_price * Decimal("1.0001"))
+
+    return _round_price(max(price, Decimal("0.0001")))
+
+
+def get_dynamic_sl_step(
+    entry_price: Decimal,
+    current_price: Decimal,
+    side: str,
+    step_percent: Decimal,
+) -> int:
+    """
+    Devuelve cuántos pasos de step_percent% se han completado
+    en la dirección favorable desde la entrada.
+    """
+    if step_percent <= 0 or entry_price <= 0:
+        return 0
+    if side == "long":
+        move = (current_price - entry_price) / entry_price * Decimal("100")
+    else:
+        move = (entry_price - current_price) / entry_price * Decimal("100")
+
+    if move <= 0:
+        return 0
+    return int(move / step_percent)
