@@ -215,127 +215,148 @@ function DailyPnlChart({ data, isDark }) {
   return <div ref={ref} className="w-full" />
 }
 
-// ─── Activity Heatmap (GitHub style) ──────────────────────────
+// ─── Activity Chart (Barras) ──────────────────────────────────
 
 function ActivityHeatmap({ data, isDark }) {
-  const dayLabels = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+  const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
   
-  const weeks = useMemo(() => {
-    if (safeData.length === 0) return []
+  useEffect(() => {
+    if (!ref.current || safeData.length === 0) return
+
+    const bg   = isDark ? '#030712' : '#ffffff'
+    const text = isDark ? '#9ca3af' : '#64748b'
+    const grid = isDark ? '#1f2937' : '#e2e8f0'
+
+    const chart = createChart(ref.current, {
+      layout:     { background: { color: bg }, textColor: text },
+      grid:       { vertLines: { color: grid }, horzLines: { color: grid } },
+      timeScale:  { 
+        borderColor: grid,
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      rightPriceScale: { borderColor: grid },
+      height: 180,
+    })
+
+    // Serie de trades (barras)
+    const tradesSeries = chart.addHistogramSeries({
+      color: 'rgba(59, 130, 246, 0.6)',
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'right',
+    })
+
+    // Serie de PnL (línea)
+    const pnlSeries = chart.addLineSeries({
+      color: '#22c55e',
+      lineWidth: 2,
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceScaleId: 'left',
+    })
+
+    // Preparar datos ordenados por fecha
+    const sortedData = [...safeData].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
     
-    try {
-      const sorted = [...safeData].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
-      if (!sorted[0]?.date) return []
-      
-      const firstDate = new Date(sorted[0].date)
-      const lastDate = new Date(sorted[sorted.length - 1].date)
-      
-      if (isNaN(firstDate.getTime()) || isNaN(lastDate.getTime())) return []
-      
-      const startDate = new Date(firstDate)
-      startDate.setDate(startDate.getDate() - firstDate.getDay())
-      
-      const weeks = []
-      let currentWeek = []
-      let currentDate = new Date(startDate)
-      
-      while (currentDate <= lastDate) {
-        const dateStr = currentDate.toISOString().slice(0, 10)
-        const dayData = safeData.find(d => d.date === dateStr)
-        
-        currentWeek.push({
-          date: dateStr,
-          count: dayData?.count || 0,
-          pnl: dayData?.pnl || 0,
-        })
-        
-        if (currentWeek.length === 7) {
-          weeks.push(currentWeek)
-          currentWeek = []
-        }
-        
-        currentDate.setDate(currentDate.getDate() + 1)
-      }
-      
-      if (currentWeek.length > 0) {
-        while (currentWeek.length < 7) {
-          currentWeek.push({ date: null, count: 0, pnl: 0 })
-        }
-        weeks.push(currentWeek)
-      }
-      
-      return weeks
-    } catch (e) {
-      console.error('Error computing heatmap weeks:', e)
-      return []
-    }
-  }, [safeData])
+    const points = sortedData.map(d => ({
+      time: d.date,
+      trades: d.count || 0,
+      pnl: parseFloat(d.pnl || 0),
+    }))
 
-  const maxCount = useMemo(() => {
-    if (safeData.length === 0) return 0
-    try {
-      return Math.max(...safeData.map(d => d.count || 0))
-    } catch (e) {
-      return 0
-    }
-  }, [safeData])
+    tradesSeries.setData(points.map(p => ({
+      time: p.time,
+      value: p.trades,
+      color: p.trades > 0 ? 'rgba(59, 130, 246, 0.5)' : 'transparent',
+    })))
 
-  const getIntensity = useCallback((count) => {
-    if (count === 0) return isDark ? 'bg-gray-800' : 'bg-slate-100'
-    const intensity = maxCount > 0 ? count / maxCount : 0
-    if (intensity <= 0.25) return 'bg-green-300 dark:bg-green-900'
-    if (intensity <= 0.5) return 'bg-green-400 dark:bg-green-700'
-    if (intensity <= 0.75) return 'bg-green-500 dark:bg-green-600'
-    return 'bg-green-600 dark:bg-green-500'
-  }, [maxCount, isDark])
+    pnlSeries.setData(points.map(p => ({
+      time: p.time,
+      value: p.pnl,
+    })))
+
+    // Tooltip
+    const toolTip = document.createElement('div')
+    toolTip.style.cssText = `
+      position: absolute;
+      display: none;
+      padding: 8px 12px;
+      box-sizing: border-box;
+      font-size: 12px;
+      text-align: left;
+      z-index: 1000;
+      pointer-events: none;
+      border-radius: 6px;
+      background: ${isDark ? '#1f2937' : '#ffffff'};
+      color: ${isDark ? '#e5e7eb' : '#1f2937'};
+      border: 1px solid ${isDark ? '#374151' : '#e5e7eb'};
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `
+    ref.current.appendChild(toolTip)
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || param.point === undefined) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const dayData = sortedData.find(d => d.date === param.time)
+      if (!dayData) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const pnl = parseFloat(dayData.pnl || 0)
+      const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444'
+      
+      toolTip.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
+        <div>Trades: <span style="font-weight: 600;">${dayData.count || 0}</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)} USDT</span></div>
+      `
+
+      const rect = ref.current.getBoundingClientRect()
+      toolTip.style.left = `${param.point.x + 10}px`
+      toolTip.style.top = `${param.point.y - 10}px`
+      toolTip.style.display = 'block'
+    })
+
+    chart.timeScale().fitContent()
+
+    const obs = new ResizeObserver(() => {
+      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+    })
+    obs.observe(ref.current)
+
+    return () => { 
+      chart.remove()
+      toolTip.remove()
+      obs.disconnect() 
+    }
+  }, [safeData, isDark])
 
   if (safeData.length === 0) {
     return (
-      <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
+      <div className="h-[180px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
         Sin datos de actividad
       </div>
     )
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex gap-1">
-        <div className="flex flex-col gap-1 mr-2">
-          {dayLabels.map((label, i) => (
-            <span key={i} className="text-[10px] text-slate-400 w-3 h-3 flex items-center justify-center">
-              {label}
-            </span>
-          ))}
-        </div>
-        
-        <div className="flex gap-1 overflow-x-auto pb-2">
-          {weeks.map((week, weekIdx) => (
-            <div key={weekIdx} className="flex flex-col gap-1">
-              {week.map((day, dayIdx) => (
-                <div
-                  key={dayIdx}
-                  className={`w-3 h-3 rounded-sm ${getIntensity(day.count)} ${
-                    day.date ? 'cursor-pointer hover:ring-2 hover:ring-slate-400' : ''
-                  }`}
-                  title={day.date ? `${day.date}: ${day.count} trades, ${signed(day.pnl)} USDT` : ''}
-                />
-              ))}
-            </div>
-          ))}
-        </div>
-      </div>
+    <div className="space-y-3">
+      <div ref={ref} className="w-full" />
       
-      <div className="flex items-center gap-2 text-xs text-slate-400">
-        <span>Menos</span>
-        <div className="flex gap-1">
-          <div className={`w-3 h-3 rounded-sm ${isDark ? 'bg-gray-800' : 'bg-slate-100'}`} />
-          <div className="w-3 h-3 rounded-sm bg-green-300 dark:bg-green-900" />
-          <div className="w-3 h-3 rounded-sm bg-green-400 dark:bg-green-700" />
-          <div className="w-3 h-3 rounded-sm bg-green-500 dark:bg-green-600" />
-          <div className="w-3 h-3 rounded-sm bg-green-600 dark:bg-green-500" />
+      {/* Leyenda */}
+      <div className="flex items-center justify-center gap-6 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded bg-blue-500/50" />
+          <span className="text-slate-500 dark:text-gray-400">Trades (barras)</span>
         </div>
-        <span>Más</span>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-0.5 bg-green-500" />
+          <span className="text-slate-500 dark:text-gray-400">PnL (línea)</span>
+        </div>
       </div>
     </div>
   )
