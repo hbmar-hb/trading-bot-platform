@@ -445,11 +445,13 @@ async def adopt_position(
         sl_price = entry_price * sl_multiplier
 
         sl_order_id = None
+        sl_pending = False
         try:
             sl_order_id = await exchange.place_stop_loss(data.symbol, data.side, quantity, sl_price)
         except Exception as sl_err:
             from loguru import logger
             logger.warning(f"adopt: no se pudo colocar SL en exchange: {sl_err}")
+            sl_pending = True   # se marcará en extra_config de la Position
     finally:
         await exchange.close()
 
@@ -518,6 +520,13 @@ async def adopt_position(
             "hit": False,
         })
 
+    extra: dict = {}
+    if sl_pending:
+        extra["sl_pending"] = {
+            "price": float(sl_price),
+            "since": datetime.now(timezone.utc).isoformat(),
+        }
+
     position = Position(
         bot_id=bot.id,
         exchange=account.exchange,
@@ -530,6 +539,7 @@ async def adopt_position(
         current_tp_prices=tp_prices,
         exchange_position_id=exchange_position_id,
         exchange_sl_order_id=sl_order_id,
+        extra_config=extra or None,
         status="open",
         opened_at=datetime.now(timezone.utc),
         unrealized_pnl=bingx_pos.unrealized_pnl,
@@ -539,6 +549,7 @@ async def adopt_position(
 
     return {
         "status": "adopted",
+        "sl_pending_exchange": sl_pending,
         "position_id": str(position.id),
         "bot_id": str(bot.id),
         "sl_price": float(sl_price),

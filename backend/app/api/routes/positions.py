@@ -415,7 +415,26 @@ async def update_stop_loss(
         
     except Exception as e:
         logger.error(f"Error actualizando SL: {e}")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(e))
+        err_str = str(e)
+        # BingX código 109400: órdenes API temporalmente desactivadas por volatilidad
+        if "109400" in err_str or "temporarily disabled" in err_str.lower():
+            # Guardar precio en DB y marcar como pendiente de envío al exchange
+            from datetime import datetime, timezone
+            extra = dict(position.extra_config or {})
+            extra["sl_pending"] = {
+                "price": float(data.sl_price),
+                "since": datetime.now(timezone.utc).isoformat(),
+            }
+            position.extra_config = extra
+            position.current_sl_price = Decimal(str(data.sl_price))
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "BingX ha desactivado temporalmente las órdenes API por alta volatilidad. "
+                "El precio SL se ha guardado y se enviará al exchange automáticamente "
+                "en cuanto BingX lo permita (reintentos cada 30s)."
+            )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, err_str)
     finally:
         await exchange.close()
 

@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.bot_config import BotConfig
 from app.models.signal_log import SignalLog
+from app.models.trading_signal import TradingSignal
 from app.services.database import get_db
 from app.tasks.order_tasks import execute_signal
 from app.utils.signal_hasher import generate_signal_hash
@@ -113,7 +114,7 @@ async def webhook_receiver(
             "reason": "Señal ya procesada (posible reintento de TradingView)",
         }
 
-    # 7. Registrar señal en DB
+    # 7. Registrar señal en DB (SignalLog para auditoría)
     signal_log = SignalLog(
         bot_id=bot_id,
         signal_action=action,
@@ -123,6 +124,22 @@ async def webhook_receiver(
         processed=False,
     )
     db.add(signal_log)
+    
+    # 7b. Guardar también en TradingSignal (para visualización en gráfico)
+    trading_signal = TradingSignal(
+        user_id=bot.user_id,
+        source='tradingview',
+        signal_id=signal_hash,
+        symbol=bot.symbol,
+        action=action,
+        timeframe=bot.timeframe,
+        price=price,
+        indicator_values=payload.get('indicator_values', {}),
+        status='pending',
+        received_at=received_at,
+    )
+    db.add(trading_signal)
+    
     await db.commit()
     await db.refresh(signal_log)
 

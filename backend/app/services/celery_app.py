@@ -14,6 +14,7 @@ celery_app = Celery(
         "app.tasks.cleanup_tasks",
         "app.tasks.health_check_tasks",
         "app.tasks.sync_tasks",
+        "app.tasks.sl_retry_tasks",
     ],
 )
 
@@ -61,7 +62,12 @@ celery_app.conf.update(
         # Sincronización automática de trades: cada hora
         "sync-exchange-trades": {
             "task": "app.tasks.sync_tasks.sync_all_accounts_trades_task",
-            "schedule": 3600.0,  # Cada hora
+            "schedule": 3600.0,
+        },
+        # Reintentos automáticos de SL pendientes (bloqueados por BingX 109400)
+        "retry-pending-sl-orders": {
+            "task": "app.tasks.sl_retry_tasks.retry_pending_sl_orders",
+            "schedule": 30.0,  # cada 30 segundos
         },
     },
 )

@@ -42,7 +42,8 @@ function SLPanel({ position, onUpdate }) {
       setPctValue('')
       setPriceValue('')
     } catch (e) {
-      alert('Error actualizando SL')
+      const msg = e?.response?.data?.detail || e?.message || 'Error actualizando SL'
+      alert(msg)
     } finally {
       setLoading(false)
     }
