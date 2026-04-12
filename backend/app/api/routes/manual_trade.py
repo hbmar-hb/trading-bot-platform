@@ -304,6 +304,248 @@ async def get_manual_trade_accounts(
     return {"accounts": real_accounts + paper_accounts}
 
 
+@router.get("/external-positions")
+async def get_external_positions(
+    exchange_account_id: uuid.UUID | None = Query(None),
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Devuelve posiciones abiertas en el exchange que NO tienen registro en la plataforma.
+    Si se pasa exchange_account_id, consulta solo esa cuenta.
+    Si no, consulta todas las cuentas reales activas del usuario.
+    """
+    from app.exchanges.factory import create_exchange
+    from loguru import logger
+
+    # Obtener cuentas a consultar
+    acc_query = select(ExchangeAccount).where(
+        ExchangeAccount.user_id == user_id,
+        ExchangeAccount.is_active == True,
+    )
+    if exchange_account_id:
+        acc_query = acc_query.where(ExchangeAccount.id == exchange_account_id)
+
+    acc_result = await db.execute(acc_query)
+    accounts = acc_result.scalars().all()
+
+    if not accounts:
+        return {"external_positions": []}
+
+    # Posiciones gestionadas en DB para las cuentas relevantes
+    account_ids = [a.id for a in accounts]
+    db_pos_result = await db.execute(
+        select(Position, BotConfig)
+        .join(BotConfig, Position.bot_id == BotConfig.id)
+        .where(
+            BotConfig.exchange_account_id.in_(account_ids),
+            Position.status.in_(["open", "closing"]),
+        )
+    )
+    managed: dict[uuid.UUID, set] = {}
+    for pos, bot in db_pos_result.all():
+        managed.setdefault(bot.exchange_account_id, set()).add((pos.symbol, pos.side))
+
+    # Consultar posiciones abiertas en cada cuenta
+    external = []
+    for account in accounts:
+        try:
+            exchange = create_exchange(account)
+            try:
+                open_positions = await exchange.get_open_positions()
+            finally:
+                await exchange.close()
+
+            account_managed = managed.get(account.id, set())
+            for p in open_positions:
+                if (p.symbol, p.side) not in account_managed:
+                    external.append({
+                        "symbol": p.symbol,
+                        "side": p.side,
+                        "entry_price": float(p.entry_price),
+                        "quantity": float(p.quantity),
+                        "unrealized_pnl": float(p.unrealized_pnl),
+                        "exchange_position_id": p.exchange_position_id,
+                        "exchange_account_id": str(account.id),
+                        "account_label": account.label,
+                        "exchange": account.exchange,
+                    })
+        except Exception as exc:
+            logger.warning(f"external-positions: error en cuenta {account.id}: {exc}")
+
+    return {"external_positions": external}
+
+
+class AdoptPositionRequest(BaseModel):
+    exchange_account_id: uuid.UUID
+    symbol: str
+    side: str                             # "long" | "short"
+    sl_percentage: Decimal = Decimal("2")
+    take_profits: list[dict] = []
+    trailing_config: dict | None = None
+    breakeven_config: dict | None = None
+    dynamic_sl_config: dict | None = None
+
+
+@router.post("/adopt")
+async def adopt_position(
+    data: AdoptPositionRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Adopta una posición externa (abierta en BingX nativo) y la pone bajo gestión
+    de la plataforma: crea un BotConfig [MANUAL], un registro de Position,
+    y coloca la orden de Stop Loss en el exchange.
+    """
+    # Validar cuenta
+    acc_result = await db.execute(
+        select(ExchangeAccount).where(
+            ExchangeAccount.id == data.exchange_account_id,
+            ExchangeAccount.user_id == user_id,
+            ExchangeAccount.is_active == True,
+        )
+    )
+    account = acc_result.scalar_one_or_none()
+    if not account:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Cuenta no encontrada")
+
+    # Verificar que la posición no está ya gestionada
+    existing = await db.execute(
+        select(Position)
+        .join(BotConfig, Position.bot_id == BotConfig.id)
+        .where(
+            BotConfig.exchange_account_id == data.exchange_account_id,
+            Position.symbol == data.symbol,
+            Position.side == data.side,
+            Position.status.in_(["open", "closing"]),
+        )
+    )
+    if existing.scalars().first():
+        raise HTTPException(status.HTTP_409_CONFLICT, "Esta posición ya está gestionada")
+
+    # Obtener datos reales del exchange
+    from app.exchanges.factory import create_exchange
+    exchange = create_exchange(account)
+    try:
+        open_positions = await exchange.get_open_positions()
+        bingx_pos = next(
+            (p for p in open_positions if p.symbol == data.symbol and p.side == data.side),
+            None,
+        )
+        if not bingx_pos:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Posición no encontrada en el exchange")
+
+        entry_price = bingx_pos.entry_price
+        quantity    = bingx_pos.quantity
+        exchange_position_id = bingx_pos.exchange_position_id
+
+        # Calcular precio de SL y colocarlo en el exchange
+        sl_multiplier = (1 - data.sl_percentage / 100) if data.side == "long" else (1 + data.sl_percentage / 100)
+        sl_price = entry_price * sl_multiplier
+
+        sl_order_id = None
+        try:
+            sl_order_id = await exchange.place_stop_loss(data.symbol, data.side, quantity, sl_price)
+        except Exception as sl_err:
+            from loguru import logger
+            logger.warning(f"adopt: no se pudo colocar SL en exchange: {sl_err}")
+    finally:
+        await exchange.close()
+
+    # Buscar o crear BotConfig [MANUAL]
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.user_id == user_id,
+            BotConfig.exchange_account_id == data.exchange_account_id,
+            BotConfig.symbol == data.symbol,
+            BotConfig.bot_name.like(f"{MANUAL_BOT_PREFIX}%"),
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+
+    if not bot:
+        bot = BotConfig(
+            user_id=user_id,
+            exchange_account_id=data.exchange_account_id,
+            bot_name=f"{MANUAL_BOT_PREFIX} {data.symbol}",
+            symbol=data.symbol,
+            timeframe="1h",
+            position_sizing_type="percentage",
+            position_value=Decimal("10"),
+            leverage=1,
+            initial_sl_percentage=data.sl_percentage,
+            take_profits=[
+                {"profit_percent": float(tp["profit_percent"]), "close_percent": float(tp["close_percent"])}
+                for tp in data.take_profits
+            ],
+            status="active",
+        )
+        if data.trailing_config:
+            bot.trailing_config = data.trailing_config
+        if data.breakeven_config:
+            bot.breakeven_config = data.breakeven_config
+        if data.dynamic_sl_config:
+            bot.dynamic_sl_config = data.dynamic_sl_config
+        db.add(bot)
+        await db.flush()
+    else:
+        bot.initial_sl_percentage = data.sl_percentage
+        bot.take_profits = [
+            {"profit_percent": float(tp["profit_percent"]), "close_percent": float(tp["close_percent"])}
+            for tp in data.take_profits
+        ]
+        if data.trailing_config:
+            bot.trailing_config = data.trailing_config
+        if data.breakeven_config:
+            bot.breakeven_config = data.breakeven_config
+        if data.dynamic_sl_config:
+            bot.dynamic_sl_config = data.dynamic_sl_config
+        bot.status = "active"
+
+    # Crear el registro de Position
+    tp_prices = []
+    for i, tp in enumerate(data.take_profits, 1):
+        tp_pct   = Decimal(str(tp["profit_percent"]))
+        if data.side == "long":
+            tp_price = entry_price * (1 + tp_pct / 100)
+        else:
+            tp_price = entry_price * (1 - tp_pct / 100)
+        tp_prices.append({
+            "level": i,
+            "price": float(tp_price),
+            "close_percent": float(tp["close_percent"]),
+            "hit": False,
+        })
+
+    position = Position(
+        bot_id=bot.id,
+        exchange=account.exchange,
+        symbol=data.symbol,
+        side=data.side,
+        entry_price=entry_price,
+        quantity=quantity,
+        leverage=1,
+        current_sl_price=sl_price,
+        current_tp_prices=tp_prices,
+        exchange_position_id=exchange_position_id,
+        exchange_sl_order_id=sl_order_id,
+        status="open",
+        opened_at=datetime.now(timezone.utc),
+        unrealized_pnl=bingx_pos.unrealized_pnl,
+    )
+    db.add(position)
+    await db.commit()
+
+    return {
+        "status": "adopted",
+        "position_id": str(position.id),
+        "bot_id": str(bot.id),
+        "sl_price": float(sl_price),
+        "message": f"Posición {data.side.upper()} {data.symbol} adoptada y bajo gestión",
+    }
+
+
 @router.get("/candles")
 async def get_candles(
     symbol: str,

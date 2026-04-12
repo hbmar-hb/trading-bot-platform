@@ -215,7 +215,7 @@ function DailyPnlChart({ data, isDark }) {
   return <div ref={ref} className="w-full" />
 }
 
-// ─── Activity Chart (Barras) ──────────────────────────────────
+// ─── Activity Chart (Barras NARANJAS) ─────────────────────────
 
 function ActivityHeatmap({ data, isDark }) {
   const ref = useRef(null)
@@ -240,16 +240,16 @@ function ActivityHeatmap({ data, isDark }) {
       height: 180,
     })
 
-    // Serie de trades (barras)
+    // Serie de trades (barras NARANJAS) - visible
     const tradesSeries = chart.addHistogramSeries({
-      color: 'rgba(59, 130, 246, 0.6)',
+      color: 'rgba(249, 115, 22, 0.7)',  // Naranja
       priceFormat: { type: 'volume' },
       priceScaleId: 'right',
     })
 
-    // Serie de PnL (línea)
+    // Serie de PnL (línea AZUL) - secundaria
     const pnlSeries = chart.addLineSeries({
-      color: '#22c55e',
+      color: '#3b82f6',  // Azul
       lineWidth: 2,
       priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
       priceScaleId: 'left',
@@ -267,7 +267,7 @@ function ActivityHeatmap({ data, isDark }) {
     tradesSeries.setData(points.map(p => ({
       time: p.time,
       value: p.trades,
-      color: p.trades > 0 ? 'rgba(59, 130, 246, 0.5)' : 'transparent',
+      color: p.trades > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
     })))
 
     pnlSeries.setData(points.map(p => ({
@@ -311,7 +311,7 @@ function ActivityHeatmap({ data, isDark }) {
       
       toolTip.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
-        <div>Trades: <span style="font-weight: 600;">${dayData.count || 0}</span></div>
+        <div>Trades: <span style="font-weight: 600; color: #f97316;">${dayData.count || 0}</span></div>
         <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)} USDT</span></div>
       `
 
@@ -350,19 +350,19 @@ function ActivityHeatmap({ data, isDark }) {
       {/* Leyenda */}
       <div className="flex items-center justify-center gap-6 text-xs">
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-blue-500/50" />
-          <span className="text-slate-500 dark:text-gray-400">Trades (barras)</span>
+          <div className="w-3 h-3 rounded bg-orange-500/70" />
+          <span className="text-slate-500 dark:text-gray-400">📅 Trades por día</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-0.5 bg-green-500" />
-          <span className="text-slate-500 dark:text-gray-400">PnL (línea)</span>
+          <div className="w-4 h-0.5 bg-blue-500" />
+          <span className="text-slate-500 dark:text-gray-400">PnL</span>
         </div>
       </div>
     </div>
   )
 }
 
-// ─── Hourly Distribution Chart (Lineal) ───────────────────────
+// ─── Hourly Distribution Chart (Lineal con MEDIA) ─────────────
 
 function HourlyChart({ data, isDark }) {
   const ref = useRef(null)
@@ -387,18 +387,34 @@ function HourlyChart({ data, isDark }) {
       height: 200,
     })
 
-    // Serie de PnL (línea principal)
+    // Calcular la MEDIA de PnL por hora (solo horas con trades)
+    const hoursWithTrades = safeData.filter(d => (d.trades || 0) > 0)
+    const avgPnl = hoursWithTrades.length > 0
+      ? hoursWithTrades.reduce((sum, d) => sum + parseFloat(d.pnl || 0), 0) / hoursWithTrades.length
+      : 0
+
+    // Serie de PnL (línea MORADA)
     const pnlSeries = chart.addLineSeries({
-      color: '#22c55e',
+      color: '#a855f7',  // Morado
       lineWidth: 2,
       title: 'PnL',
       priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
       priceScaleId: 'right',
     })
 
-    // Serie de trades (barras en el eje izquierdo)
+    // Serie de MEDIA (línea punteada GRIS)
+    const avgSeries = chart.addLineSeries({
+      color: '#6b7280',  // Gris
+      lineWidth: 1,
+      lineStyle: 2,  // Punteada
+      title: 'Media',
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceScaleId: 'right',
+    })
+
+    // Serie de trades (barras ROSAS)
     const tradesSeries = chart.addHistogramSeries({
-      color: 'rgba(59, 130, 246, 0.5)',
+      color: 'rgba(236, 72, 153, 0.5)',  // Rosa
       priceFormat: { type: 'volume' },
       priceScaleId: 'left',
     })
@@ -419,10 +435,16 @@ function HourlyChart({ data, isDark }) {
       value: p.pnl,
     })))
 
+    // Línea de media (mismo valor para todas las horas)
+    avgSeries.setData(hourlyPoints.map(p => ({
+      time: p.time,
+      value: avgPnl,
+    })))
+
     tradesSeries.setData(hourlyPoints.map(p => ({
       time: p.time,
       value: p.trades,
-      color: p.trades > 0 ? 'rgba(59, 130, 246, 0.4)' : 'transparent',
+      color: p.trades > 0 ? 'rgba(236, 72, 153, 0.5)' : 'transparent',
     })))
 
     // Tooltip personalizado
@@ -457,12 +479,17 @@ function HourlyChart({ data, isDark }) {
       }
 
       const pnlColor = hourData.pnl >= 0 ? '#22c55e' : '#ef4444'
+      const vsAvg = hourData.pnl > avgPnl ? '↑' : hourData.pnl < avgPnl ? '↓' : '='
+      const vsAvgColor = hourData.pnl > avgPnl ? '#22c55e' : hourData.pnl < avgPnl ? '#ef4444' : '#6b7280'
       
       toolTip.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}:00 - ${param.time}:59</div>
         <div>Trades: <span style="font-weight: 600;">${hourData.trades}</span></div>
         <div>Win Rate: <span style="font-weight: 600;">${(hourData.winRate * 100).toFixed(1)}%</span></div>
         <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)} USDT</span></div>
+        <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid ${isDark ? '#374151' : '#e5e7eb'};">
+          vs Media: <span style="font-weight: 600; color: ${vsAvgColor}">${vsAvg} ${signed(avgPnl)}</span>
+        </div>
       `
 
       const rect = ref.current.getBoundingClientRect()
@@ -498,14 +525,18 @@ function HourlyChart({ data, isDark }) {
       <div ref={ref} className="w-full" />
       
       {/* Leyenda */}
-      <div className="flex items-center justify-center gap-6 text-xs">
+      <div className="flex items-center justify-center gap-4 text-xs flex-wrap">
         <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded bg-blue-500/40" />
-          <span className="text-slate-500 dark:text-gray-400">Trades (barras)</span>
+          <div className="w-3 h-3 rounded bg-pink-500/50" />
+          <span className="text-slate-500 dark:text-gray-400">⏰ Trades</span>
         </div>
         <div className="flex items-center gap-2">
-          <div className="w-4 h-0.5 bg-green-500" />
-          <span className="text-slate-500 dark:text-gray-400">PnL (línea)</span>
+          <div className="w-4 h-0.5 bg-purple-500" />
+          <span className="text-slate-500 dark:text-gray-400">PnL</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-0.5 bg-gray-500" style={{borderStyle: 'dashed'}} />
+          <span className="text-slate-500 dark:text-gray-400">Media PnL</span>
         </div>
       </div>
 

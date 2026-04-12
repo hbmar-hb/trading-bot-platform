@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { TrendingDown, TrendingUp, X, ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle, Plus, Minus, Calculator, BarChart3 } from 'lucide-react'
+import { TrendingDown, TrendingUp, X, ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle, Plus, Minus, Calculator, BarChart3, ShieldCheck, ExternalLink } from 'lucide-react'
 import { createChart, CrosshairMode } from 'lightweight-charts'
 import { manualTradeService } from '@/services/manualTrade'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
@@ -379,6 +379,305 @@ function MiniChart({ symbol, isDark }) {
         )}
       </div>
     </div>
+  )
+}
+
+// ── Adopt Modal ──────────────────────────────────────────────
+
+function AdoptModal({ position, exchangeAccountId, onClose, onAdopted }) {
+  const [slPct, setSlPct] = useState(2)
+  const [takeProfits, setTakeProfits] = useState([{ profit_percent: 2, close_percent: 50 }])
+  const [trailingEnabled, setTrailingEnabled] = useState(false)
+  const [trailingActivation, setTrailingActivation] = useState(1)
+  const [trailingCallback, setTrailingCallback] = useState(0.5)
+  const [breakevenEnabled, setBreakevenEnabled] = useState(false)
+  const [breakevenActivation, setBreakevenActivation] = useState(1)
+  const [breakevenLock, setBreakevenLock] = useState(0.2)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState(null)
+
+  const handleAdopt = async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      await manualTradeService.adoptPosition({
+        exchange_account_id: exchangeAccountId,
+        symbol: position.symbol,
+        side: position.side,
+        sl_percentage: slPct,
+        take_profits: takeProfits.filter(tp => tp.profit_percent && tp.close_percent),
+        trailing_config: trailingEnabled
+          ? { enabled: true, activation_profit: trailingActivation, callback_rate: trailingCallback }
+          : null,
+        breakeven_config: breakevenEnabled
+          ? { enabled: true, activation_profit: breakevenActivation, lock_profit: breakevenLock }
+          : null,
+      })
+      onAdopted()
+    } catch (e) {
+      setError(e?.response?.data?.detail || 'Error al adoptar la posición')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const slPrice = position.side === 'long'
+    ? position.entry_price * (1 - slPct / 100)
+    : position.entry_price * (1 + slPct / 100)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md overflow-y-auto max-h-[90vh]">
+        <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-gray-700">
+          <div>
+            <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ShieldCheck size={20} className="text-blue-500" />
+              Adoptar posición
+            </h2>
+            <p className="text-sm text-slate-500 dark:text-gray-400">
+              {position.side === 'long' ? '🟢 LONG' : '🔴 SHORT'} {position.symbol} · Entrada: ${position.entry_price.toFixed(4)}
+            </p>
+          </div>
+          <button onClick={onClose} className="text-slate-400 hover:text-slate-600 dark:hover:text-gray-300">
+            <X size={20} />
+          </button>
+        </div>
+
+        <div className="p-5 space-y-5">
+          {/* Stop Loss */}
+          <div>
+            <label className="block text-xs text-slate-500 dark:text-gray-400 mb-1">Stop Loss %</label>
+            <input
+              type="number" min="0.1" step="0.1"
+              className="input w-full"
+              value={slPct}
+              onChange={e => setSlPct(Number(e.target.value))}
+            />
+            <p className="text-xs text-red-500 mt-1">
+              SL se colocará a ${slPrice.toFixed(4)}
+            </p>
+          </div>
+
+          {/* Take Profits */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-xs text-slate-500 dark:text-gray-400">Take Profits</label>
+              <button
+                type="button"
+                onClick={() => setTakeProfits(tp => [...tp, { profit_percent: 3, close_percent: 25 }])}
+                className="text-xs text-blue-500 hover:underline flex items-center gap-1"
+              >
+                <Plus size={12} /> Añadir TP
+              </button>
+            </div>
+            {takeProfits.map((tp, i) => (
+              <div key={i} className="flex gap-2 items-center mb-2">
+                <input
+                  type="number" min="0.1" step="0.1" placeholder="Profit %"
+                  className="input flex-1 text-sm"
+                  value={tp.profit_percent}
+                  onChange={e => setTakeProfits(tps => tps.map((t, j) => j === i ? { ...t, profit_percent: Number(e.target.value) } : t))}
+                />
+                <input
+                  type="number" min="1" max="100" step="1" placeholder="Cierre %"
+                  className="input flex-1 text-sm"
+                  value={tp.close_percent}
+                  onChange={e => setTakeProfits(tps => tps.map((t, j) => j === i ? { ...t, close_percent: Number(e.target.value) } : t))}
+                />
+                {takeProfits.length > 1 && (
+                  <button onClick={() => setTakeProfits(tps => tps.filter((_, j) => j !== i))} className="text-red-400 hover:text-red-500">
+                    <Minus size={14} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {/* Trailing Stop */}
+          <div className="border border-slate-200 dark:border-gray-700 rounded-lg p-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-gray-300 cursor-pointer">
+              <input type="checkbox" checked={trailingEnabled} onChange={e => setTrailingEnabled(e.target.checked)} />
+              Trailing Stop
+            </label>
+            {trailingEnabled && (
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-gray-400">Activación %</label>
+                  <input type="number" min="0.1" step="0.1" className="input w-full mt-1" value={trailingActivation} onChange={e => setTrailingActivation(Number(e.target.value))} />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-gray-400">Callback %</label>
+                  <input type="number" min="0.1" step="0.1" className="input w-full mt-1" value={trailingCallback} onChange={e => setTrailingCallback(Number(e.target.value))} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Breakeven */}
+          <div className="border border-slate-200 dark:border-gray-700 rounded-lg p-3">
+            <label className="flex items-center gap-2 text-sm text-slate-700 dark:text-gray-300 cursor-pointer">
+              <input type="checkbox" checked={breakevenEnabled} onChange={e => setBreakevenEnabled(e.target.checked)} />
+              Breakeven
+            </label>
+            {breakevenEnabled && (
+              <div className="grid grid-cols-2 gap-3 mt-3">
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-gray-400">Activación %</label>
+                  <input type="number" min="0.1" step="0.1" className="input w-full mt-1" value={breakevenActivation} onChange={e => setBreakevenActivation(Number(e.target.value))} />
+                </div>
+                <div>
+                  <label className="text-xs text-slate-500 dark:text-gray-400">Lock profit %</label>
+                  <input type="number" min="0" step="0.1" className="input w-full mt-1" value={breakevenLock} onChange={e => setBreakevenLock(Number(e.target.value))} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {error && (
+            <div className="flex items-center gap-2 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg p-3">
+              <AlertCircle size={16} /> {error}
+            </div>
+          )}
+
+          <button
+            onClick={handleAdopt}
+            disabled={loading}
+            className="w-full py-3 rounded-xl font-semibold text-white bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+          >
+            {loading ? <Loader2 size={18} className="animate-spin" /> : <ShieldCheck size={18} />}
+            Adoptar y activar gestión
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── External Positions Section ────────────────────────────────
+
+function ExternalPositionsSection({ exchangeAccountId, onAdopted }) {
+  const [positions, setPositions] = useState([])
+  const [loading, setLoading] = useState(false)
+  const [adoptTarget, setAdoptTarget] = useState(null)
+  const [expanded, setExpanded] = useState(false)
+
+  const load = useCallback(async () => {
+    if (!exchangeAccountId) return
+    setLoading(true)
+    try {
+      const res = await manualTradeService.getExternalPositions(exchangeAccountId)
+      setPositions(res.data?.external_positions || [])
+      if ((res.data?.external_positions || []).length > 0) setExpanded(true)
+    } catch {
+      setPositions([])
+    } finally {
+      setLoading(false)
+    }
+  }, [exchangeAccountId])
+
+  useEffect(() => { load() }, [load])
+
+  if (!exchangeAccountId) return null
+
+  return (
+    <>
+      {adoptTarget && (
+        <AdoptModal
+          position={adoptTarget}
+          exchangeAccountId={exchangeAccountId}
+          onClose={() => setAdoptTarget(null)}
+          onAdopted={() => {
+            setAdoptTarget(null)
+            load()
+            onAdopted?.()
+          }}
+        />
+      )}
+
+      <div className="card">
+        <button
+          type="button"
+          onClick={() => setExpanded(e => !e)}
+          className="w-full flex items-center justify-between"
+        >
+          <h3 className="text-sm font-semibold text-slate-700 dark:text-gray-300 flex items-center gap-2">
+            <ExternalLink size={16} className="text-orange-500" />
+            Posiciones externas (BingX nativo)
+            {positions.length > 0 && (
+              <span className="bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 text-xs px-2 py-0.5 rounded-full">
+                {positions.length}
+              </span>
+            )}
+          </h3>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); load() }}
+              className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-gray-300"
+            >
+              {loading ? <Loader2 size={14} className="animate-spin" /> : '↻ Actualizar'}
+            </button>
+            {expanded ? <ChevronUp size={16} className="text-slate-400" /> : <ChevronDown size={16} className="text-slate-400" />}
+          </div>
+        </button>
+
+        {expanded && (
+          <div className="mt-4">
+            {loading && positions.length === 0 ? (
+              <div className="flex items-center justify-center py-6 text-slate-400">
+                <Loader2 size={20} className="animate-spin mr-2" /> Consultando exchange...
+              </div>
+            ) : positions.length === 0 ? (
+              <p className="text-sm text-slate-400 dark:text-gray-500 text-center py-4">
+                No hay posiciones externas sin gestión
+              </p>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs text-slate-500 dark:text-gray-400 mb-3">
+                  Estas posiciones están abiertas en BingX pero no están siendo gestionadas por la plataforma.
+                  Al adoptarlas podrás configurar SL, TP, trailing y breakeven.
+                </p>
+                {positions.map((p, i) => (
+                  <div
+                    key={i}
+                    className="flex items-center justify-between bg-slate-50 dark:bg-gray-800 rounded-lg p-3"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded ${
+                        p.side === 'long'
+                          ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400'
+                          : 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                      }`}>
+                        {p.side.toUpperCase()}
+                      </span>
+                      <div>
+                        <p className="text-sm font-mono font-medium text-slate-900 dark:text-white">{p.symbol}</p>
+                        <p className="text-xs text-slate-500 dark:text-gray-400">
+                          Entrada: ${p.entry_price.toFixed(4)} · Qty: {p.quantity}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className={`text-sm font-mono font-semibold ${
+                        p.unrealized_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                      }`}>
+                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)} USDT
+                      </span>
+                      <button
+                        onClick={() => setAdoptTarget(p)}
+                        className="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-medium transition-colors flex items-center gap-1"
+                      >
+                        <ShieldCheck size={13} /> Adoptar
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </>
   )
 }
 
@@ -1025,6 +1324,7 @@ export default function ManualTradePage() {
           )}
         </div>
       </div>
+
     </div>
   )
 }

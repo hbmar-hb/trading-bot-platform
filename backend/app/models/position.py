@@ -24,7 +24,7 @@ class Position(Base):
 
     # ─── Datos de la posición ────────────────────────────────
     exchange: Mapped[str] = mapped_column(String(20), nullable=False)
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(50), nullable=False)
     side: Mapped[str] = mapped_column(String(10), nullable=False)   # long | short
 
     entry_price: Mapped[Decimal] = mapped_column(Numeric(20, 8), nullable=False)

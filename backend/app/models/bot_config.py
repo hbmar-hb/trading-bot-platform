@@ -35,7 +35,7 @@ class BotConfig(TimestampMixin, Base):
 
     # ─── Identificación ─────────────────────────────────────
     bot_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    symbol: Mapped[str] = mapped_column(String(20), nullable=False)     # 'BTCUSDT'
+    symbol: Mapped[str] = mapped_column(String(50), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False)  # '1h', '4h', '1d'
 
     # ─── Configuración de capital ────────────────────────────
