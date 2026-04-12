@@ -83,21 +83,19 @@ async def sync_trades(
         if not trades_raw:
             return ExchangeTradeSyncResult(total_synced=0, new_trades=0, updated_trades=0)
         
-        # Obtener posiciones existentes del usuario para matching
+        # Posiciones del usuario (abiertas Y cerradas) para clasificar source=bot
+        from app.models.bot_config import BotConfig
         positions_result = await db.execute(
-            select(Position).where(
-                Position.exchange.in_([account.exchange, "paper"])
-            )
+            select(Position)
+            .join(BotConfig, Position.bot_id == BotConfig.id)
+            .where(BotConfig.user_id == user_id)
         )
         positions = positions_result.scalars().all()
-        
+
         # Mapear posiciones por símbolo para lookup rápido
-        positions_by_symbol = {}
+        positions_by_symbol: dict[str, list] = {}
         for pos in positions:
-            key = (pos.symbol, account.exchange)
-            if key not in positions_by_symbol:
-                positions_by_symbol[key] = []
-            positions_by_symbol[key].append(pos)
+            positions_by_symbol.setdefault(pos.symbol, []).append(pos)
         
         new_count = 0
         errors = []
@@ -124,20 +122,16 @@ async def sync_trades(
                 position_id = None
                 bot_id = None
                 
-                # Buscar posición coincidente
-                pos_key = (symbol, account.exchange)
-                matching_positions = positions_by_symbol.get(pos_key, [])
-                
-                for pos in matching_positions:
+                # Buscar posición coincidente (por símbolo y ventana temporal)
+                for pos in positions_by_symbol.get(symbol, []):
                     if trade_ts and pos.opened_at:
                         trade_dt = datetime.fromtimestamp(trade_ts / 1000, tz=timezone.utc)
-                        # Trade durante la vida de la posición
-                        if pos.opened_at <= trade_dt:
-                            if pos.closed_at is None or trade_dt <= pos.closed_at:
-                                source = "bot"
-                                position_id = pos.id
-                                bot_id = pos.bot_id
-                                break
+                        end = pos.closed_at or datetime.now(timezone.utc)
+                        if pos.opened_at <= trade_dt <= end:
+                            source = "bot"
+                            position_id = pos.id
+                            bot_id = pos.bot_id
+                            break
                 
                 # Crear nuevo trade
                 closed_at = datetime.fromtimestamp(

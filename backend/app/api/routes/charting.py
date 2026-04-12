@@ -98,16 +98,48 @@ async def search_symbols(
     query: str = Query(default=""),
     exchange: str = Query(default="BingX"),
     user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    """Búsqueda de símbolos para el gráfico."""
-    # Lista de símbolos populares o buscar en exchange
-    popular_symbols = [
-        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
-        "XRP/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT",
-        "PEPE/USDT:USDT", "WIF/USDT:USDT", "BONK/USDT:USDT",
-    ]
+    """Búsqueda de símbolos disponibles en el exchange."""
+    # Obtener cuenta del usuario
+    result = await db.execute(
+        select(ExchangeAccount)
+        .where(ExchangeAccount.user_id == user_id, ExchangeAccount.is_active == True)
+        .limit(1)
+    )
+    account = result.scalar_one_or_none()
     
-    matches = [s for s in popular_symbols if query.upper() in s.upper()]
+    symbols = []
+    
+    if account:
+        try:
+            # Intentar obtener del exchange
+            exchange_client = ExchangeFactory.create(account.exchange, {
+                'api_key': account.api_key,
+                'api_secret': account.api_secret,
+            })
+            markets = await exchange_client.load_markets()
+            # Filtrar solo perpetuals de USDT
+            symbols = [s for s in markets.keys() if ':USDT' in s and 'PERP' not in s]
+            symbols.sort()
+        except Exception as e:
+            print(f"Error loading markets: {e}")
+            # Fallback a lista popular
+            symbols = [
+                "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
+                "XRP/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT",
+                "PEPE/USDT:USDT", "WIF/USDT:USDT", "BONK/USDT:USDT",
+            ]
+    else:
+        # Fallback si no hay cuenta
+        symbols = [
+            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
+            "XRP/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT",
+        ]
+    
+    # Filtrar por query si se proporciona
+    if query:
+        symbols = [s for s in symbols if query.upper() in s.upper()]
     
     return [
         {
@@ -118,7 +150,7 @@ async def search_symbols(
             "type": "crypto",
             "currency_code": "USDT",
         }
-        for s in matches[:10]
+        for s in symbols[:50]  # Limitar a 50 resultados
     ]
 
 

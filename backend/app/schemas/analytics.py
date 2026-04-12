@@ -54,6 +54,7 @@ class DailyPnlPoint(BaseModel):
     date: str           # "YYYY-MM-DD"
     daily_pnl: Decimal
     cumulative_pnl: Decimal
+    trade_count: int = 0
 
 
 class AnalyticsSummaryResponse(BaseModel):

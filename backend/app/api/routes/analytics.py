@@ -186,7 +186,11 @@ async def get_pnl_chart(
     day_col = cast(ExchangeTrade.closed_at, Date).label("day")
 
     query = (
-        select(day_col, func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("daily_pnl"))
+        select(
+            day_col,
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("daily_pnl"),
+            func.count().label("trade_count"),
+        )
         .where(
             ExchangeTrade.user_id == user_id,
             ExchangeTrade.closed_at.is_not(None),

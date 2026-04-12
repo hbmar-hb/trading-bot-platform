@@ -247,17 +247,43 @@ class BingXExchange(BaseExchange):
             if symbol:
                 symbols_to_check = [symbol]
             else:
-                priority_symbols = [
-                    'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
-                    'DOGE/USDT:USDT', 'ADA/USDT:USDT', 'BNB/USDT:USDT', 'LINK/USDT:USDT',
-                    'LTC/USDT:USDT', 'AVAX/USDT:USDT', 'DOT/USDT:USDT',
-                    'UNI/USDT:USDT', 'ATOM/USDT:USDT', 'ETC/USDT:USDT', 'FIL/USDT:USDT',
-                    'NEAR/USDT:USDT', 'ALGO/USDT:USDT', 'ICP/USDT:USDT', 'AAVE/USDT:USDT',
-                    'BCH/USDT:USDT', 'HBAR/USDT:USDT', 'APT/USDT:USDT', 'ARB/USDT:USDT',
-                    'OP/USDT:USDT', 'SUI/USDT:USDT', 'SEI/USDT:USDT', 'TIA/USDT:USDT',
-                ]
-                symbols_to_check = priority_symbols[:30]
-                logger.info(f"BingX: Revisando {len(symbols_to_check)} símbolos populares")
+                # Obtener todos los símbolos con posiciones abiertas o recientes desde el exchange
+                # directamente — no usamos una lista hardcodeada
+                try:
+                    if not self._client.markets:
+                        await self._client.load_markets()
+                    raw_positions = await self._client.fetch_positions()
+                    active_symbols = {
+                        p["symbol"] for p in raw_positions
+                        if float(p.get("contracts") or 0) > 0
+                    }
+                except Exception:
+                    active_symbols = set()
+
+                # Obtener también los símbolos de órdenes recientes cerradas (sin filtro de símbolo)
+                # BingX permite fetch_closed_orders sin símbolo específico
+                recent_symbols = set()
+                try:
+                    recent_orders = await self._client.fetch_closed_orders(
+                        symbol=None, since=since, limit=100
+                    )
+                    for o in recent_orders:
+                        if o.get("symbol"):
+                            recent_symbols.add(o["symbol"])
+                except Exception:
+                    pass
+
+                symbols_to_check = list(active_symbols | recent_symbols)
+
+                # Si no encontramos nada (exchange vacío o error), caer en lista base
+                if not symbols_to_check:
+                    symbols_to_check = [
+                        'BTC/USDT:USDT', 'ETH/USDT:USDT', 'SOL/USDT:USDT', 'XRP/USDT:USDT',
+                        'DOGE/USDT:USDT', 'BNB/USDT:USDT', 'AVAX/USDT:USDT', 'LINK/USDT:USDT',
+                        'ARB/USDT:USDT', 'OP/USDT:USDT', 'SUI/USDT:USDT', 'APT/USDT:USDT',
+                    ]
+
+                logger.info(f"BingX: Revisando {len(symbols_to_check)} símbolos detectados automáticamente")
             
             for sym in symbols_to_check:
                 try:

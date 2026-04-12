@@ -102,6 +102,16 @@ async def webhook_receiver(
             price = float(raw_price)
         except (ValueError, TypeError):
             price = None
+    
+    # 5b. Extraer valores de indicadores (nuevo)
+    indicator_values = payload.get("indicator_values", {})
+    # También buscar campos sueltos comunes (retrocompatibilidad)
+    if "rsi" in payload:
+        indicator_values["rsi"] = float(payload["rsi"]) if payload["rsi"] else None
+    if "ema" in payload:
+        indicator_values["ema"] = float(payload["ema"]) if payload["ema"] else None
+    if "volume" in payload:
+        indicator_values["volume"] = float(payload["volume"]) if payload["volume"] else None
 
     # 6. Idempotencia: verificar hash de señal
     signal_hash = generate_signal_hash(bot_id, action, received_at, price)
@@ -134,7 +144,7 @@ async def webhook_receiver(
         action=action,
         timeframe=bot.timeframe,
         price=price,
-        indicator_values=payload.get('indicator_values', {}),
+        indicator_values=indicator_values,
         status='pending',
         received_at=received_at,
     )

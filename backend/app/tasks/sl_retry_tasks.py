@@ -18,7 +18,12 @@ from loguru import logger
 )
 def retry_pending_sl_orders() -> dict:
     """Reintenta colocar en el exchange los SL que fallaron por 109400."""
-    return asyncio.run(_retry_all())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_retry_all())
+    finally:
+        loop.close()
 
 
 async def _retry_all() -> dict:

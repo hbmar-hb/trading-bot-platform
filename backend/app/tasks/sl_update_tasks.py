@@ -12,6 +12,20 @@ from celery import shared_task
 from loguru import logger
 
 
+def _run_async(coro):
+    """
+    Ejecuta una corrutina en un event loop limpio.
+    Necesario en workers Celery forkeados donde asyncio.run() puede
+    reutilizar un loop corrupto de asyncpg.
+    """
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
 @shared_task(
     bind=True,
     max_retries=5,
@@ -33,7 +47,7 @@ def update_stop_loss(
       3. Actualizar DB y logar evento
     """
     try:
-        asyncio.run(_execute_sl_update(uuid.UUID(position_id), Decimal(str(new_sl_price))))
+        _run_async(_execute_sl_update(uuid.UUID(position_id), Decimal(str(new_sl_price))))
         return {"status": "ok", "position_id": position_id, "new_sl": new_sl_price}
 
     except Exception as exc:
@@ -61,7 +75,7 @@ def execute_take_profit(
     Marca el TP como hit en la DB para no ejecutarlo dos veces.
     """
     try:
-        asyncio.run(_execute_tp(
+        _run_async(_execute_tp(
             uuid.UUID(position_id),
             tp_level,
             Decimal(str(tp_price)),

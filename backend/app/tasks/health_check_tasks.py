@@ -18,7 +18,12 @@ def check_exchanges() -> dict:
     Verifica conectividad y validez de credenciales para todas las cuentas
     de exchange que tienen bots activos. Almacena resultados en la DB.
     """
-    return asyncio.run(_run_checks())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_run_checks())
+    finally:
+        loop.close()
 
 
 async def _run_checks() -> dict:
@@ -108,7 +113,12 @@ def check_single_account(account_id: str) -> dict:
     Verifica las credenciales de una cuenta específica.
     Útil para verificar inmediatamente después de actualizar credenciales.
     """
-    return asyncio.run(_check_single(str(account_id)))
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(_check_single(str(account_id)))
+    finally:
+        loop.close()
 
 
 async def _check_single(account_id: str) -> dict:
