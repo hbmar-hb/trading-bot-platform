@@ -1,0 +1,115 @@
+import uuid
+import secrets
+from decimal import Decimal
+from typing import Literal
+from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String
+from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.services.database import Base
+from app.models.base import TimestampMixin
+
+BotStatus = Literal["active", "paused", "disabled"]
+PositionSizingType = Literal["percentage", "fixed"]
+
+
+class BotConfig(TimestampMixin, Base):
+    __tablename__ = "bot_configs"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
+    )
+    
+    # ─── Exchange (real o paper) ─────────────────────────────
+    # Opción 1: Cuenta real de exchange (BingX, Bitunix)
+    exchange_account_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("exchange_accounts.id"), nullable=True
+    )
+    # Opción 2: Cuenta paper (simulación)
+    paper_balance_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("paper_balances.id"), nullable=True
+    )
+
+    # ─── Identificación ─────────────────────────────────────
+    bot_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    symbol: Mapped[str] = mapped_column(String(20), nullable=False)     # 'BTCUSDT'
+    timeframe: Mapped[str] = mapped_column(String(10), nullable=False)  # '1h', '4h', '1d'
+
+    # ─── Configuración de capital ────────────────────────────
+    position_sizing_type: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="percentage"
+    )
+    position_value: Mapped[Decimal] = mapped_column(
+        Numeric(18, 4), nullable=False
+    )                                   # % del equity o cantidad fija en USDT
+    leverage: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    # ─── Stop Loss inicial ───────────────────────────────────
+    initial_sl_percentage: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
+
+    # ─── Configuración avanzada (JSONB) ──────────────────────
+    # take_profits: [{profit_percent: 2.0, close_percent: 30.0}, ...]
+    take_profits: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+
+    # trailing_config: {enabled: bool, activation_profit: float, callback_rate: float}
+    trailing_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # breakeven_config: {enabled: bool, activation_profit: float, lock_profit: float}
+    breakeven_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # dynamic_sl_config: {enabled: bool, step_percent: float, max_steps: int}
+    dynamic_sl_config: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # ─── Webhook ─────────────────────────────────────────────
+    webhook_secret: Mapped[str] = mapped_column(
+        String(64), nullable=False, default=lambda: secrets.token_hex(32)
+    )
+
+    # ─── Confirmación de señal ───────────────────────────────
+    # Minutos a esperar antes de ejecutar (0 = inmediato)
+    signal_confirmation_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0
+    )
+
+    # ─── Estado ──────────────────────────────────────────────
+    status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="paused"
+    )   # active | paused | disabled
+
+    # ─── Relaciones ──────────────────────────────────────────
+    user: Mapped["User"] = relationship(back_populates="bots")
+    exchange_account: Mapped["ExchangeAccount | None"] = relationship(back_populates="bots")
+    paper_balance: Mapped["PaperBalance | None"] = relationship(back_populates="bots")
+    positions: Mapped[list["Position"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    signal_logs: Mapped[list["SignalLog"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    bot_logs: Mapped[list["BotLog"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+    exchange_trades: Mapped[list["ExchangeTrade"]] = relationship(
+        back_populates="bot", cascade="all, delete-orphan"
+    )
+
+    @property
+    def is_paper_trading(self) -> bool:
+        """True si el bot opera en modo simulación (paper trading)."""
+        return self.paper_balance_id is not None
+    
+    @property
+    def account_display(self) -> str:
+        """Retorna el nombre de la cuenta asociada (real o paper)."""
+        if self.paper_balance:
+            return f"📄 {self.paper_balance.label}"
+        elif self.exchange_account:
+            return f"🏦 {self.exchange_account.label}"
+        return "Sin cuenta"
+
+    def __repr__(self) -> str:
+        mode = "📄 PAPER" if self.is_paper_trading else "🏦 LIVE"
+        return f"<BotConfig {self.bot_name} — {self.symbol} [{self.status}] {mode}>"

@@ -1,0 +1,43 @@
+# Entorno
+.env
+.env.local
+.env.*.local
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+dist/
+build/
+*.egg
+
+# Alembic (no ignorar migrations/versions/)
+*.pyc
+
+# Node
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Celery
+celerybeat-schedule
+celerybeat.pid
+
+# Docker volumes locales
+docker/postgres/data/
+docker/redis/data/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/

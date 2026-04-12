@@ -1,0 +1,68 @@
+# Uso: docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Diferencias con producción:
+#   - Hot reload en backend (--reload)
+#   - Hot reload en frontend (Vite dev server)
+#   - Volúmenes mapeados para desarrollo en vivo
+#   - Puerto 5173 para Vite (en lugar de 80)
+#   - Flower (UI de monitoreo de Celery)
+
+services:
+
+  backend:
+    volumes:
+      - ./backend:/app
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8100:8000"
+    environment:
+      ENV: development
+      DEBUG: "true"
+
+  celery_worker:
+    volumes:
+      - ./backend:/app
+    command: >
+      celery -A app.services.celery_app worker
+      --loglevel=debug
+      --concurrency=2
+      --queues=orders,sl_updates,notifications,default
+
+  celery_beat:
+    volumes:
+      - ./backend:/app
+      - celery_beat_data:/app/celerybeat-data
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5274:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev -- --host 0.0.0.0
+    environment:
+      VITE_API_URL: http://localhost:8100
+      VITE_WS_URL: ws://localhost:8100
+
+  # Flower: UI para monitorear tareas Celery
+  # Acceder en: http://localhost:5555
+  flower:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file: .env
+    depends_on:
+      - redis
+      - celery_worker
+    ports:
+      - "5556:5555"
+    command: >
+      celery -A app.services.celery_app flower
+      --port=5555
+      --basic_auth=${FLOWER_USER}:${FLOWER_PASSWORD}
+
+volumes:
+  celery_beat_data:

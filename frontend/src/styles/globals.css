@@ -1,0 +1,101 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    @apply border-slate-200 dark:border-gray-700;
+  }
+  body {
+    @apply bg-slate-100 text-slate-900 dark:bg-gray-950 dark:text-gray-100 font-sans antialiased;
+  }
+}
+
+@layer components {
+  /* Cards */
+  .card {
+    @apply bg-white dark:bg-gray-900 rounded-xl border border-slate-200 dark:border-gray-800 p-4;
+  }
+
+  /* Buttons */
+  .btn-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-secondary {
+    @apply bg-slate-200 dark:bg-gray-800 hover:bg-slate-300 dark:hover:bg-gray-700
+           text-slate-800 dark:text-gray-200 px-4 py-2 rounded-lg transition-colors;
+  }
+  .btn-ghost {
+    @apply text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white
+           hover:bg-slate-100 dark:hover:bg-gray-800 px-4 py-2 rounded-lg
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+  .btn-danger {
+    @apply bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg
+           transition-colors disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Form inputs */
+  .input {
+    @apply bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700
+           rounded-lg px-3 py-2 text-slate-900 dark:text-gray-100
+           focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent
+           placeholder-slate-400 dark:placeholder-gray-500 w-full;
+  }
+  .input:disabled {
+    @apply bg-slate-100 dark:bg-gray-900 cursor-not-allowed opacity-60;
+  }
+
+  /* Text colors */
+  .text-muted {
+    @apply text-slate-500 dark:text-gray-400;
+  }
+  .text-subtle {
+    @apply text-slate-400 dark:text-gray-500;
+  }
+
+  /* Background colors */
+  .bg-surface {
+    @apply bg-white dark:bg-gray-900;
+  }
+  .bg-surface-secondary {
+    @apply bg-slate-100 dark:bg-gray-800;
+  }
+
+  /* Borders */
+  .border-default {
+    @apply border-slate-200 dark:border-gray-700;
+  }
+  .border-subtle {
+    @apply border-slate-200 dark:border-gray-800;
+  }
+
+  /* PnL colors */
+  .profit { @apply text-green-600 dark:text-green-400; }
+  .loss   { @apply text-red-600 dark:text-red-400; }
+
+  /* Table styles */
+  .table-header {
+    @apply text-left text-slate-500 dark:text-gray-400 border-b border-slate-200 dark:border-gray-800;
+  }
+  .table-row {
+    @apply border-b border-slate-200/50 dark:border-gray-800/50;
+  }
+  .table-row-hover {
+    @apply hover:bg-slate-100 dark:hover:bg-gray-800/50;
+  }
+
+  /* Section titles */
+  .section-title {
+    @apply font-semibold text-sm text-slate-700 dark:text-gray-300 border-b border-slate-200 dark:border-gray-800 pb-3;
+  }
+
+  /* Tabs */
+  .tab-active {
+    @apply border-blue-500 text-slate-900 dark:text-white;
+  }
+  .tab-inactive {
+    @apply border-transparent text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-300;
+  }
+}
