@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
@@ -217,15 +217,15 @@ function DailyPnlChart({ data, isDark }) {
 
 // ─── Activity Heatmap (GitHub style) ──────────────────────────
 
-const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
+function ActivityHeatmap({ data, isDark }) {
   const dayLabels = ['D', 'L', 'M', 'X', 'J', 'V', 'S']
+  const safeData = Array.isArray(data) ? data : []
   
-  // Calcular semanas
   const weeks = useMemo(() => {
-    if (!Array.isArray(data) || data.length === 0) return []
+    if (safeData.length === 0) return []
     
     try {
-      const sorted = [...data].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
+      const sorted = [...safeData].sort((a, b) => (a.date || '').localeCompare(b.date || ''))
       if (!sorted[0]?.date) return []
       
       const firstDate = new Date(sorted[0].date)
@@ -233,7 +233,6 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
       
       if (isNaN(firstDate.getTime()) || isNaN(lastDate.getTime())) return []
       
-      // Ajustar al domingo anterior
       const startDate = new Date(firstDate)
       startDate.setDate(startDate.getDate() - firstDate.getDay())
       
@@ -243,7 +242,7 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
       
       while (currentDate <= lastDate) {
         const dateStr = currentDate.toISOString().slice(0, 10)
-        const dayData = data.find(d => d.date === dateStr)
+        const dayData = safeData.find(d => d.date === dateStr)
         
         currentWeek.push({
           date: dateStr,
@@ -271,16 +270,16 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
       console.error('Error computing heatmap weeks:', e)
       return []
     }
-  }, [data])
+  }, [safeData])
 
   const maxCount = useMemo(() => {
-    if (!Array.isArray(data) || data.length === 0) return 0
+    if (safeData.length === 0) return 0
     try {
-      return Math.max(...data.map(d => d.count || 0))
+      return Math.max(...safeData.map(d => d.count || 0))
     } catch (e) {
       return 0
     }
-  }, [data])
+  }, [safeData])
 
   const getIntensity = useCallback((count) => {
     if (count === 0) return isDark ? 'bg-gray-800' : 'bg-slate-100'
@@ -291,8 +290,7 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
     return 'bg-green-600 dark:bg-green-500'
   }, [maxCount, isDark])
 
-  // Render
-  if (!Array.isArray(data) || data.length === 0) {
+  if (safeData.length === 0) {
     return (
       <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
         Sin datos de actividad
@@ -303,7 +301,6 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
   return (
     <div className="space-y-2">
       <div className="flex gap-1">
-        {/* Labels de días */}
         <div className="flex flex-col gap-1 mr-2">
           {dayLabels.map((label, i) => (
             <span key={i} className="text-[10px] text-slate-400 w-3 h-3 flex items-center justify-center">
@@ -312,7 +309,6 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
           ))}
         </div>
         
-        {/* Grid */}
         <div className="flex gap-1 overflow-x-auto pb-2">
           {weeks.map((week, weekIdx) => (
             <div key={weekIdx} className="flex flex-col gap-1">
@@ -330,7 +326,6 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
         </div>
       </div>
       
-      {/* Leyenda */}
       <div className="flex items-center gap-2 text-xs text-slate-400">
         <span>Menos</span>
         <div className="flex gap-1">
@@ -344,38 +339,39 @@ const ActivityHeatmap = memo(function ActivityHeatmap({ data = [], isDark }) {
       </div>
     </div>
   )
-})
+}
 
 // ─── Hourly Distribution Chart ────────────────────────────────
 
-const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
+function HourlyChart({ data, isDark }) {
+  const safeData = Array.isArray(data) ? data : []
+  
   const maxTrades = useMemo(() => {
-    if (!Array.isArray(data) || data.length === 0) return 1
+    if (safeData.length === 0) return 1
     try {
-      return Math.max(...data.map(d => d.trades || 0), 1)
+      return Math.max(...safeData.map(d => d.trades || 0), 1)
     } catch (e) {
       return 1
     }
-  }, [data])
+  }, [safeData])
 
   const maxPnl = useMemo(() => {
-    if (!Array.isArray(data) || data.length === 0) return 1
+    if (safeData.length === 0) return 1
     try {
-      return Math.max(...data.map(d => Math.abs(parseFloat(d.pnl) || 0)), 1)
+      return Math.max(...safeData.map(d => Math.abs(parseFloat(d.pnl) || 0)), 1)
     } catch (e) {
       return 1
     }
-  }, [data])
+  }, [safeData])
 
   const topHours = useMemo(() => {
-    if (!Array.isArray(data)) return []
-    return data
+    return safeData
       .filter(d => (d.trades || 0) > 0)
       .sort((a, b) => (b.trades || 0) - (a.trades || 0))
       .slice(0, 4)
-  }, [data])
+  }, [safeData])
 
-  if (!Array.isArray(data) || data.length === 0) {
+  if (safeData.length === 0) {
     return (
       <div className="h-[150px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
         Sin datos horarios
@@ -385,12 +381,11 @@ const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
 
   return (
     <div className="space-y-4">
-      {/* Trades por hora */}
       <div>
         <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">Trades por hora</p>
         <div className="flex items-end gap-1 h-20">
           {Array.from({ length: 24 }, (_, hour) => {
-            const hourData = data.find(d => d.hour === hour)
+            const hourData = safeData.find(d => d.hour === hour)
             const trades = hourData?.trades || 0
             const height = maxTrades > 0 ? (trades / maxTrades) * 100 : 0
             
@@ -410,12 +405,11 @@ const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
         </div>
       </div>
 
-      {/* PnL por hora */}
       <div>
         <p className="text-xs text-slate-500 dark:text-gray-400 mb-2">PnL por hora</p>
         <div className="flex items-center gap-1 h-16">
           {Array.from({ length: 24 }, (_, hour) => {
-            const hourData = data.find(d => d.hour === hour)
+            const hourData = safeData.find(d => d.hour === hour)
             const pnl = parseFloat(hourData?.pnl || 0)
             const height = maxPnl > 0 ? (Math.abs(pnl) / maxPnl) * 100 : 0
             const isPositive = pnl >= 0
@@ -436,7 +430,6 @@ const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
         </div>
       </div>
 
-      {/* Tabla resumen */}
       <div className="grid grid-cols-4 gap-2 text-xs pt-2 border-t border-slate-200 dark:border-gray-700">
         {topHours.map(hour => (
           <div key={hour.hour} className="text-center">
@@ -450,30 +443,29 @@ const HourlyChart = memo(function HourlyChart({ data = [], isDark }) {
       </div>
     </div>
   )
-})
+}
 
 // ─── Period Comparison ────────────────────────────────────────
 
 function PeriodComparison({ summary }) {
-  const periods = [
-    { label: '7d', days: 7 },
-    { label: '30d', days: 30 },
-  ]
-
   const [periodData, setPeriodData] = useState({})
   const [loading, setLoading] = useState(false)
 
   useEffect(() => {
     const fetchPeriods = async () => {
       setLoading(true)
+      const periods = [
+        { label: '7d', days: 7 },
+        { label: '30d', days: 30 },
+      ]
       const data = {}
       for (const period of periods) {
         const { from, to } = rangeFromDays(period.days)
         try {
           const res = await analyticsService.pnlChart({ from_date: from, to_date: to })
-          const pnlData = res.data
-          const totalPnl = pnlData.reduce((acc, d) => acc + parseFloat(d.daily_pnl), 0)
-          const positive = pnlData.filter(d => parseFloat(d.daily_pnl) > 0).length
+          const pnlData = res.data || []
+          const totalPnl = pnlData.reduce((acc, d) => acc + parseFloat(d.daily_pnl || 0), 0)
+          const positive = pnlData.filter(d => parseFloat(d.daily_pnl || 0) > 0).length
           data[period.label] = {
             pnl: totalPnl,
             days: pnlData.length,
@@ -491,21 +483,23 @@ function PeriodComparison({ summary }) {
     fetchPeriods()
   }, [])
 
-  if (loading) return (
-    <div className="h-[100px] flex items-center justify-center">
-      <LoadingSpinner size="sm" />
-    </div>
-  )
+  if (loading) {
+    return (
+      <div className="h-[100px] flex items-center justify-center">
+        <LoadingSpinner size="sm" />
+      </div>
+    )
+  }
 
   return (
     <div className="grid grid-cols-2 gap-4">
-      {periods.map(period => {
-        const d = periodData[period.label]
+      {['7d', '30d'].map(periodLabel => {
+        const d = periodData[periodLabel]
         if (!d) return null
         
         return (
-          <div key={period.label} className="bg-slate-50 dark:bg-gray-800/40 rounded-lg p-3">
-            <p className="text-xs text-slate-400 mb-2">Últimos {period.label}</p>
+          <div key={periodLabel} className="bg-slate-50 dark:bg-gray-800/40 rounded-lg p-3">
+            <p className="text-xs text-slate-400 mb-2">Últimos {periodLabel}</p>
             <p className={`text-lg font-bold font-mono ${d.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {signed(d.pnl)} USDT
             </p>
@@ -542,17 +536,18 @@ export default function AnalyticsPage() {
     return () => obs.disconnect()
   }, [])
 
-  // Cargar lista de bots
   useEffect(() => {
-    botsService.list().then(res => setBots(res.data)).catch(() => {})
+    botsService.list().then(res => setBots(res.data || [])).catch(() => setBots([]))
   }, [])
 
-  const load = useCallback(async (selectedRange, botId = '') => {
+  const load = useCallback(async (selectedRange, botId) => {
     setLoading(true)
     setError(null)
     try {
       const { from, to } = rangeFromDays(selectedRange.days)
-      const params = { from_date: from, to_date: to }
+      const params = {}
+      if (from) params.from_date = from
+      if (to) params.to_date = to
       if (botId) params.bot_id = botId
 
       const [summaryRes, pnlRes, heatmapRes, hourlyRes] = await Promise.all([
@@ -563,9 +558,9 @@ export default function AnalyticsPage() {
       ])
       
       setSummary(summaryRes.data)
-      setDailyPnl(pnlRes.data)
-      setHeatmapData(heatmapRes.data)
-      setHourlyData(hourlyRes.data)
+      setDailyPnl(pnlRes.data || [])
+      setHeatmapData(heatmapRes.data || [])
+      setHourlyData(hourlyRes.data || [])
     } catch (err) {
       console.error('Error cargando analytics:', err)
       setError('No se pudieron cargar las estadísticas')
@@ -574,9 +569,10 @@ export default function AnalyticsPage() {
     }
   }, [])
 
-  useEffect(() => { load(range, selectedBot) }, [range, selectedBot, load])
+  useEffect(() => {
+    load(range, selectedBot)
+  }, [range, selectedBot, load])
 
-  // Exportar datos a CSV
   const exportToCSV = useCallback(() => {
     if (!dailyPnl?.length) return
     const headers = ['Fecha', 'PnL Diario', 'PnL Acumulado']
@@ -591,32 +587,46 @@ export default function AnalyticsPage() {
     URL.revokeObjectURL(url)
   }, [dailyPnl, range.label, selectedBot])
 
-  if (loading) return <div className="flex justify-center py-20"><LoadingSpinner /></div>
-  if (error || !summary) return (
-    <div className="text-center py-20">
-      <p className="text-slate-400 mb-4">{error || 'No se pudieron cargar las estadísticas'}</p>
-      <button
-        onClick={() => load(range, selectedBot)}
-        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
-      >
-        <RefreshCw size={16} /> Reintentar
-      </button>
-    </div>
-  )
-
-  const g = summary.global_stats
-
+  // Calcular estadísticas diarias
   const dailyStats = useMemo(() => {
-    if (!dailyPnl?.length) return null
-    const positive = dailyPnl.filter(d => parseFloat(d.daily_pnl) > 0).length
-    const negative = dailyPnl.filter(d => parseFloat(d.daily_pnl) < 0).length
-    const best = Math.max(...dailyPnl.map(d => parseFloat(d.daily_pnl)))
-    const worst = Math.min(...dailyPnl.map(d => parseFloat(d.daily_pnl)))
-    return { positive, negative, best, worst }
+    if (!Array.isArray(dailyPnl) || dailyPnl.length === 0) return null
+    try {
+      const positive = dailyPnl.filter(d => parseFloat(d.daily_pnl || 0) > 0).length
+      const negative = dailyPnl.filter(d => parseFloat(d.daily_pnl || 0) < 0).length
+      const pnls = dailyPnl.map(d => parseFloat(d.daily_pnl || 0))
+      const best = Math.max(...pnls)
+      const worst = Math.min(...pnls)
+      return { positive, negative, best, worst }
+    } catch (e) {
+      return null
+    }
   }, [dailyPnl])
 
-  const pnlColor  = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
-  const ddColor   = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <LoadingSpinner />
+      </div>
+    )
+  }
+
+  if (error || !summary) {
+    return (
+      <div className="text-center py-20">
+        <p className="text-slate-400 mb-4">{error || 'No se pudieron cargar las estadísticas'}</p>
+        <button
+          onClick={() => load(range, selectedBot)}
+          className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
+        >
+          <RefreshCw size={16} /> Reintentar
+        </button>
+      </div>
+    )
+  }
+
+  const g = summary.global_stats
+  const pnlColor = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
+  const ddColor = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
 
   return (
     <div className="space-y-6">
