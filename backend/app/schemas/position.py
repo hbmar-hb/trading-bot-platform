@@ -16,6 +16,7 @@ class PositionResponse(BaseModel):
     leverage: int | None
     current_sl_price: Decimal | None
     current_tp_prices: list
+    extra_config: dict | None
     unrealized_pnl: Decimal
     realized_pnl: Decimal | None
     status: str

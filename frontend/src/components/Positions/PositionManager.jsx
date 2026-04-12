@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { 
-  Shield, Target, TrendingUp, Lock, Activity, 
+import {
+  Shield, Target, TrendingUp, Lock, Activity,
   Plus, Minus, X, Check, AlertTriangle, DollarSign,
-  Percent, ChevronDown, ChevronUp
+  Percent, ChevronDown, ChevronUp, Clock
 } from 'lucide-react'
 import { positionsService } from '@/services/positions'
 
@@ -18,6 +18,7 @@ function SLPanel({ position, onUpdate }) {
   const entryPrice = parseFloat(position?.entry_price || 0)
   const side = position?.side || 'long'
   const isProfit = side === 'long' ? currentSL > entryPrice : currentSL < entryPrice
+  const slPending = position?.extra_config?.sl_pending != null
 
   // Calcula % actual del SL respecto a entrada
   const currentSlPct = entryPrice > 0
@@ -62,7 +63,12 @@ function SLPanel({ position, onUpdate }) {
           <Shield size={16} className="text-red-500 dark:text-red-400" />
           <h4 className="text-sm font-medium text-slate-700 dark:text-gray-300">Stop Loss</h4>
         </div>
-        {isProfit && (
+        {slPending && (
+          <span className="flex items-center gap-1 text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400 px-2 py-0.5 rounded" title="BingX bloqueó la orden. Reintento automático cada 30s.">
+            <Clock size={11} /> Pendiente exchange
+          </span>
+        )}
+        {!slPending && isProfit && (
           <span className="text-xs bg-green-100 dark:bg-green-500/20 text-green-700 dark:text-green-400 px-2 py-0.5 rounded">
             En Profit
           </span>

@@ -4,7 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 from sqlalchemy import Column, String, DateTime, Numeric, ForeignKey, Index, JSON
 from sqlalchemy.dialects.postgresql import UUID
-from app.models.base import Base
+from app.services.database import Base
 
 
 class TradingSignal(Base):

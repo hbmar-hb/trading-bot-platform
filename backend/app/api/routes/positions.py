@@ -86,10 +86,11 @@ class UnifiedPositionResponse(BaseModel):
     
     # Info adicional
     exchange: str
-    bot_name: str | None = None  # Nombre del bot (si aplica)
+    bot_name: str | None = None
     exchange_position_id: str | None = None
     is_external: bool = False
-    account_id: str | None = None  # ID de la cuenta de exchange (para cierre manual)
+    account_id: str | None = None
+    extra_config: dict | None = None
     
     class Config:
         from_attributes = True
@@ -160,6 +161,7 @@ async def list_unified_positions(
                 exchange_position_id=position.exchange_order_id,
                 is_external=False,
                 account_id=str(bot.exchange_account_id) if bot.exchange_account_id else None,
+                extra_config=position.extra_config,
             ))
         
         logger.info(f"[UNIFIED POSITIONS] {len(unified_positions)} posiciones de bots")

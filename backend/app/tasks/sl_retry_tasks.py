@@ -41,13 +41,16 @@ async def _retry_all() -> dict:
 
     async with AsyncSessionLocal() as db:
         # Buscar posiciones abiertas con sl_pending en extra_config
+        # Usamos el operador ? de PostgreSQL JSONB para comprobar si la clave existe
+        from sqlalchemy import text
         result = await db.execute(
             select(Position, BotConfig)
             .join(BotConfig, Position.bot_id == BotConfig.id)
             .where(
                 Position.status == "open",
-                Position.extra_config["sl_pending"].astext.is_not(None),
-                BotConfig.exchange_account_id.is_not(None),  # solo real, no paper
+                Position.extra_config.is_not(None),
+                text("positions.extra_config ? 'sl_pending'"),
+                BotConfig.exchange_account_id.is_not(None),
             )
         )
         rows = result.all()
