@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
-import { Sparkles, TrendingUp, TrendingDown, Minus } from 'lucide-react'
+import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw } from 'lucide-react'
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -18,6 +18,13 @@ function signed(v, dec = 2) {
 
 function pct(v, dec = 1) {
   return `${(Number(v ?? 0) * 100).toFixed(dec)}%`
+}
+
+function formatCompact(num, dec = 2) {
+  const n = Number(num ?? 0)
+  if (Math.abs(n) >= 1_000_000) return `${(n / 1_000_000).toFixed(dec)}M`
+  if (Math.abs(n) >= 1_000) return `${(n / 1_000).toFixed(dec)}k`
+  return n.toFixed(dec)
 }
 
 const RANGES = [
@@ -214,6 +221,7 @@ export default function AnalyticsPage() {
   const [summary, setSummary]     = useState(null)
   const [dailyPnl, setDailyPnl]   = useState([])
   const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState(null)
   const [range, setRange]         = useState(RANGES[1])   // 30d por defecto
   const [isDark, setIsDark]       = useState(false)
 
@@ -235,19 +243,55 @@ export default function AnalyticsPage() {
       ])
       setSummary(summaryRes.data)
       setDailyPnl(pnlRes.data)
-    } catch {
-      // silencioso
+    } catch (err) {
+      console.error('Error cargando analytics:', err)
+      setError('No se pudieron cargar las estadísticas')
     } finally {
       setLoading(false)
     }
   }, [])
 
-  useEffect(() => { load(range) }, [range])
+  useEffect(() => { load(range) }, [range, load])
+
+  // Exportar datos a CSV
+  const exportToCSV = useCallback(() => {
+    if (!dailyPnl?.length) return
+    const headers = ['Fecha', 'PnL Diario', 'PnL Acumulado']
+    const rows = dailyPnl.map(d => [d.date, d.daily_pnl, d.cumulative_pnl])
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n')
+    const blob = new Blob([csv], { type: 'text/csv' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `analytics_${range.label}_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [dailyPnl, range.label])
 
   if (loading) return <div className="flex justify-center py-20"><LoadingSpinner /></div>
-  if (!summary) return <p className="text-slate-400">No se pudieron cargar las estadísticas.</p>
+  if (error || !summary) return (
+    <div className="text-center py-20">
+      <p className="text-slate-400 mb-4">{error || 'No se pudieron cargar las estadísticas'}</p>
+      <button
+        onClick={() => load(range)}
+        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center gap-2 mx-auto"
+      >
+        <RefreshCw size={16} /> Reintentar
+      </button>
+    </div>
+  )
 
   const g = summary.global_stats
+
+  // Optimizar cálculos de estadísticas diarias
+  const dailyStats = useMemo(() => {
+    if (!dailyPnl?.length) return null
+    const positive = dailyPnl.filter(d => parseFloat(d.daily_pnl) > 0).length
+    const negative = dailyPnl.filter(d => parseFloat(d.daily_pnl) < 0).length
+    const best = Math.max(...dailyPnl.map(d => parseFloat(d.daily_pnl)))
+    const worst = Math.min(...dailyPnl.map(d => parseFloat(d.daily_pnl)))
+    return { positive, negative, best, worst }
+  }, [dailyPnl])
 
   const pnlColor  = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
   const ddColor   = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
@@ -263,6 +307,7 @@ export default function AnalyticsPage() {
             <button
               key={r.label}
               onClick={() => setRange(r)}
+              aria-pressed={range.label === r.label}
               className={`px-3 py-1 text-xs rounded-md transition-colors ${
                 range.label === r.label
                   ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
@@ -354,26 +399,36 @@ export default function AnalyticsPage() {
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">PnL diario</h2>
-          <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
+          <div className="flex items-center gap-2">
+            {dailyPnl.length > 0 && (
+              <button
+                onClick={exportToCSV}
+                className="flex items-center gap-1 text-xs px-2 py-1 text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200 bg-slate-100 dark:bg-gray-800 rounded-lg transition-colors"
+                title="Exportar a CSV"
+              >
+                <Download size={12} /> CSV
+              </button>
+            )}
+            <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
+          </div>
         </div>
         <DailyPnlChart data={dailyPnl} isDark={isDark} />
-        {dailyPnl.length > 0 && (
-          <div className="flex gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
+        {dailyStats && (
+          <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
-              Días positivos: <span className="text-green-400 font-medium">
-                {dailyPnl.filter(d => parseFloat(d.daily_pnl) > 0).length}
-              </span>
+              Días positivos: <span className="text-green-400 font-medium">{dailyStats.positive}</span>
             </span>
             <span>
-              Días negativos: <span className="text-red-400 font-medium">
-                {dailyPnl.filter(d => parseFloat(d.daily_pnl) < 0).length}
-              </span>
+              Días negativos: <span className="text-red-400 font-medium">{dailyStats.negative}</span>
             </span>
             <span>
-              Mejor día: <span className="text-green-400 font-medium">
-                +{fmt(Math.max(...dailyPnl.map(d => parseFloat(d.daily_pnl))))} USDT
-              </span>
+              Mejor día: <span className="text-green-400 font-medium">+{fmt(dailyStats.best)} USDT</span>
             </span>
+            {dailyStats.worst < 0 && (
+              <span>
+                Peor día: <span className="text-red-400 font-medium">{signed(dailyStats.worst)} USDT</span>
+              </span>
+            )}
           </div>
         )}
       </div>
