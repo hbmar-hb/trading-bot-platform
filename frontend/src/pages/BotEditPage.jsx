@@ -342,7 +342,7 @@ function buildPayload(f) {
 }
 
 /* ─── Tabs ────────────────────────────────────────────────── */
-const TABS = ['Básico', 'Capital / SL', 'Take Profits', 'Trailing Stop', 'Breakeven', 'Stop dinámico']
+const TABS = ['Básico', 'Capital / SL', 'Take Profits', 'Trailing Stop', 'Breakeven', 'Stop dinámico', 'Señales']
 
 const TIMEFRAMES = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '12h', '1d', '3d', '1w']
 
@@ -579,18 +579,6 @@ export default function BotEditPage() {
               </Field>
             </div>
 
-            <Field
-              label="Confirmación de señal (minutos)"
-              hint="Espera N minutos tras recibir la señal antes de ejecutar. 0 = inmediato. La señal se cancela si el precio se mueve en contra durante la espera."
-            >
-              <input
-                type="number" min="0" max="60" step="1"
-                value={form.signal_confirmation_minutes}
-                onChange={e => set('signal_confirmation_minutes', e.target.value)}
-                className="input w-32"
-                placeholder="0"
-              />
-            </Field>
           </>
         )}
 
@@ -713,6 +701,49 @@ export default function BotEditPage() {
                   />
                 </Field>
               </>
+            )}
+          </>
+        )}
+
+        {/* ── Tab 6: Señales ── */}
+        {tab === 6 && (
+          <>
+            <div className="bg-slate-50 dark:bg-gray-800/60 rounded-xl p-4 space-y-1 mb-2">
+              <p className="text-xs text-slate-500 dark:text-gray-400">
+                Cuando TradingView envía una alerta, el bot puede esperar N minutos antes de ejecutar
+                la orden. Durante esa espera, si el precio se mueve en contra de la señal, la operación
+                se cancela automáticamente — filtrando señales falsas o reversiones rápidas.
+                Las señales de cierre (<code className="font-mono">close</code>) siempre se ejecutan de inmediato.
+              </p>
+            </div>
+
+            <Field
+              label="Delay de confirmación (minutos)"
+              hint="0 = ejecución inmediata. Recomendado: 2–5 min para timeframes de 15m/1h/4h."
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="number" min="0" max="60" step="1"
+                  value={form.signal_confirmation_minutes}
+                  onChange={e => set('signal_confirmation_minutes', e.target.value)}
+                  className="input w-32"
+                  placeholder="0"
+                />
+                <span className="text-sm text-slate-500 dark:text-gray-400">minutos</span>
+              </div>
+            </Field>
+
+            {parseInt(form.signal_confirmation_minutes) > 0 && (
+              <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 px-4 py-3 space-y-1">
+                <p className="text-xs font-medium text-blue-400">Cómo funciona con {form.signal_confirmation_minutes} min activos</p>
+                <ol className="text-xs text-slate-500 dark:text-gray-400 space-y-1 list-decimal list-inside">
+                  <li>TradingView envía la alerta → se registra y TradingView recibe OK inmediato</li>
+                  <li>El bot espera {form.signal_confirmation_minutes} min sin ejecutar</li>
+                  <li>Transcurrido el tiempo, compara el precio actual con el precio de la alerta</li>
+                  <li>LONG: si el precio bajó → señal cancelada (falsa). Si sigue arriba → ejecuta</li>
+                  <li>SHORT: si el precio subió → señal cancelada (falsa). Si sigue abajo → ejecuta</li>
+                </ol>
+              </div>
             )}
           </>
         )}
