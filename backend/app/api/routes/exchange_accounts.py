@@ -249,6 +249,71 @@ def _get_status_message(status: str, error: str | None) -> str:
     return messages.get(status, f"✗ Estado desconocido: {status}")
 
 
+@router.get("/{account_id}/balance")
+async def get_account_balance(
+    account_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Devuelve equity y balance disponible de una cuenta de exchange."""
+    account = await _get_account_or_404(account_id, user_id, db)
+    exchange = create_exchange(account)
+    try:
+        info = await exchange.get_equity()
+        return {
+            "account_id": str(account_id),
+            "total_equity": float(info.total_equity),
+            "available_balance": float(info.available_balance),
+        }
+    except Exception as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Error al obtener balance: {exc}")
+    finally:
+        await exchange.close()
+
+
+@router.get("/balance/all")
+async def get_all_balances(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Devuelve equity de todas las cuentas activas del usuario."""
+    import asyncio
+    result = await db.execute(
+        select(ExchangeAccount).where(
+            ExchangeAccount.user_id == user_id,
+            ExchangeAccount.is_active == True,
+        )
+    )
+    accounts = result.scalars().all()
+
+    async def fetch_one(account):
+        exchange = create_exchange(account)
+        try:
+            info = await exchange.get_equity()
+            return {
+                "account_id": str(account.id),
+                "label": account.label,
+                "exchange": account.exchange,
+                "total_equity": float(info.total_equity),
+                "available_balance": float(info.available_balance),
+                "error": None,
+            }
+        except Exception as exc:
+            return {
+                "account_id": str(account.id),
+                "label": account.label,
+                "exchange": account.exchange,
+                "total_equity": 0.0,
+                "available_balance": 0.0,
+                "error": str(exc)[:200],
+            }
+        finally:
+            await exchange.close()
+
+    results = await asyncio.gather(*[fetch_one(a) for a in accounts])
+    return {"accounts": results}
+
+
 @router.post("/{account_id}/test", response_model=ExchangeAccountTestResponse)
 async def test_account(
     account_id: uuid.UUID,

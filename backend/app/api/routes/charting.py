@@ -101,6 +101,27 @@ async def search_symbols(
     db: AsyncSession = Depends(get_db),
 ):
     """Búsqueda de símbolos disponibles en el exchange."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Lista completa de pares populares como fallback
+    POPULAR_SYMBOLS = [
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", 
+        "DOGE/USDT:USDT", "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
+        "DOT/USDT:USDT", "MATIC/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT",
+        "UNI/USDT:USDT", "ATOM/USDT:USDT", "ETC/USDT:USDT", "XLM/USDT:USDT",
+        "NEAR/USDT:USDT", "FIL/USDT:USDT", "ALGO/USDT:USDT", "VET/USDT:USDT",
+        "ICP/USDT:USDT", "MANA/USDT:USDT", "SAND/USDT:USDT", "AXS/USDT:USDT",
+        "THETA/USDT:USDT", "FTM/USDT:USDT", "GRT/USDT:USDT", "CAKE/USDT:USDT",
+        "1000PEPE/USDT:USDT", "1000SHIB/USDT:USDT", "1000FLOKI/USDT:USDT",
+        "WIF/USDT:USDT", "BONK/USDT:USDT", "FARTCOIN/USDT:USDT", "MOODENG/USDT:USDT",
+        "LUNC/USDT:USDT", "PEOPLE/USDT:USDT", "WLD/USDT:USDT", "ARKM/USDT:USDT",
+        "JUP/USDT:USDT", "PYTH/USDT:USDT", "SEI/USDT:USDT", "SUI/USDT:USDT",
+        "TIA/USDT:USDT", "APT/USDT:USDT", "IMX/USDT:USDT", "OP/USDT:USDT",
+        "ARB/USDT:USDT", "STRK/USDT:USDT", "ENA/USDT:USDT", "HYPE/USDT:USDT",
+        "ICNT/USDT:USDT", "AI16Z/USDT:USDT", "ZRO/USDT:USDT", "JTO/USDT:USDT",
+    ]
+    
     # Obtener cuenta del usuario
     result = await db.execute(
         select(ExchangeAccount)
@@ -118,24 +139,26 @@ async def search_symbols(
                 'api_key': account.api_key,
                 'api_secret': account.api_secret,
             })
+            logger.info(f"Loading markets for {account.exchange}")
             markets = await exchange_client.load_markets()
-            # Filtrar solo perpetuals de USDT
-            symbols = [s for s in markets.keys() if ':USDT' in s and 'PERP' not in s]
+            logger.info(f"Loaded {len(markets)} markets")
+            # Filtrar solo perpetuals de USDT (formato CCXT para BingX es SYMBOL/USDT:USDT)
+            symbols = [s for s in markets.keys() if ':USDT' in s]
             symbols.sort()
+            logger.info(f"Filtered to {len(symbols)} USDT perpetuals")
         except Exception as e:
-            print(f"Error loading markets: {e}")
+            logger.error(f"Error loading markets: {e}", exc_info=True)
             # Fallback a lista popular
-            symbols = [
-                "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
-                "XRP/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT",
-                "PEPE/USDT:USDT", "WIF/USDT:USDT", "BONK/USDT:USDT",
-            ]
+            symbols = POPULAR_SYMBOLS
     else:
+        logger.warning("No exchange account found, using default symbols")
         # Fallback si no hay cuenta
-        symbols = [
-            "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", 
-            "XRP/USDT:USDT", "DOGE/USDT:USDT", "ADA/USDT:USDT",
-        ]
+        symbols = POPULAR_SYMBOLS[:20]
+    
+    # Si no hay símbolos, usar fallback
+    if not symbols:
+        logger.warning("No symbols loaded, using fallback")
+        symbols = POPULAR_SYMBOLS
     
     # Filtrar por query si se proporciona
     if query:
@@ -145,12 +168,12 @@ async def search_symbols(
         {
             "symbol": s,
             "full_name": f"{exchange}:{s}",
-            "description": s.replace("/USDT:USDT", " Perpetual"),
+            "description": s.replace("/USDT:USDT", "").replace("/USDT", ""),
             "exchange": exchange,
             "type": "crypto",
             "currency_code": "USDT",
         }
-        for s in symbols[:50]  # Limitar a 50 resultados
+        for s in symbols[:100]  # Aumentar a 100 resultados
     ]
 
 

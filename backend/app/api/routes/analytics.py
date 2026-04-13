@@ -225,6 +225,7 @@ async def get_pnl_chart(
             date=str(row.day),
             daily_pnl=daily,
             cumulative_pnl=cumulative,
+            trade_count=row.trade_count,
         ))
     return points
 

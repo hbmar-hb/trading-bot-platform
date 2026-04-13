@@ -16,17 +16,24 @@ function getPreset(key) {
   switch (key) {
     case 'today':
       return { from: toISO(today), to: toISO(today) }
+    case '7d': {
+      const from = new Date(today); from.setDate(d - 6)
+      return { from: toISO(from), to: toISO(today) }
+    }
     case 'week': {
       const mon = new Date(today); mon.setDate(d - ((dow + 6) % 7))
       return { from: toISO(mon), to: toISO(today) }
     }
-    case 'prev_week': {
-      const mon = new Date(today); mon.setDate(d - ((dow + 6) % 7) - 7)
-      const sun = new Date(mon); sun.setDate(mon.getDate() + 6)
-      return { from: toISO(mon), to: toISO(sun) }
+    case '30d': {
+      const from = new Date(today); from.setDate(d - 29)
+      return { from: toISO(from), to: toISO(today) }
     }
     case 'month':
       return { from: toISO(new Date(y, m, 1)), to: toISO(today) }
+    case '3m': {
+      const from = new Date(today); from.setDate(d - 89)
+      return { from: toISO(from), to: toISO(today) }
+    }
     case 'year':
       return { from: toISO(new Date(y, 0, 1)), to: toISO(today) }
     default:
@@ -35,49 +42,49 @@ function getPreset(key) {
 }
 
 const PRESETS = [
-  { key: 'today',     label: 'Hoy'          },
-  { key: 'week',      label: 'Esta semana'   },
-  { key: 'prev_week', label: 'Sem. anterior' },
-  { key: 'month',     label: 'Este mes'      },
-  { key: 'year',      label: 'Este año'      },
+  { key: 'today', label: 'Hoy'         },
+  { key: '7d',    label: 'Últ. 7d'     },
+  { key: 'week',  label: 'Semana'      },
+  { key: '30d',   label: 'Últ. 30d'   },
+  { key: 'month', label: 'Mes'         },
+  { key: '3m',    label: 'Trim.'       },
+  { key: 'year',  label: 'Año'         },
 ]
 
-// ── Gráfico ───────────────────────────────────────────────────
+// ── Gráfico Acumulado (área) ───────────────────────────────────
 
-function AreaChart({ data, height = 280, isDark }) {
+function AreaChart({ data, height = 260, isDark }) {
   const containerRef = useRef(null)
   const chartRef     = useRef(null)
   const seriesRef    = useRef(null)
 
   useEffect(() => {
     if (!containerRef.current) return
-    
-    const bgColor = isDark ? '#111827' : '#ffffff'
-    const textColor = isDark ? '#9ca3af' : '#64748b'
-    const gridColor = isDark ? '#1f2937' : '#e2e8f0'
-    const borderColor = isDark ? '#374151' : '#cbd5e1'
+    const bgColor    = isDark ? '#111827' : '#ffffff'
+    const textColor  = isDark ? '#9ca3af' : '#64748b'
+    const gridColor  = isDark ? '#1f2937' : '#e2e8f0'
+    const borderColor= isDark ? '#374151' : '#cbd5e1'
 
     const chart = createChart(containerRef.current, {
       width:  containerRef.current.clientWidth,
       height,
-      layout: { background: { color: bgColor }, textColor: textColor },
+      layout: { background: { color: bgColor }, textColor },
       grid:   { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
-      rightPriceScale: { borderColor: borderColor },
-      timeScale: { borderColor: borderColor, timeVisible: true },
+      rightPriceScale: { borderColor },
+      timeScale: { borderColor, timeVisible: true },
     })
 
     const series = chart.addAreaSeries({
-      lineColor:    '#3b82f6',
-      topColor:     'rgba(59,130,246,0.3)',
-      bottomColor:  'rgba(59,130,246,0.02)',
+      lineColor:   '#3b82f6',
+      topColor:    'rgba(59,130,246,0.28)',
+      bottomColor: 'rgba(59,130,246,0.02)',
       lineWidth: 2,
       crosshairMarkerVisible: true,
     })
 
-    // Línea de cero
     series.createPriceLine({
-      price: 0, color: isDark ? '#6b7280' : '#94a3b8', lineWidth: 1,
-      lineStyle: LineStyle.Dashed, axisLabelVisible: false,
+      price: 0, color: isDark ? '#6b7280' : '#94a3b8',
+      lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false,
     })
 
     chartRef.current  = chart
@@ -87,7 +94,6 @@ function AreaChart({ data, height = 280, isDark }) {
       chart.applyOptions({ width: entries[0].contentRect.width })
     })
     ro.observe(containerRef.current)
-
     return () => { ro.disconnect(); chart.remove() }
   }, [height, isDark])
 
@@ -102,18 +108,80 @@ function AreaChart({ data, height = 280, isDark }) {
   return <div ref={containerRef} className="w-full" style={{ height }} />
 }
 
+// ── Gráfico Diario (barras) ────────────────────────────────────
+
+function BarChart({ data, height = 260, isDark }) {
+  const containerRef = useRef(null)
+  const chartRef     = useRef(null)
+  const seriesRef    = useRef(null)
+
+  useEffect(() => {
+    if (!containerRef.current) return
+    const bgColor    = isDark ? '#111827' : '#ffffff'
+    const textColor  = isDark ? '#9ca3af' : '#64748b'
+    const gridColor  = isDark ? '#1f2937' : '#e2e8f0'
+    const borderColor= isDark ? '#374151' : '#cbd5e1'
+
+    const chart = createChart(containerRef.current, {
+      width:  containerRef.current.clientWidth,
+      height,
+      layout: { background: { color: bgColor }, textColor },
+      grid:   { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
+      rightPriceScale: { borderColor },
+      timeScale: { borderColor, timeVisible: true },
+    })
+
+    const series = chart.addHistogramSeries({
+      color: 'rgba(74,222,128,0.8)',
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+    })
+
+    series.createPriceLine({
+      price: 0, color: isDark ? '#6b7280' : '#94a3b8',
+      lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false,
+    })
+
+    chartRef.current  = chart
+    seriesRef.current = series
+
+    const ro = new ResizeObserver(entries => {
+      chart.applyOptions({ width: entries[0].contentRect.width })
+    })
+    ro.observe(containerRef.current)
+    return () => { ro.disconnect(); chart.remove() }
+  }, [height, isDark])
+
+  useEffect(() => {
+    if (!seriesRef.current || !data.length) return
+    seriesRef.current.setData(
+      data.map(p => {
+        const v = parseFloat(p.daily_pnl)
+        return {
+          time:  p.date,
+          value: v,
+          color: v >= 0 ? 'rgba(74,222,128,0.8)' : 'rgba(248,113,113,0.8)',
+        }
+      })
+    )
+    chartRef.current?.timeScale().fitContent()
+  }, [data])
+
+  return <div ref={containerRef} className="w-full" style={{ height }} />
+}
+
 // ── PnlChart principal ────────────────────────────────────────
 
 export default function PnlChart() {
-  const [preset,   setPreset]   = useState('month')
-  const [from,     setFrom]     = useState('')
-  const [to,       setTo]       = useState('')
-  const [symbol,   setSymbol]   = useState('')
-  const [source,   setSource]   = useState('')
-  const [symbols,  setSymbols]  = useState([])
-  const [data,     setData]     = useState([])
-  const [loading,  setLoading]  = useState(false)
-  const [isDark,   setIsDark]   = useState(false)
+  const [preset,    setPreset]    = useState('30d')
+  const [from,      setFrom]      = useState('')
+  const [to,        setTo]        = useState('')
+  const [symbol,    setSymbol]    = useState('')
+  const [source,    setSource]    = useState('')
+  const [symbols,   setSymbols]   = useState([])
+  const [data,      setData]      = useState([])
+  const [loading,   setLoading]   = useState(false)
+  const [isDark,    setIsDark]    = useState(false)
+  const [chartMode, setChartMode] = useState('cumulative') // 'cumulative' | 'daily'
 
   // Detectar tema
   useEffect(() => {
@@ -146,11 +214,11 @@ export default function PnlChart() {
     api.get('/analytics/symbols').then(r => setSymbols(r.data.symbols || [])).catch(() => {})
   }, [])
 
-  // Carga inicial con preset por defecto
+  // Carga inicial
   useEffect(() => {
     const p = getPreset(preset)
-    fetchData({ ...p, symbol })
-  }, [])
+    fetchData({ ...p, symbol, source })
+  }, []) // eslint-disable-line
 
   const applyPreset = (key) => {
     setPreset(key)
@@ -176,19 +244,54 @@ export default function PnlChart() {
     fetchData({ ...p, symbol, source: s })
   }
 
-  // Estadísticas rápidas
-  const totalPnl    = data.reduce((s, d) => s + parseFloat(d.daily_pnl), 0)
-  const winDays     = data.filter(d => parseFloat(d.daily_pnl) > 0).length
-  const lossDays    = data.filter(d => parseFloat(d.daily_pnl) < 0).length
-  const bestDay     = data.length ? Math.max(...data.map(d => parseFloat(d.daily_pnl))) : 0
-  const isPos       = totalPnl >= 0
+  // ── Estadísticas del período ──────────────────────────────
+  const totalPnl     = data.reduce((s, d) => s + parseFloat(d.daily_pnl), 0)
+  const totalTrades  = data.reduce((s, d) => s + (d.trade_count || 0), 0)
+  const winDays      = data.filter(d => parseFloat(d.daily_pnl) > 0).length
+  const lossDays     = data.filter(d => parseFloat(d.daily_pnl) < 0).length
+  const winDayRate   = (winDays + lossDays) > 0
+    ? Math.round(winDays / (winDays + lossDays) * 100)
+    : 0
+  const bestDay      = data.length ? Math.max(...data.map(d => parseFloat(d.daily_pnl))) : 0
+  const worstDay     = data.length ? Math.min(...data.map(d => parseFloat(d.daily_pnl))) : 0
+  const isPos        = totalPnl >= 0
+
+  const STATS = [
+    { label: 'PnL del período',  value: `${isPos ? '+' : ''}${totalPnl.toFixed(2)} USDT`, color: isPos ? 'text-green-400' : 'text-red-400' },
+    { label: 'Trades cerrados',  value: totalTrades,                                        color: 'text-slate-700 dark:text-white' },
+    { label: 'Win rate (días)',  value: `${winDayRate}%`,                                   color: winDayRate >= 50 ? 'text-green-400' : 'text-red-400' },
+    { label: 'Días positivos',   value: winDays,                                            color: 'text-green-400' },
+    { label: 'Días negativos',   value: lossDays,                                           color: 'text-red-400' },
+    { label: 'Mejor día',        value: `${bestDay >= 0 ? '+' : ''}${bestDay.toFixed(2)}`, color: 'text-blue-400' },
+    { label: 'Peor día',         value: `${worstDay >= 0 ? '+' : ''}${worstDay.toFixed(2)}`, color: worstDay >= 0 ? 'text-blue-400' : 'text-red-400' },
+  ]
 
   return (
     <div className="card space-y-4">
+      {/* ── Cabecera: título + toggle modo ── */}
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-semibold text-slate-900 dark:text-white shrink-0">PnL por día</h2>
+        <h2 className="font-semibold text-slate-900 dark:text-white shrink-0">PnL</h2>
 
-        {/* Separador visual */}
+        {/* Toggle Acumulado / Diario */}
+        <div className="flex rounded-md overflow-hidden border border-slate-300 dark:border-gray-700 shrink-0">
+          {[
+            { key: 'cumulative', label: 'Acumulado' },
+            { key: 'daily',      label: 'Diario'    },
+          ].map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setChartMode(opt.key)}
+              className={`px-2.5 py-1 text-xs transition-colors ${
+                chartMode === opt.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
         <div className="w-px h-4 bg-slate-300 dark:bg-gray-700 shrink-0" />
 
         {/* Presets */}
@@ -206,21 +309,16 @@ export default function PnlChart() {
           </button>
         ))}
 
-        {/* Separador */}
         <div className="w-px h-4 bg-slate-300 dark:bg-gray-700 shrink-0" />
 
         {/* Rango personalizado */}
         <input
-          type="date"
-          value={from}
-          onChange={e => setFrom(e.target.value)}
+          type="date" value={from} onChange={e => setFrom(e.target.value)}
           className="bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-2 py-1"
         />
         <span className="text-slate-500 dark:text-gray-500 text-xs shrink-0">→</span>
         <input
-          type="date"
-          value={to}
-          onChange={e => setTo(e.target.value)}
+          type="date" value={to} onChange={e => setTo(e.target.value)}
           className="bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-2 py-1"
         />
         <button
@@ -231,13 +329,12 @@ export default function PnlChart() {
           Aplicar
         </button>
 
-        {/* Separador + Símbolo */}
+        {/* Símbolo */}
         {symbols.length > 0 && (
           <>
             <div className="w-px h-4 bg-slate-300 dark:bg-gray-700 shrink-0" />
             <select
-              value={symbol}
-              onChange={e => applySymbol(e.target.value)}
+              value={symbol} onChange={e => applySymbol(e.target.value)}
               className="bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-2 py-1"
             >
               <option value="">Todos los pares</option>
@@ -248,11 +345,10 @@ export default function PnlChart() {
           </>
         )}
 
-        {/* Separador + Fuente */}
+        {/* Fuente */}
         <div className="w-px h-4 bg-slate-300 dark:bg-gray-700 shrink-0" />
         <select
-          value={source}
-          onChange={e => applySource(e.target.value)}
+          value={source} onChange={e => applySource(e.target.value)}
           className="bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-2 py-1"
         >
           <option value="">Todos</option>
@@ -261,31 +357,37 @@ export default function PnlChart() {
         </select>
       </div>
 
-      {/* Stats rápidas */}
+      {/* ── Stats del período ── */}
       {data.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-          {[
-            { label: 'PnL total',    value: `${isPos ? '+' : ''}${totalPnl.toFixed(2)} USDT`, color: isPos ? 'text-green-400' : 'text-red-400' },
-            { label: 'Días positivos', value: winDays,   color: 'text-green-400' },
-            { label: 'Días negativos', value: lossDays,  color: 'text-red-400'   },
-            { label: 'Mejor día',    value: `+${bestDay.toFixed(2)}`,             color: 'text-blue-400'  },
-          ].map(s => (
-            <div key={s.label} className="bg-slate-100 dark:bg-gray-800/60 rounded-lg px-3 py-2 text-center">
-              <p className={`text-lg font-bold font-mono ${s.color}`}>{s.value}</p>
-              <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">{s.label}</p>
+        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2">
+          {STATS.map(s => (
+            <div key={s.label} className="bg-slate-100 dark:bg-gray-800/60 rounded-lg px-2 py-2 text-center">
+              <p className={`text-sm font-bold font-mono ${s.color}`}>{s.value}</p>
+              <p className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5 leading-tight">{s.label}</p>
             </div>
           ))}
         </div>
       )}
 
-      {/* Gráfico */}
+      {/* ── Gráfico ── */}
       {loading ? (
-        <div className="flex items-center justify-center h-[280px] text-slate-500 dark:text-gray-400 text-sm">Cargando…</div>
+        <div className="flex items-center justify-center h-[260px] text-slate-500 dark:text-gray-400 text-sm">
+          Cargando…
+        </div>
       ) : data.length === 0 ? (
-        <div className="flex items-center justify-center h-[280px] text-slate-600 dark:text-gray-500 text-sm">Sin trades en este período</div>
+        <div className="flex items-center justify-center h-[260px] text-slate-600 dark:text-gray-500 text-sm">
+          Sin trades en este período
+        </div>
+      ) : chartMode === 'cumulative' ? (
+        <AreaChart data={data} height={260} isDark={isDark} />
       ) : (
-        <AreaChart data={data} height={280} isDark={isDark} />
+        <BarChart data={data} height={260} isDark={isDark} />
       )}
+
+      {/* Nota UTC */}
+      <p className="text-[10px] text-slate-400 dark:text-gray-600 text-right -mt-2">
+        Fechas en UTC · datos de trades cerrados sincronizados
+      </p>
     </div>
   )
 }
