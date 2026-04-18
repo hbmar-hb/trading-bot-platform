@@ -11,20 +11,37 @@ Analiza el histórico de posiciones cerradas y señales de un bot y propone:
 - Confirmación de señal (min)     (basado en SL rápidos + win rate)
 """
 import uuid
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from loguru import logger
+
 from app.api.dependencies import get_current_user_id
 from app.models.bot_config import BotConfig
+from app.models.exchange_trade import ExchangeTrade
 from app.models.position import Position
 from app.models.signal_log import SignalLog
 from app.services.database import get_db
 
 router = APIRouter(prefix="/optimizer", tags=["optimizer"])
 
-MIN_TRADES = 5  # Mínimo de trades para sugerencias fiables
+MIN_TRADES = 3  # Mínimo de trades para sugerencias fiables (reducido de 5 a 3)
+
+
+@dataclass
+class _TradeView:
+    """Vista enriquecida de un trade para análisis, combinando ExchangeTrade + Position."""
+    realized_pnl: Decimal
+    entry_price: Decimal | None
+    quantity: Decimal
+    side: str
+    opened_at: datetime | None
+    closed_at: datetime | None
 
 
 @router.get("/{bot_id}")
@@ -40,14 +57,74 @@ async def get_optimizer(
     if not bot:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
 
+    # Fuente PRIMARIA: exchange_trades (datos reales del exchange - más fiables)
+    # Fallback: posiciones del bot si no hay exchange_trades
+    from sqlalchemy import or_
+    
+    symbol_base = bot.symbol.split('/')[0] if '/' in bot.symbol else bot.symbol
+    
+    trades_result = await db.execute(
+        select(ExchangeTrade).where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.bot_id == bot_id,
+            ExchangeTrade.source == "bot",
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl.is_not(None),
+        ).order_by(ExchangeTrade.closed_at)
+    )
+    trades = trades_result.scalars().all()
+    
+    # También obtener posiciones para enriquecimiento y debug
     pos_result = await db.execute(
         select(Position).where(
             Position.bot_id == bot_id,
             Position.status == "closed",
             Position.realized_pnl.is_not(None),
-        ).order_by(Position.closed_at)
+        ).order_by(Position.opened_at)
     )
     positions = pos_result.scalars().all()
+    
+    # Debug info
+    logger.info(f"[OPTIMIZER] Bot {bot.bot_name} ({bot.symbol}): {len(positions)} posiciones, {len(trades)} trades del bot")
+    print(f"[OPTIMIZER DEBUG] Bot {bot.bot_name} ({bot.symbol}): positions={len(positions)}, bot_trades={len(trades)}", flush=True)
+
+    if len(trades) >= MIN_TRADES:
+        # Usar exchange_trades como fuente principal (más fiable)
+        position_ids = {t.position_id for t in trades if t.position_id}
+        positions_by_id: dict = {}
+        if position_ids:
+            enrich_result = await db.execute(
+                select(Position).where(Position.id.in_(position_ids))
+            )
+            positions_by_id = {p.id: p for p in enrich_result.scalars().all()}
+
+        trade_views: list[_TradeView] = [
+            _TradeView(
+                realized_pnl=t.realized_pnl,
+                entry_price=t.entry_price or (positions_by_id[t.position_id].entry_price if t.position_id in positions_by_id else None),
+                quantity=t.quantity,
+                side=(positions_by_id[t.position_id].side if t.position_id in positions_by_id else t.side) or "long",
+                opened_at=t.opened_at or (positions_by_id[t.position_id].opened_at if t.position_id in positions_by_id else None),
+                closed_at=t.closed_at,
+            )
+            for t in trades
+        ]
+    elif len(positions) >= MIN_TRADES:
+        # Fallback: usar posiciones si no hay suficientes exchange_trades
+        trade_views = [
+            _TradeView(
+                realized_pnl=p.realized_pnl,
+                entry_price=p.entry_price,
+                quantity=p.quantity,
+                side=p.side,
+                opened_at=p.opened_at,
+                closed_at=p.closed_at,
+            )
+            for p in positions
+        ]
+    else:
+        # Ni trades ni posiciones suficientes
+        trade_views = []
 
     sig_result = await db.execute(
         select(SignalLog).where(
@@ -57,15 +134,51 @@ async def get_optimizer(
     )
     signals = sig_result.scalars().all()
 
-    analysis = _analyze(positions, signals)
+    analysis = _analyze_trades(trade_views, signals)
     suggestions = _suggest(bot, analysis)
+    
+    # Info de debug para troubleshooting
+    trades_count = len(trades) if 'trades' in locals() else 0
+    symbol_searched = bot.symbol.split('/')[0] if '/' in bot.symbol else bot.symbol
+    
+    if len(trades) >= MIN_TRADES:
+        data_source = "exchange_trades"
+    elif len(positions) >= MIN_TRADES:
+        data_source = "positions"
+    else:
+        data_source = "insufficient"
+    
+    # Calcular cooldown del optimizer (3 trades de histórico después de aplicar)
+    COOLDOWN_TRADES = 3
+    current_trade_count = len(trade_views)
+    last_applied_count = bot.optimizer_trades_at_apply or 0
+    trades_since_apply = max(0, current_trade_count - last_applied_count)
+    cooldown_active = trades_since_apply < COOLDOWN_TRADES and bot.optimizer_applied_at is not None
+    
+    debug_info = {
+        "positions_count": len(positions),
+        "trades_count": trades_count,
+        "trade_views_count": len(trade_views),
+        "min_required": MIN_TRADES,
+        "symbol": bot.symbol,
+        "symbol_searched": symbol_searched,
+        "data_source": data_source,
+    }
 
     return {
         "bot_id": str(bot_id),
         "bot_name": bot.bot_name,
         "symbol": bot.symbol,
         "timeframe": bot.timeframe,
-        "insufficient_data": len(positions) < MIN_TRADES,
+        "insufficient_data": len(trade_views) < MIN_TRADES,
+        "cooldown": {
+            "active": cooldown_active,
+            "trades_since_apply": trades_since_apply,
+            "trades_needed": COOLDOWN_TRADES,
+            "last_applied_at": bot.optimizer_applied_at.isoformat() if bot.optimizer_applied_at else None,
+            "applied_params": bot.optimizer_applied_params or {},
+        },
+        "debug": debug_info,
         "analysis": analysis,
         "current": {
             "signal_confirmation_minutes": bot.signal_confirmation_minutes,
@@ -76,122 +189,76 @@ async def get_optimizer(
             "breakeven_config":            bot.breakeven_config,
             "dynamic_sl_config":           bot.dynamic_sl_config,
         },
-        "suggestions": suggestions,
+        "suggestions": suggestions if not cooldown_active else {},
     }
 
 
 # ─── Motor de análisis ────────────────────────────────────────
 
-def _analyze(positions: list, signals: list) -> dict:
-    if not positions:
+def _analyze_trades(trades: list, signals: list) -> dict:
+    """Analiza trades desde exchange_trades (fuente unificada)."""
+    if not trades:
         return _empty_analysis()
 
-    pnls = [p.realized_pnl for p in positions if p.realized_pnl is not None]
+    pnls = [t.realized_pnl for t in trades if t.realized_pnl is not None]
     total = len(pnls)
     if total == 0:
         return _empty_analysis()
 
-    winners = [p for p in positions if p.realized_pnl and p.realized_pnl > 0]
-    losers  = [p for p in positions if p.realized_pnl and p.realized_pnl <= 0]
+    winners = [t for t in trades if t.realized_pnl and t.realized_pnl > 0]
+    losers  = [t for t in trades if t.realized_pnl and t.realized_pnl <= 0]
     n_win   = len(winners)
     n_loss  = len(losers)
     win_rate = round(n_win / total, 4)
 
-    avg_win  = float(sum(p.realized_pnl for p in winners) / n_win)  if n_win  else 0.0
-    avg_loss = float(sum(p.realized_pnl for p in losers)  / n_loss) if n_loss else 0.0
+    avg_win  = float(sum(t.realized_pnl for t in winners) / n_win)  if n_win  else 0.0
+    avg_loss = float(sum(t.realized_pnl for t in losers)  / n_loss) if n_loss else 0.0
 
-    total_win_abs  = float(sum(p.realized_pnl for p in winners)) if winners else 0.0
-    total_loss_abs = abs(float(sum(p.realized_pnl for p in losers))) if losers else 0.0
+    total_win_abs  = float(sum(t.realized_pnl for t in winners)) if winners else 0.0
+    total_loss_abs = abs(float(sum(t.realized_pnl for t in losers))) if losers else 0.0
     profit_factor  = round(total_win_abs / total_loss_abs, 2) if total_loss_abs > 0 else None
 
-    # Duración
-    def _hours(pos):
-        if pos.opened_at and pos.closed_at:
-            return (pos.closed_at - pos.opened_at).total_seconds() / 3600
+    # Duración (usando opened_at y closed_at de ExchangeTrade)
+    def _hours(trade):
+        if trade.opened_at and trade.closed_at:
+            return (trade.closed_at - trade.opened_at).total_seconds() / 3600
         return None
 
-    win_durations  = [h for p in winners if (h := _hours(p)) is not None]
-    loss_durations = [h for p in losers  if (h := _hours(p)) is not None]
+    win_durations  = [h for t in winners if (h := _hours(t)) is not None]
+    loss_durations = [h for t in losers  if (h := _hours(t)) is not None]
     all_durations  = win_durations + loss_durations
 
     avg_duration     = round(sum(all_durations)  / len(all_durations),  1) if all_durations  else 0.0
     avg_winner_hours = round(sum(win_durations)  / len(win_durations),  1) if win_durations  else 0.0
     avg_loser_hours  = round(sum(loss_durations) / len(loss_durations), 1) if loss_durations else 0.0
 
-    # Movimiento de precio real (proxy de volatilidad del activo)
-    # Para cada trade: % movimiento = |exit_price - entry_price| / entry_price
+    # Movimiento de precio real
     price_moves = []
     win_price_moves = []
     loss_price_moves = []
-    for p in positions:
-        entry = float(p.entry_price or 0)
-        qty   = float(p.quantity or 0)
-        pnl   = float(p.realized_pnl or 0)
+    for t in trades:
+        entry = float(t.entry_price or 0)
+        qty   = float(t.quantity or 0)
+        pnl   = float(t.realized_pnl or 0)
         if entry > 0 and qty > 0:
-            # Precio de salida aproximado desde el PnL registrado
-            exit_price = entry + pnl / qty if p.side == "long" else entry - pnl / qty
+            exit_price = entry + pnl / qty if t.side == "long" else entry - pnl / qty
             move_pct = abs(exit_price - entry) / entry * 100
             price_moves.append(move_pct)
             if pnl > 0:
                 win_price_moves.append(move_pct)
             else:
                 loss_price_moves.append(move_pct)
-
-    avg_price_move_pct     = round(sum(price_moves) / len(price_moves), 2)         if price_moves      else 0.0
-    avg_win_price_move_pct = round(sum(win_price_moves) / len(win_price_moves), 2) if win_price_moves  else 0.0
-    avg_loss_price_move_pct= round(sum(loss_price_moves) / len(loss_price_moves), 2) if loss_price_moves else 0.0
-
-    # Profit/loss % sobre el nominal (sin apalancamiento)
-    win_pcts  = [m for m in win_price_moves]   # ya son % de movimiento real
-    loss_pcts = [m for m in loss_price_moves]
-    avg_win_pct  = round(sum(win_pcts)  / len(win_pcts),  2) if win_pcts  else 0.0
-    avg_loss_pct = round(sum(loss_pcts) / len(loss_pcts), 2) if loss_pcts else 0.0
-
-    # Ratio R:R real (media ganancia % / media pérdida %)
-    real_rr = round(avg_win_pct / avg_loss_pct, 2) if avg_loss_pct > 0 else None
-
-    # SL: distancia % entre entrada y SL configurado
-    sl_pcts = []
-    sl_hits = 0
-    for p in positions:
-        if p.entry_price and p.current_sl_price and float(p.entry_price) > 0:
-            pct = abs(float(p.entry_price) - float(p.current_sl_price)) / float(p.entry_price) * 100
-            sl_pcts.append(pct)
-            if p.realized_pnl and float(p.realized_pnl) < 0:
-                expected = (float(p.current_sl_price) - float(p.entry_price)) * float(p.quantity)
-                if p.side == "short":
-                    expected = -expected
-                denom = max(abs(expected), 0.01)
-                if abs(float(p.realized_pnl) - expected) / denom < 0.15:
-                    sl_hits += 1
-
-    avg_sl_pct  = round(sum(sl_pcts) / len(sl_pcts), 2) if sl_pcts else 0.0
+    
+    # Para exchange_trades, no tenemos SL/TP configurados, así que estimamos
+    # basándonos en el movimiento real de los perdedores
+    avg_sl_pct = round(sum(loss_price_moves) / len(loss_price_moves), 2) if loss_price_moves else 0.0
+    sl_hits = n_loss  # Asumimos que todos los perdedores tocaron SL
     sl_hit_rate = round(sl_hits / n_loss, 4) if n_loss > 0 else 0.0
-
-    # TP: analizar si los TPs configurados eran alcanzables
-    # Comparamos avg_win_pct (precio que realmente se movió) con el primer TP configurado
-    tp1_targets = []
-    for p in positions:
-        tps = p.current_tp_prices or []
-        if tps and isinstance(tps, list) and len(tps) > 0:
-            first_tp = tps[0]
-            if isinstance(first_tp, dict):
-                tp1_pct = first_tp.get("profit_percent") or first_tp.get("price")
-                if tp1_pct:
-                    try:
-                        tp1_targets.append(float(tp1_pct))
-                    except (ValueError, TypeError):
-                        pass
-
-    avg_tp1_target  = round(sum(tp1_targets) / len(tp1_targets), 2) if tp1_targets else None
-    # TP alcanzabilidad: qué % de ganadores probablemente alcanzaron TP1
-    # (ganadores con profit > tp1_target)
-    if avg_tp1_target and win_price_moves:
-        tp1_reached = sum(1 for m in win_price_moves if m >= avg_tp1_target)
-        tp1_reach_rate = round(tp1_reached / len(win_price_moves), 4)
-    else:
-        tp1_reach_rate = None
-
+    
+    # TP estimado basado en ganadores
+    avg_tp1_target = round(sum(win_price_moves) / len(win_price_moves), 2) if win_price_moves else None
+    tp1_reach_rate = 1.0 if n_win > 0 else 0.0  # Los ganadores alcanzaron su objetivo
+    
     # Señales canceladas por filtro anti-falso
     total_signals = len(signals)
     cancelled = sum(
@@ -210,13 +277,13 @@ def _analyze(positions: list, signals: list) -> dict:
         "losing":                n_loss,
         "win_rate":              win_rate,
         "profit_factor":         profit_factor,
-        "real_rr":               real_rr,
+        "real_rr":               round((sum(win_price_moves)/len(win_price_moves)) / (sum(loss_price_moves)/len(loss_price_moves)), 2) if win_price_moves and loss_price_moves else None,
         "avg_win_pnl":           round(avg_win,  2),
         "avg_loss_pnl":          round(avg_loss, 2),
-        "avg_win_pct":           avg_win_pct,
-        "avg_loss_pct":          avg_loss_pct,
-        "avg_price_move_pct":    avg_price_move_pct,
-        "avg_win_price_move_pct":avg_win_price_move_pct,
+        "avg_win_pct":           round(sum(win_price_moves) / len(win_price_moves), 2) if win_price_moves else 0.0,
+        "avg_loss_pct":          round(sum(loss_price_moves) / len(loss_price_moves), 2) if loss_price_moves else 0.0,
+        "avg_price_move_pct":    round(sum(price_moves) / len(price_moves), 2) if price_moves else 0.0,
+        "avg_win_price_move_pct":round(sum(win_price_moves) / len(win_price_moves), 2) if win_price_moves else 0.0,
         "avg_duration_hours":    avg_duration,
         "avg_winner_hours":      avg_winner_hours,
         "avg_loser_hours":       avg_loser_hours,
@@ -567,3 +634,69 @@ def _suggest(bot: BotConfig, a: dict) -> dict:
     }
 
     return suggestions
+
+
+# ─── Endpoint para aplicar sugerencias ─────────────────────────
+
+@router.post("/{bot_id}/apply")
+async def apply_optimizer_suggestions(
+    bot_id: uuid.UUID,
+    payload: dict,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Aplica sugerencias del optimizer al bot y registra el estado para cooldown.
+    
+    Payload: { "params": { "initial_sl_percentage": 1.5, ... } }
+    """
+    # Obtener bot
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    applied_params = payload.get("params", {})
+    if not applied_params:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No se proporcionaron parámetros")
+    
+    # Contar trades actuales del bot
+    trades_result = await db.execute(
+        select(ExchangeTrade).where(
+            ExchangeTrade.bot_id == bot_id,
+            ExchangeTrade.source == "bot",
+            ExchangeTrade.closed_at.is_not(None),
+        )
+    )
+    trades = trades_result.scalars().all()
+    current_trade_count = len(trades)
+    
+    # Actualizar bot con los parámetros aplicados
+    for key, value in applied_params.items():
+        if hasattr(bot, key):
+            # Convertir tipos si es necesario
+            if key == "initial_sl_percentage" and isinstance(value, (int, float)):
+                value = Decimal(str(value))
+            setattr(bot, key, value)
+    
+    # Registrar estado del optimizer para cooldown
+    from datetime import timezone
+    bot.optimizer_applied_at = datetime.now(timezone.utc)
+    bot.optimizer_trades_at_apply = current_trade_count
+    bot.optimizer_applied_params = applied_params
+    
+    await db.commit()
+    
+    logger.info(f"[OPTIMIZER] Bot {bot.bot_name}: aplicados {len(applied_params)} parámetros. Trades en momento: {current_trade_count}")
+    
+    return {
+        "message": "Parámetros aplicados correctamente",
+        "applied_params": applied_params,
+        "trades_at_apply": current_trade_count,
+        "cooldown_until": current_trade_count + 3,
+    }

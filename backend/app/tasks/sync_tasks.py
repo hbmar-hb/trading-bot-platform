@@ -168,10 +168,11 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
                     else datetime.now(timezone.utc)
                 )
 
-                # Clasificar source
+                # Clasificar source y obtener datos de posición si existe
                 source = "manual"
                 position_id = None
                 bot_id = None
+                matched_pos = None
 
                 for pos in positions_by_symbol.get(symbol, []):
                     if pos.opened_at and pos.opened_at <= trade_dt:
@@ -180,7 +181,21 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
                             source = "bot"
                             position_id = pos.id
                             bot_id = pos.bot_id
+                            matched_pos = pos
                             break
+
+                # Para trades del bot usamos entry_price y opened_at de la posición,
+                # ya que el exchange solo devuelve el precio de cierre (exit_price).
+                entry_price = (
+                    matched_pos.entry_price
+                    if matched_pos and matched_pos.entry_price
+                    else None
+                )
+                opened_at = (
+                    matched_pos.opened_at
+                    if matched_pos and matched_pos.opened_at
+                    else None
+                )
 
                 new_trade = ExchangeTrade(
                     user_id=user_id,
@@ -192,11 +207,12 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
                     symbol=symbol,
                     side=trade_data.get("side") or "long",
                     quantity=Decimal(str(trade_data.get("quantity") or 0)),
-                    entry_price=trade_data.get("price"),
+                    entry_price=entry_price,
                     exit_price=trade_data.get("price"),
                     realized_pnl=trade_data.get("pnl"),
                     fee=Decimal(str(trade_data.get("fee") or 0)),
                     fee_asset=trade_data.get("fee_asset") or "USDT",
+                    opened_at=opened_at,
                     closed_at=trade_dt,
                     order_type=trade_data.get("order_type") or "market",
                     status="closed",

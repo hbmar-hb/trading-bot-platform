@@ -205,8 +205,12 @@ async def list_trades(
     - source='manual': Solo trades manuales del usuario
     - source=None: Todos los trades
     """
-    since = datetime.now(timezone.utc).timestamp() - days * 24 * 3600
-    since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
+    # Calcular fecha de inicio como días calendario (consistente con frontend)
+    # days=7 significa: desde hace 6 días hasta hoy (7 días total)
+    from datetime import timedelta
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    since_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
     
     query = select(ExchangeTrade).where(
         ExchangeTrade.user_id == user_id,
@@ -239,9 +243,12 @@ async def get_trade_stats(
     Estadísticas de trades separadas por source (bot vs manual).
     """
     from sqlalchemy import func
+    from datetime import timedelta
     
-    since = datetime.now(timezone.utc).timestamp() - days * 24 * 3600
-    since_dt = datetime.fromtimestamp(since, tz=timezone.utc)
+    # Calcular fecha de inicio como días calendario (consistente con frontend)
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+    since_dt = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc)
     
     # Base query
     base_query = select(ExchangeTrade).where(

@@ -7,7 +7,7 @@ export const positionsService = {
   get:     (id)     => api.get(`/positions/${id}`),
   updateSL: (id, data) => api.patch(`/positions/${id}/sl`, data),
   updateTP: (id, tpPrices) => api.patch(`/positions/${id}/tp`, { tp_prices: tpPrices }),
-  partialClose: (id, data) => api.post(`/positions/${id}/partial-close`, data),
+  partialClose: (id, percentage) => api.post(`/positions/${id}/partial-close`, null, { params: { percentage } }),
   close:   (id)     => api.post(`/positions/${id}/close`),
   getCandles: (id, timeframe = '15m', limit = 100) => 
     api.get(`/positions/${id}/candles`, { params: { timeframe, limit } }),

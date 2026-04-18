@@ -4,7 +4,9 @@ import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
 import { botsService } from '@/services/bots'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
-import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw, Filter, Clock, Calendar } from 'lucide-react'
+import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw, Filter, Clock, Calendar, Bot, User, ChevronDown, ChevronUp, Eye } from 'lucide-react'
+import { getDateRange } from '@/utils/dateRanges'
+import TradeDetailModal from '@/components/Analytics/TradeDetailModal'
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -37,13 +39,7 @@ const RANGES = [
 
 function rangeFromDays(days) {
   if (!days) return { from: null, to: null }
-  const to   = new Date()
-  const from = new Date()
-  from.setDate(from.getDate() - days)
-  return {
-    from: from.toISOString().slice(0, 10),
-    to:   to.toISOString().slice(0, 10),
-  }
+  return getDateRange(days)
 }
 
 // ─── Stat card ────────────────────────────────────────────────
@@ -125,34 +121,41 @@ function EquityChart({ data, isDark }) {
       height: 220,
     })
 
-    const series = chart.addLineSeries({
-      color: '#3b82f6', lineWidth: 2,
-      crosshairMarkerVisible: true,
-      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)} USDT` },
-    })
-
-    const area = chart.addAreaSeries({
+    const series = chart.addAreaSeries({
+      lineColor:   '#3b82f6',
+      lineWidth:   2,
       topColor:    'rgba(59,130,246,0.15)',
       bottomColor: 'rgba(59,130,246,0)',
-      lineColor:   'transparent',
-      lineWidth:   0,
+      crosshairMarkerVisible: true,
+      priceFormat: { type: 'custom', formatter: v => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)} USDT` },
     })
 
-    const points = data.map(p => ({
-      time:  Math.floor(new Date(p.timestamp).getTime() / 1000),
-      value: parseFloat(p.cumulative_pnl),
-    }))
+    const points = data
+      .filter(p => p.timestamp && p.cumulative_pnl !== null && p.cumulative_pnl !== undefined)
+      .map(p => {
+        const time = Math.floor(new Date(p.timestamp).getTime() / 1000)
+        const value = parseFloat(p.cumulative_pnl)
+        return { 
+          time: Number.isFinite(time) ? time : 0, 
+          value: Number.isFinite(value) ? value : 0 
+        }
+      })
+      .filter(p => p.time > 0)
+    
+    if (points.length === 0) {
+      return () => { destroyed = true; obs.disconnect(); chart.remove() }
+    }
 
     series.setData(points)
-    area.setData(points)
     chart.timeScale().fitContent()
 
+    let destroyed = false
     const obs = new ResizeObserver(() => {
-      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
     })
     obs.observe(ref.current)
 
-    return () => { chart.remove(); obs.disconnect() }
+    return () => { destroyed = true; obs.disconnect(); chart.remove() }
   }, [data, isDark])
 
   if (!data?.length) return (
@@ -188,22 +191,30 @@ function DailyPnlChart({ data, isDark }) {
       priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}` },
     })
 
-    series.setData(
-      (data || []).map(p => ({
-        time:  p.date,
-        value: parseFloat(p.daily_pnl),
-        color: parseFloat(p.daily_pnl) >= 0 ? '#22c55e' : '#ef4444',
-      }))
-    )
+    const validData = (data || [])
+      .filter(p => p.date && p.daily_pnl !== null && p.daily_pnl !== undefined)
+      .map(p => {
+        const value = parseFloat(p.daily_pnl)
+        return {
+          time: p.date,
+          value: Number.isFinite(value) ? value : 0,
+          color: value >= 0 ? '#22c55e' : '#ef4444',
+        }
+      })
+    
+    if (validData.length > 0) {
+      series.setData(validData)
+    }
 
     chart.timeScale().fitContent()
 
+    let destroyed = false
     const obs = new ResizeObserver(() => {
-      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
     })
     obs.observe(ref.current)
 
-    return () => { chart.remove(); obs.disconnect() }
+    return () => { destroyed = true; obs.disconnect(); chart.remove() }
   }, [data, isDark])
 
   if (!data?.length) return (
@@ -264,13 +275,13 @@ function ActivityHeatmap({ data, isDark }) {
       pnl: parseFloat(d.pnl || 0),
     }))
 
-    tradesSeries.setData(points.map(p => ({
+    tradesSeries.setData(points.filter(p => p.time).map(p => ({
       time: p.time,
-      value: p.trades,
-      color: p.trades > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
+      value: p.trades || 0,
+      color: (p.trades || 0) > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
     })))
 
-    pnlSeries.setData(points.map(p => ({
+    pnlSeries.setData(points.filter(p => p.time && !isNaN(p.pnl)).map(p => ({
       time: p.time,
       value: p.pnl,
     })))
@@ -323,15 +334,17 @@ function ActivityHeatmap({ data, isDark }) {
 
     chart.timeScale().fitContent()
 
+    let destroyed = false
     const obs = new ResizeObserver(() => {
-      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
     })
     obs.observe(ref.current)
 
-    return () => { 
-      chart.remove()
+    return () => {
+      destroyed = true
+      obs.disconnect()
       toolTip.remove()
-      obs.disconnect() 
+      chart.remove()
     }
   }, [safeData, isDark])
 
@@ -500,15 +513,17 @@ function HourlyChart({ data, isDark }) {
 
     chart.timeScale().fitContent()
 
+    let destroyed = false
     const obs = new ResizeObserver(() => {
-      if (ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
     })
     obs.observe(ref.current)
 
-    return () => { 
-      chart.remove()
+    return () => {
+      destroyed = true
+      obs.disconnect()
       toolTip.remove()
-      obs.disconnect() 
+      chart.remove()
     }
   }, [safeData, isDark])
 
@@ -638,6 +653,12 @@ function PeriodComparison({ summary }) {
 
 // ─── Página principal ──────────────────────────────────────────
 
+const SOURCE_OPTIONS = [
+  { value: '', label: 'Todos' },
+  { value: 'bot', label: 'Bots' },
+  { value: 'manual', label: 'Manual' },
+]
+
 export default function AnalyticsPage() {
   const [summary, setSummary]     = useState(null)
   const [dailyPnl, setDailyPnl]   = useState([])
@@ -648,7 +669,12 @@ export default function AnalyticsPage() {
   const [error, setError]         = useState(null)
   const [range, setRange]         = useState(RANGES[1])
   const [selectedBot, setSelectedBot] = useState('')
+  const [selectedSource, setSelectedSource] = useState('')
   const [isDark, setIsDark]       = useState(false)
+  
+  // Estado para modal de detalle de trades
+  const [selectedBotDetail, setSelectedBotDetail] = useState(null)
+  const [showTradeModal, setShowTradeModal] = useState(false)
 
   useEffect(() => {
     const check = () => setIsDark(document.documentElement.classList.contains('dark'))
@@ -662,7 +688,7 @@ export default function AnalyticsPage() {
     botsService.list().then(res => setBots(res.data || [])).catch(() => setBots([]))
   }, [])
 
-  const load = useCallback(async (selectedRange, botId) => {
+  const load = useCallback(async (selectedRange, botId, source) => {
     setLoading(true)
     setError(null)
     try {
@@ -671,9 +697,10 @@ export default function AnalyticsPage() {
       if (from) params.from_date = from
       if (to) params.to_date = to
       if (botId) params.bot_id = botId
+      if (source) params.source = source
 
       const [summaryRes, pnlRes, heatmapRes, hourlyRes] = await Promise.all([
-        analyticsService.summary(),
+        analyticsService.summary(params),
         analyticsService.pnlChart(params),
         analyticsService.activityHeatmap(params),
         analyticsService.hourlyDistribution(params),
@@ -692,8 +719,8 @@ export default function AnalyticsPage() {
   }, [])
 
   useEffect(() => {
-    load(range, selectedBot)
-  }, [range, selectedBot, load])
+    load(range, selectedBot, selectedSource)
+  }, [range, selectedBot, selectedSource, load])
 
   const exportToCSV = useCallback(() => {
     if (!dailyPnl?.length) return
@@ -758,13 +785,27 @@ export default function AnalyticsPage() {
         <h1 className="text-xl font-bold text-slate-900 dark:text-white">Analytics</h1>
         
         <div className="flex flex-wrap items-center gap-2">
+          {/* Selector de fuente */}
+          <div className="relative">
+            <select
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value)}
+              className="px-3 py-1.5 text-xs bg-slate-100 dark:bg-gray-800 border-none rounded-lg text-slate-700 dark:text-gray-200 focus:ring-2 focus:ring-blue-500 cursor-pointer"
+            >
+              {SOURCE_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
+
           {/* Selector de bot */}
           <div className="relative">
             <Filter size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
             <select
               value={selectedBot}
               onChange={(e) => setSelectedBot(e.target.value)}
-              className="pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-gray-800 border-none rounded-lg text-slate-700 dark:text-gray-200 focus:ring-2 focus:ring-blue-500"
+              disabled={selectedSource === 'manual'}
+              className="pl-8 pr-3 py-1.5 text-xs bg-slate-100 dark:bg-gray-800 border-none rounded-lg text-slate-700 dark:text-gray-200 focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <option value="">Todos los bots</option>
               {bots.map(bot => (
@@ -960,6 +1001,15 @@ export default function AnalyticsPage() {
                     <span className={`text-sm font-bold font-mono ${parseFloat(bot.total_pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                       {signed(bot.total_pnl)} USDT
                     </span>
+                    <button
+                      onClick={() => {
+                        setSelectedBotDetail(bot)
+                        setShowTradeModal(true)
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-blue-400 rounded" 
+                      title="Ver trades">
+                      <Eye size={14} />
+                    </button>
                     <Link to={`/bots/${bot.bot_id}/optimizer`}
                       className="p-1.5 text-slate-400 hover:text-blue-400 rounded" title="Optimizador">
                       <Sparkles size={14} />
@@ -1012,6 +1062,21 @@ export default function AnalyticsPage() {
           </div>
         )}
       </div>
+      
+      {/* Modal de detalle de trades */}
+      {showTradeModal && (
+        <TradeDetailModal
+          botId={selectedBotDetail?.bot_id}
+          botName={selectedBotDetail?.bot_name}
+          fromDate={rangeFromDays(range.days).from}
+          toDate={rangeFromDays(range.days).to}
+          source={selectedSource}
+          onClose={() => {
+            setShowTradeModal(false)
+            setSelectedBotDetail(null)
+          }}
+        />
+      )}
     </div>
   )
 }

@@ -1,10 +1,9 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { createChart, LineStyle } from 'lightweight-charts'
 import api from '@/services/api'
+import { getDateRange, toISODate } from '@/utils/dateRanges'
 
 // ── Helpers de fecha ──────────────────────────────────────────
-
-function toISO(d) { return d.toISOString().slice(0, 10) }
 
 function getPreset(key) {
   const today = new Date()
@@ -15,27 +14,21 @@ function getPreset(key) {
 
   switch (key) {
     case 'today':
-      return { from: toISO(today), to: toISO(today) }
-    case '7d': {
-      const from = new Date(today); from.setDate(d - 6)
-      return { from: toISO(from), to: toISO(today) }
-    }
+      return { from: toISODate(today), to: toISODate(today) }
+    case '7d':
+      return getDateRange(7)
     case 'week': {
       const mon = new Date(today); mon.setDate(d - ((dow + 6) % 7))
-      return { from: toISO(mon), to: toISO(today) }
+      return { from: toISODate(mon), to: toISODate(today) }
     }
-    case '30d': {
-      const from = new Date(today); from.setDate(d - 29)
-      return { from: toISO(from), to: toISO(today) }
-    }
+    case '30d':
+      return getDateRange(30)
     case 'month':
-      return { from: toISO(new Date(y, m, 1)), to: toISO(today) }
-    case '3m': {
-      const from = new Date(today); from.setDate(d - 89)
-      return { from: toISO(from), to: toISO(today) }
-    }
+      return { from: toISODate(new Date(y, m, 1)), to: toISODate(today) }
+    case '3m':
+      return getDateRange(90)
     case 'year':
-      return { from: toISO(new Date(y, 0, 1)), to: toISO(today) }
+      return { from: toISODate(new Date(y, 0, 1)), to: toISODate(today) }
     default:
       return { from: null, to: null }
   }

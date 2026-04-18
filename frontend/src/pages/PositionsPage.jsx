@@ -24,12 +24,21 @@ function formatPrice(price, decimals = null) {
   return num.toFixed(decimals)
 }
 
-function PnlCell({ value }) {
+function PnlCell({ value, roi }) {
   const n = parseFloat(value || 0)
+  const r = parseFloat(roi ?? 0)
+  const color = n >= 0 ? 'text-green-400' : 'text-red-400'
   return (
-    <span className={`font-mono text-sm ${n >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-      {n >= 0 ? '+' : ''}{n.toFixed(2)}
-    </span>
+    <div className="flex flex-col leading-tight">
+      <span className={`font-mono text-sm font-semibold ${color}`}>
+        {n >= 0 ? '+' : ''}{n.toFixed(2)} USDT
+      </span>
+      {roi != null && (
+        <span className={`font-mono text-xs ${color}`}>
+          {r >= 0 ? '+' : ''}{r.toFixed(2)}% ROI
+        </span>
+      )}
+    </div>
   )
 }
 
@@ -372,11 +381,18 @@ function ExternalPositionsSection({ onAdopted }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  <span className={`text-sm font-mono font-semibold ${
-                    p.unrealized_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
-                  }`}>
-                    {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)}
-                  </span>
+                  <div className="text-right">
+                    <span className={`text-sm font-mono font-semibold ${
+                      p.unrealized_pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                    }`}>
+                      {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl.toFixed(2)}
+                    </span>
+                    {p.roi != null && (
+                      <p className={`text-xs font-mono ${p.roi >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                        {p.roi >= 0 ? '+' : ''}{parseFloat(p.roi).toFixed(2)}% ROI
+                      </p>
+                    )}
+                  </div>
                   <button
                     onClick={() => setAdoptTarget(p)}
                     className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg font-medium transition-colors"
@@ -662,7 +678,7 @@ export default function PositionsPage() {
               const entry = parseFloat(pos.entry_price)
               const priceDiffPercent = price ? ((price - entry) / entry) * 100 : 0
               const isPriceProfitable = pos.side === 'long' ? priceDiffPercent >= 0 : priceDiffPercent <= 0
-              
+
               // Key única (las posiciones manuales no tienen id)
               const key = pos.id || `${pos.symbol}-${pos.source}-${idx}`
 
@@ -685,7 +701,7 @@ export default function PositionsPage() {
                           <BarChart3 size={14} />
                         </button>
                       )}
-                      <PnlCell value={pnlVal} />
+                      <PnlCell value={pnlVal} roi={pos.roi} />
                     </div>
                   </div>
                   
@@ -792,7 +808,7 @@ export default function PositionsPage() {
                   const change24h = pos.change_24h || priceChanges[pos.symbol] || 0
                   const pnlVal = parseFloat(pos.unrealized_pnl || 0)
                   const key = pos.id || `${pos.symbol}-${pos.source}-${idx}`
-                  
+
                   const isPendingLimit = pos.status === 'pending_limit'
                   return (
                     <tr key={key} className={`border-b border-slate-200 dark:border-gray-800/50 hover:bg-slate-100 dark:hover:bg-gray-800/30 cursor-pointer ${isPendingLimit ? 'opacity-80' : ''}`} onClick={() => handleOpenPosition(pos)}>
@@ -833,7 +849,7 @@ export default function PositionsPage() {
                         {parseFloat(pos.quantity).toFixed(4)}
                       </td>
                       <td className="py-3 pr-4">
-                        <PnlCell value={pnlVal} />
+                        <PnlCell value={pnlVal} roi={pos.roi} />
                       </td>
                       <td className="py-3">
                         <div className="flex items-center gap-2">
@@ -926,10 +942,15 @@ export default function PositionsPage() {
                   <p className="font-mono text-slate-900 dark:text-white">{parseFloat(selectedPosition.quantity).toFixed(4)}</p>
                 </div>
                 <div>
-                  <p className="text-slate-500 dark:text-gray-500">PnL</p>
-                  <p className={`font-mono ${selectedPosition.unrealized_pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                  <p className="text-slate-500 dark:text-gray-500">PnL / ROI</p>
+                  <p className={`font-mono font-semibold ${selectedPosition.unrealized_pnl >= 0 ? 'text-green-500' : 'text-red-500'}`}>
                     {selectedPosition.unrealized_pnl >= 0 ? '+' : ''}{parseFloat(selectedPosition.unrealized_pnl).toFixed(2)} USDT
                   </p>
+                  {selectedPosition.roi != null && (
+                    <p className={`font-mono text-xs ${selectedPosition.roi >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+                      {selectedPosition.roi >= 0 ? '+' : ''}{parseFloat(selectedPosition.roi).toFixed(2)}% ROI
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-slate-500 dark:text-gray-500">Precio Actual</p>

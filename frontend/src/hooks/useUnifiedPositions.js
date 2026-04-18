@@ -22,30 +22,35 @@ export function useUnifiedPositions() {
 
   useEffect(() => { refresh() }, [refresh])
 
-  // Enriquecer posiciones con precios actuales y calcular PnL en tiempo real
+  // Enriquecer posiciones con precios actuales y calcular PnL + ROI en tiempo real
   const enrichedPositions = positions.map(pos => {
     const price = prices[pos.symbol]
     const change24h = priceChanges[pos.symbol] || 0
-    
-    // Calcular PnL unrealizado basado en precio actual (para posiciones que no lo tienen)
-    let unrealizedPnl = pos.unrealized_pnl
-    if (price && pos.source !== 'paper') {
-      const entry = parseFloat(pos.entry_price)
-      const qty = parseFloat(pos.quantity)
-      const currentPnl = pos.side === 'long' 
+    const entry = parseFloat(pos.entry_price)
+    const qty   = parseFloat(pos.quantity)
+    const lev   = parseFloat(pos.leverage || 1)
+
+    // PnL: si hay precio live siempre recalcular (más fresco que el valor en DB)
+    // Nota: BingX usa mark price internamente; aquí usamos last price → diferencia ~0.01–0.1%
+    let unrealizedPnl = parseFloat(pos.unrealized_pnl || 0)
+    if (price && pos.source !== 'paper' && entry > 0 && qty > 0) {
+      unrealizedPnl = pos.side === 'long'
         ? (price - entry) * qty
         : (entry - price) * qty
-      // Usar el calculado si el de la API es 0 o no existe
-      if (!unrealizedPnl || unrealizedPnl === 0) {
-        unrealizedPnl = currentPnl
-      }
     }
-    
+
+    // ROI % = PnL / margen inicial * 100
+    // Margen inicial = (entry * qty) / leverage
+    const margin = entry > 0 && qty > 0 ? (entry * qty) / lev : 0
+    const roi = margin > 0 ? (unrealizedPnl / margin) * 100 : 0
+
     return {
       ...pos,
       current_price: price,
       change_24h: change24h,
       unrealized_pnl: unrealizedPnl,
+      roi,       // % sobre margen (incluye efecto apalancamiento)
+      margin,    // margen inicial en USDT
     }
   })
 

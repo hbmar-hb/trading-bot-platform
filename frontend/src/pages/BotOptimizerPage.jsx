@@ -35,7 +35,7 @@ function volatilityLabel(pctMove) {
 
 // ─── Subcomponentes ────────────────────────────────────────────
 
-function StatCard({ label, value, sub, color = 'default' }) {
+function StatCard({ label, value, sub, color = 'default', tooltip = null }) {
   const colors = {
     default: 'text-slate-900 dark:text-gray-100',
     green:   'text-green-500',
@@ -45,10 +45,21 @@ function StatCard({ label, value, sub, color = 'default' }) {
     orange:  'text-orange-400',
   }
   return (
-    <div className="bg-slate-50 dark:bg-gray-800/60 rounded-xl p-4 space-y-1">
-      <p className="text-xs text-slate-500 dark:text-gray-400">{label}</p>
+    <div className="group relative bg-slate-50 dark:bg-gray-800/60 rounded-xl p-4 space-y-1 cursor-help">
+      <div className="flex items-center gap-1">
+        <p className="text-xs text-slate-500 dark:text-gray-400">{label}</p>
+        {tooltip && (
+          <Info size={12} className="text-slate-400 dark:text-gray-500 opacity-50 group-hover:opacity-100 transition-opacity" />
+        )}
+      </div>
       <p className={`text-xl font-bold ${colors[color]}`}>{value}</p>
       {sub && <p className="text-xs text-slate-400 dark:text-gray-500">{sub}</p>}
+      {tooltip && (
+        <div className="absolute z-10 invisible group-hover:visible bg-slate-800 dark:bg-gray-900 text-white text-xs p-2 rounded shadow-lg max-w-[200px] -top-2 left-1/2 -translate-x-1/2 -translate-y-full">
+          {tooltip}
+          <div className="absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent border-t-slate-800 dark:border-t-gray-900"></div>
+        </div>
+      )}
     </div>
   )
 }
@@ -264,7 +275,10 @@ export default function BotOptimizerPage() {
   const load = () => {
     setLoading(true)
     optimizerService.get(botId)
-      .then(r => setData(r.data))
+      .then(r => {
+        console.log('Optimizer response:', r.data)
+        setData(r.data)
+      })
       .catch(() => setError('No se pudo cargar el análisis'))
       .finally(() => setLoading(false))
   }
@@ -275,13 +289,12 @@ export default function BotOptimizerPage() {
   if (error)   return <p className="text-red-400">{error}</p>
   if (!data)   return null
 
-  const { analysis: a = {}, current: c = {}, suggestions: s = {} } = data
+  const { analysis: a = {}, current: c = {}, suggestions: s = {}, cooldown = {} } = data
 
   const applyParam = async (key, value) => {
     setApplying(key)
     try {
-      const { data: bot } = await botsService.get(botId)
-      await botsService.update(botId, _buildPayload(bot, { [key]: value }))
+      await optimizerService.apply(botId, { [key]: value })
       load()
     } catch (e) {
       alert(e.response?.data?.detail || 'Error al aplicar')
@@ -294,7 +307,6 @@ export default function BotOptimizerPage() {
     if (!window.confirm('¿Aplicar todas las sugerencias al bot?')) return
     setApplyAllLoading(true)
     try {
-      const { data: bot } = await botsService.get(botId)
       const overrides = {}
       if (s.initial_sl_percentage)       overrides.initial_sl_percentage       = s.initial_sl_percentage.value
       if (s.take_profits)                overrides.take_profits                = s.take_profits.value
@@ -303,7 +315,7 @@ export default function BotOptimizerPage() {
       if (s.trailing_config)             overrides.trailing_config             = s.trailing_config.value
       if (s.breakeven_config)            overrides.breakeven_config            = s.breakeven_config.value
       if (s.dynamic_sl_config)           overrides.dynamic_sl_config           = s.dynamic_sl_config.value
-      await botsService.update(botId, _buildPayload(bot, overrides))
+      await optimizerService.apply(botId, overrides)
       load()
     } catch (e) {
       alert(e.response?.data?.detail || 'Error al aplicar')
@@ -320,7 +332,7 @@ export default function BotOptimizerPage() {
 
       {/* Header */}
       <div className="flex items-center gap-3">
-        <button onClick={() => navigate('/bots')} className="btn-ghost p-2">
+        <button onClick={() => window.history.back()} className="btn-ghost p-2" title="Volver">
           <ArrowLeft size={16} />
         </button>
         <div>
@@ -338,8 +350,24 @@ export default function BotOptimizerPage() {
           <AlertTriangle size={16} className="text-yellow-400 mt-0.5 shrink-0" />
           <p className="text-sm text-yellow-300">
             Solo {a.total_closed} trade{a.total_closed !== 1 ? 's' : ''} cerrado{a.total_closed !== 1 ? 's' : ''}.
-            Las sugerencias son orientativas — se necesitan al menos 5 trades para mayor fiabilidad.
+            Las sugerencias son orientativas — se necesitan al menos 3 trades para mayor fiabilidad.
           </p>
+        </div>
+      )}
+
+      {/* Debug - muestra raw data para troubleshooting */}
+      {data && (
+        <div className="text-xs font-mono text-slate-600 dark:text-slate-400 p-3 bg-slate-100 dark:bg-gray-800/80 rounded border border-slate-200 dark:border-gray-700">
+          <div className="font-semibold mb-1">Debug Data:</div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+            <div>Posiciones: <span className="font-bold">{data.debug?.positions_count ?? 'N/A'}</span></div>
+            <div>Trades (exchange): <span className="font-bold">{data.debug?.trades_count ?? 'N/A'}</span></div>
+            <div>Trade views: <span className="font-bold">{data.debug?.trade_views_count ?? 'N/A'}</span></div>
+            <div>Mínimo requerido: <span className="font-bold">{data.debug?.min_required ?? 'N/A'}</span></div>
+            <div>Símbolo bot: <span className="font-bold">{data.symbol || 'N/A'}</span></div>
+            <div>Símbolo buscado: <span className="font-bold">{data.debug?.symbol_searched || 'N/A'}</span></div>
+            <div>Data source: <span className="font-bold">{data.debug?.data_source || 'N/A'}</span></div>
+          </div>
         </div>
       )}
 
@@ -360,51 +388,105 @@ export default function BotOptimizerPage() {
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard label="Win rate" value={pct(a.win_rate)}
                 sub={`${a.winning}W / ${a.losing}L`}
-                color={a.win_rate >= 0.55 ? 'green' : a.win_rate >= 0.45 ? 'yellow' : 'red'} />
+                color={a.win_rate >= 0.55 ? 'green' : a.win_rate >= 0.45 ? 'yellow' : 'red'}
+                tooltip="Porcentaje de trades ganadores. >55% es bueno, <45% necesita ajustes." />
               <StatCard label="Profit factor" value={a.profit_factor != null ? fmt(a.profit_factor) : '—'}
                 sub="ganancia / pérdida"
-                color={a.profit_factor >= 1.5 ? 'green' : a.profit_factor >= 1 ? 'yellow' : 'red'} />
+                color={a.profit_factor >= 1.5 ? 'green' : a.profit_factor >= 1 ? 'yellow' : 'red'}
+                tooltip="Ganancia total dividida entre pérdida total. >1.5 es rentable, >2 es muy bueno, >3 es excelente." />
               <StatCard label="Ratio R:R real" value={a.real_rr != null ? `${fmt(a.real_rr)}x` : '—'}
                 sub="ganancia% / pérdida%"
-                color={a.real_rr >= 1.5 ? 'green' : a.real_rr >= 1 ? 'yellow' : 'red'} />
+                color={a.real_rr >= 1.5 ? 'green' : a.real_rr >= 1 ? 'yellow' : 'red'}
+                tooltip="Ratio riesgo:beneficio real basado en movimientos de precio. >1.5 significa ganar 1.5 veces lo que arriesgas." />
               <StatCard label="Volatilidad activo"
                 value={vol ? vol.label : '—'}
                 sub={`${fmt(a.avg_price_move_pct)}% movimiento medio`}
-                color={vol ? (vol.color.includes('red') ? 'red' : vol.color.includes('orange') ? 'orange' : vol.color.includes('yellow') ? 'yellow' : 'green') : 'default'} />
+                color={vol ? (vol.color.includes('red') ? 'red' : vol.color.includes('orange') ? 'orange' : vol.color.includes('yellow') ? 'yellow' : 'green') : 'default'}
+                tooltip="Movimiento medio del precio entre entrada y salida. Indica qué tan volátil es el par." />
             </div>
 
             {/* Fila 2: P&L */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard label="Media ganador" value={signed(a.avg_win_pnl)}
-                sub={`${fmt(a.avg_win_pct)}% movimiento`} color="green" />
+                sub={`${fmt(a.avg_win_pct)}% movimiento`} color="green"
+                tooltip="Ganancia promedio en cada trade ganador." />
               <StatCard label="Media perdedor" value={signed(a.avg_loss_pnl)}
-                sub={`${fmt(a.avg_loss_pct)}% movimiento`} color="red" />
+                sub={`${fmt(a.avg_loss_pct)}% movimiento`} color="red"
+                tooltip="Pérdida promedio en cada trade perdedor." />
               <StatCard label="Dur. ganadores" value={`${fmt(a.avg_winner_hours, 1)}h`}
-                sub="tiempo medio en win" color="green" />
+                sub="tiempo medio en win" color="green"
+                tooltip="Tiempo promedio que dura un trade ganador antes de cerrarse." />
               <StatCard label="Dur. perdedores" value={`${fmt(a.avg_loser_hours, 1)}h`}
-                sub="tiempo medio en loss" color="red" />
+                sub="tiempo medio en loss" color="red"
+                tooltip="Tiempo promedio que dura un trade perdedor antes de cerrarse." />
             </div>
 
             {/* Fila 3: SL + TP + señales */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
               <StatCard label="SL hit rate" value={`${pct(a.sl_hit_rate, 0)}`}
                 sub={`${a.sl_hit_count} de ${a.losing} pérdidas`}
-                color={a.sl_hit_rate > 0.5 ? 'red' : a.sl_hit_rate > 0.3 ? 'yellow' : 'default'} />
+                color={a.sl_hit_rate > 0.5 ? 'red' : a.sl_hit_rate > 0.3 ? 'yellow' : 'default'}
+                tooltip="Porcentaje de pérdidas que fueron por Stop Loss. >50% indica SL muy ajustado." />
               <StatCard label="SL medio config." value={`${fmt(a.avg_sl_pct)}%`}
-                sub="dist. entrada→SL" />
+                sub="dist. entrada→SL"
+                tooltip="Distancia media entre el precio de entrada y el Stop Loss configurado." />
               <StatCard label="TP1 alcanzado" value={a.tp1_reach_rate != null ? pct(a.tp1_reach_rate) : '—'}
                 sub={a.avg_tp1_target != null ? `TP1 objetivo: ${fmt(a.avg_tp1_target)}%` : 'sin TPs configurados'}
-                color={a.tp1_reach_rate >= 0.6 ? 'green' : a.tp1_reach_rate >= 0.35 ? 'yellow' : 'red'} />
+                color={a.tp1_reach_rate >= 0.6 ? 'green' : a.tp1_reach_rate >= 0.35 ? 'yellow' : 'red'}
+                tooltip="Porcentaje de ganadores que alcanzaron el primer Take Profit. >60% es excelente." />
               {a.signals_total > 0 && (
                 <StatCard label="Señales filtradas" value={`${a.signals_cancelled}/${a.signals_total}`}
                   sub={pct(a.signals_cancel_rate)}
-                  color={a.signals_cancel_rate > 0.2 ? 'yellow' : 'default'} />
+                  color={a.signals_cancel_rate > 0.2 ? 'yellow' : 'default'}
+                  tooltip="Señales que fueron ignoradas por filtros anti-falsos (confirmación de tendencia)." />
               )}
             </div>
           </div>
 
+          {/* ── Cooldown Banner ── */}
+          {cooldown.active && (
+            <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-amber-500 mt-0.5 shrink-0" />
+                <div>
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-400">
+                    Optimización en espera
+                  </p>
+                  <p className="text-xs text-amber-700 dark:text-amber-500 mt-1">
+                    Se aplicaron cambios recientemente. Espera {cooldown.trades_needed - cooldown.trades_since_apply} trades más 
+                    para ver nuevas sugerencias (actual: {cooldown.trades_since_apply}/{cooldown.trades_needed}).
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ── Sugerencias Aplicadas (en gris) ── */}
+          {cooldown.applied_params && Object.keys(cooldown.applied_params).length > 0 && (
+            <div className="space-y-3 opacity-60">
+              <h2 className="text-xs font-semibold text-slate-400 dark:text-gray-500 uppercase tracking-wide">
+                Parámetros aplicados
+              </h2>
+              <div className="bg-slate-100 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-700 rounded-xl p-3">
+                <div className="text-xs text-slate-500 dark:text-gray-400">
+                  {Object.entries(cooldown.applied_params).map(([key, value]) => (
+                    <div key={key} className="flex justify-between py-1">
+                      <span>{key.replace(/_/g, ' ')}:</span>
+                      <span className="font-mono">
+                        {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-slate-400 dark:text-gray-500 mt-2 pt-2 border-t border-slate-200 dark:border-gray-700">
+                  Aplicado el {cooldown.last_applied_at ? new Date(cooldown.last_applied_at).toLocaleDateString() : '—'}
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* ── Sugerencias ── */}
-          {hasSuggestions && (
+          {hasSuggestions && !cooldown.active && (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h2 className="text-xs font-semibold text-slate-500 dark:text-gray-400 uppercase tracking-wide">

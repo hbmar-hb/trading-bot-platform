@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Eye, EyeOff, Loader2, Plus, Trash2 } from 'lucide-react'
 import { botsService } from '@/services/bots'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { paperTradingService } from '@/services/paperTrading'
@@ -10,7 +10,12 @@ import LoadingSpinner from '@/components/Common/LoadingSpinner'
 function WebhookUrlDisplay({ botId, secret }) {
   const [copied, setCopied] = useState(null)
   const [showSecret, setShowSecret] = useState(false)
-  const url = `${window.location.origin}/webhook/${botId}`
+  const [customHost, setCustomHost] = useState('')
+
+  const origin = window.location.origin
+  const isLocal = origin.includes('localhost') || origin.includes('127.0.0.1') || origin.includes('192.168.')
+  const effectiveOrigin = customHost.trim() || origin
+  const url = `${effectiveOrigin}/webhook/${botId}`
 
   const copy = (text, key) => {
     navigator.clipboard.writeText(text)
@@ -22,10 +27,39 @@ function WebhookUrlDisplay({ botId, secret }) {
     <div className="card space-y-3 mt-6">
       <h3 className="font-semibold text-sm text-slate-700 dark:text-gray-300">Webhook TradingView</h3>
 
+      {/* Aviso si es localhost */}
+      {isLocal && (
+        <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
+          <AlertTriangle size={15} className="text-amber-400 shrink-0 mt-0.5" />
+          <div className="text-xs text-amber-700 dark:text-amber-300 space-y-1">
+            <p className="font-medium">Estás en localhost — TradingView no puede alcanzar esta URL.</p>
+            <p>Usa un dominio público (ngrok, VPS, etc.) e introdúcelo abajo para generar la URL correcta.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Campo para dominio público */}
+      {isLocal && (
+        <div>
+          <p className="text-xs text-slate-500 dark:text-gray-400 mb-1">Dominio público (ngrok / VPS)</p>
+          <input
+            type="text"
+            placeholder="https://abc123.ngrok-free.app"
+            value={customHost}
+            onChange={e => setCustomHost(e.target.value.replace(/\/$/, ''))}
+            className="w-full bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-3 py-2"
+          />
+        </div>
+      )}
+
       <div>
-        <p className="text-xs text-slate-500 dark:text-gray-400 mb-1">URL</p>
+        <p className="text-xs text-slate-500 dark:text-gray-400 mb-1">URL del Webhook</p>
         <div className="flex items-center gap-2">
-          <code className="flex-1 bg-slate-100 dark:bg-gray-900 border border-slate-300 dark:border-gray-700 rounded px-3 py-2 text-xs font-mono text-blue-600 dark:text-blue-300 truncate">
+          <code className={`flex-1 border rounded px-3 py-2 text-xs font-mono truncate ${
+            isLocal && !customHost
+              ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-300 dark:border-amber-700 text-amber-700 dark:text-amber-300'
+              : 'bg-slate-100 dark:bg-gray-900 border-slate-300 dark:border-gray-700 text-blue-600 dark:text-blue-300'
+          }`}>
             {url}
           </code>
           <button onClick={() => copy(url, 'url')} className="btn-ghost p-2">

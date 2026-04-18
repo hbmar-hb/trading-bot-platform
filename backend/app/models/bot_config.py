@@ -2,7 +2,8 @@ import uuid
 import secrets
 from decimal import Decimal
 from typing import Literal
-from sqlalchemy import Boolean, ForeignKey, Integer, Numeric, String
+from datetime import datetime
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -78,6 +79,19 @@ class BotConfig(TimestampMixin, Base):
     status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="paused"
     )   # active | paused | disabled
+
+    # ─── Optimizer tracking ──────────────────────────────────
+    # Guarda cuándo y con cuántos trades se aplicaron las últimas sugerencias
+    optimizer_applied_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    optimizer_trades_at_apply: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0
+    )
+    # Qué parámetros se aplicaron (para mostrar en gris)
+    optimizer_applied_params: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, default=dict
+    )
 
     # ─── Relaciones ──────────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="bots")

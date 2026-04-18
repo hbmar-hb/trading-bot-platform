@@ -571,7 +571,7 @@ function PartialClosePanel({ position, onUpdate }) {
     setLoading(true)
     setError(null)
     try {
-      await positionsService.partialClose(position.id, { percent })
+      await positionsService.partialClose(position.id, percent)
       onUpdate?.()
       alert('Cierre parcial ejecutado correctamente')
     } catch (e) {
