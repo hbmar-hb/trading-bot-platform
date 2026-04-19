@@ -8,6 +8,8 @@ import BotsListPage        from '@/pages/BotsListPage'
 import BotEditPage         from '@/pages/BotEditPage'
 import BotActivityPage     from '@/pages/BotActivityPage'
 import BotOptimizerPage   from '@/pages/BotOptimizerPage'
+import EffectivenessDashboardPage from '@/pages/EffectivenessDashboardPage'
+import OptimizerDBPage from '@/pages/OptimizerDBPage'
 import PositionsPage       from '@/pages/PositionsPage'
 import AnalyticsPage       from '@/pages/AnalyticsPage'
 import ChartPage           from '@/pages/ChartPage'
@@ -38,6 +40,8 @@ export default function AppRoutes() {
         <Route path="/bots/:botId/edit"             element={guard(BotEditPage)} />
         <Route path="/bots/:botId/activity"         element={guard(BotActivityPage)} />
         <Route path="/bots/:botId/optimizer"        element={guard(BotOptimizerPage)} />
+        <Route path="/bots/:botId/effectiveness"   element={guard(EffectivenessDashboardPage)} />
+        <Route path="/optimizer-db"                 element={guard(OptimizerDBPage)} />
         <Route path="/positions"                    element={guard(PositionsPage)} />
         <Route path="/analytics"                    element={guard(AnalyticsPage)} />
         <Route path="/chart"                        element={guard(ChartPage)} />

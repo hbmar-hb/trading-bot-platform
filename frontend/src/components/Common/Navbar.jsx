@@ -1,12 +1,14 @@
+import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   BarChart3, Bot, CandlestickChart, FileText, Gauge, History, KeyRound,
-  LogOut, Menu, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users,
+  LogOut, Menu, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users, Zap,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
 import useUiStore from '@/store/uiStore'
 import useBalanceStore from '@/store/balanceStore'
+import { optimizerService } from '@/services/optimizer'
 
 const links = [
   { to: '/dashboard',          icon: Gauge,        label: 'Dashboard'  },
@@ -26,6 +28,22 @@ export default function Navbar() {
   const { sidebarOpen, toggleSidebar, isDark, toggleTheme } = useUiStore()
   const { logout, user }    = useAuth()
   const totalEquity         = useBalanceStore(s => s.getTotalEquity())
+  const [alertCount, setAlertCount] = useState(0)
+
+  useEffect(() => {
+    const loadAlerts = async () => {
+      try {
+        const res = await optimizerService.getGlobalDB()
+        setAlertCount(res.data.alerts?.length || 0)
+      } catch (e) {
+        // Silenciar error
+      }
+    }
+    loadAlerts()
+    // Actualizar cada 60 segundos
+    const interval = setInterval(loadAlerts, 60000)
+    return () => clearInterval(interval)
+  }, [])
 
   return (
     <aside className={cn(
@@ -74,6 +92,27 @@ export default function Navbar() {
             {sidebarOpen && <span>{label}</span>}
           </NavLink>
         ))}
+        
+        {/* Optimizer DB con badge de alertas */}
+        <NavLink
+          to="/optimizer-db"
+          className={({ isActive }) => cn(
+            'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+            isActive
+              ? 'bg-purple-600/15 text-purple-600 dark:text-purple-400'
+              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800'
+          )}
+        >
+          <div className="relative">
+            <Zap size={18} className="shrink-0" />
+            {alertCount > 0 && (
+              <span className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-red-500 text-white text-[10px] font-bold rounded-full flex items-center justify-center">
+                {alertCount}
+              </span>
+            )}
+          </div>
+          {sidebarOpen && <span>Optimizer DB</span>}
+        </NavLink>
       </nav>
 
       {/* Footer */}

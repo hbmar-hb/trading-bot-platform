@@ -93,6 +93,35 @@ class BotConfig(TimestampMixin, Base):
         JSONB, nullable=True, default=dict
     )
 
+    # ─── Auto-Optimización ───────────────────────────────────
+    # Toggle de auto-optimización
+    auto_optimize_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # Configuración personalizable del algoritmo
+    auto_optimize_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, 
+        default=lambda: {
+            "confidence_threshold": 5,       # Trades mínimos para confianza media
+            "high_confidence_threshold": 20, # Trades para confianza alta
+            "max_sl_change_pct": 30,         # Máximo cambio SL (%)
+            "max_leverage_change": 2,        # Máximo cambio apalancamiento
+            "max_tp_change_pct": 20,         # Máximo cambio TP (%)
+            "reeval_after_trades": 5,        # Re-evaluar cada N trades nuevos
+        }
+    )
+    # Tracking de ejecución
+    auto_optimize_last_eval_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    auto_optimize_trades_at_eval: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=0
+    )
+    # Historial de cambios automáticos
+    auto_optimize_history: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
+
     # ─── Relaciones ──────────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="bots")
     exchange_account: Mapped["ExchangeAccount | None"] = relationship(back_populates="bots")

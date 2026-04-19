@@ -271,6 +271,11 @@ export default function BotOptimizerPage() {
   const [error, setError]       = useState(null)
   const [applying, setApplying] = useState(null)
   const [applyAllLoading, setApplyAllLoading] = useState(false)
+  
+  // Auto-optimization states
+  const [autoStatus, setAutoStatus] = useState(null)
+  const [autoLoading, setAutoLoading] = useState(false)
+  const [effectivenessDashboard, setEffectivenessDashboard] = useState(null)
 
   const load = () => {
     setLoading(true)
@@ -282,8 +287,24 @@ export default function BotOptimizerPage() {
       .catch(() => setError('No se pudo cargar el análisis'))
       .finally(() => setLoading(false))
   }
+  
+  const loadAutoStatus = () => {
+    optimizerService.getAutoStatus(botId)
+      .then(r => setAutoStatus(r.data))
+      .catch(() => {})
+  }
+  
+  const loadEffectivenessDashboard = () => {
+    optimizerService.getEffectivenessDashboard(botId)
+      .then(r => setEffectivenessDashboard(r.data))
+      .catch(() => {})
+  }
 
-  useEffect(() => { load() }, [botId])
+  useEffect(() => { 
+    load() 
+    loadAutoStatus()
+    loadEffectivenessDashboard()
+  }, [botId])
 
   if (loading) return <div className="flex justify-center py-20"><LoadingSpinner /></div>
   if (error)   return <p className="text-red-400">{error}</p>
@@ -323,6 +344,32 @@ export default function BotOptimizerPage() {
       setApplyAllLoading(false)
     }
   }
+  
+  // Auto-optimization handlers
+  const toggleAutoOptimize = async () => {
+    if (!autoStatus) return
+    try {
+      const newEnabled = !autoStatus.enabled
+      await optimizerService.toggleAuto(botId, newEnabled)
+      loadAutoStatus()
+    } catch (e) {
+      alert('Error al cambiar auto-optimización')
+    }
+  }
+  
+  const runAutoOptimize = async () => {
+    setAutoLoading(true)
+    try {
+      const result = await optimizerService.runAuto(botId)
+      alert(result.data.message)
+      loadAutoStatus()
+      load() // Recargar datos del optimizer
+    } catch (e) {
+      alert(e.response?.data?.detail || 'Error al ejecutar auto-optimización')
+    } finally {
+      setAutoLoading(false)
+    }
+  }
 
   const vol = a.avg_price_move_pct != null ? volatilityLabel(a.avg_price_move_pct) : null
   const hasSuggestions = Object.keys(s).length > 0
@@ -342,6 +389,14 @@ export default function BotOptimizerPage() {
           </div>
           <p className="text-sm text-slate-500 dark:text-gray-400">{data.bot_name} · {data.symbol} · {data.timeframe}</p>
         </div>
+        
+        {/* Botón al Dashboard de Efectividad */}
+        <button
+          onClick={() => navigate(`/bots/${botId}/effectiveness`)}
+          className="flex items-center gap-2 text-sm px-3 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-gray-800 dark:hover:bg-gray-700 rounded-lg transition-colors"
+        >
+          📊 Ver Dashboard
+        </button>
       </div>
 
       {/* Aviso datos insuficientes */}
@@ -458,6 +513,211 @@ export default function BotOptimizerPage() {
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* ── Auto-Optimización ── */}
+          {autoStatus && (
+            <div className="bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/10 dark:to-indigo-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
+              {/* Header con Toggle */}
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={18} className="text-blue-500" />
+                  <div>
+                    <h3 className="text-sm font-medium text-slate-800 dark:text-gray-200">
+                      Auto-Optimización
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-gray-400">
+                      Ajustes inteligentes cada {autoStatus.config?.reeval_after_trades || 5} trades
+                    </p>
+                  </div>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={autoStatus.enabled}
+                    onChange={toggleAutoOptimize}
+                    className="sr-only peer"
+                  />
+                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 dark:peer-focus:ring-blue-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all dark:after:border-gray-600 peer-checked:bg-blue-600"></div>
+                </label>
+              </div>
+              
+              {autoStatus.enabled && (
+                <div className="space-y-4">
+                  {/* Estado */}
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="text-slate-500">Confianza:</span>
+                    <span className={`font-medium ${
+                      autoStatus.confidence?.color === 'green' ? 'text-green-500' :
+                      autoStatus.confidence?.color === 'yellow' ? 'text-yellow-500' :
+                      autoStatus.confidence?.color === 'red' ? 'text-red-400' :
+                      'text-slate-500'
+                    }`}>
+                      {autoStatus.confidence?.label || 'Sin datos'}
+                    </span>
+                    <span className="text-slate-400">•</span>
+                    <span className="text-slate-500">
+                      {autoStatus.trade_count} trades
+                    </span>
+                  </div>
+                  
+                  {/* Progress bar de trades para próxima evaluación */}
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-slate-500">Próxima evaluación</span>
+                      <span className="text-slate-600 dark:text-gray-400">
+                        {autoStatus.trades_since_eval} / {autoStatus.config?.reeval_after_trades || 5} trades
+                      </span>
+                    </div>
+                    <div className="w-full bg-slate-200 dark:bg-gray-700 rounded-full h-2">
+                      <div 
+                        className="bg-blue-500 h-2 rounded-full transition-all"
+                        style={{ 
+                          width: `${Math.min(100, (autoStatus.trades_since_eval / (autoStatus.config?.reeval_after_trades || 5)) * 100)}%` 
+                        }}
+                      ></div>
+                    </div>
+                  </div>
+                  
+                  {/* Botón ejecutar */}
+                  <button
+                    onClick={runAutoOptimize}
+                    disabled={autoLoading || !autoStatus.can_run}
+                    className="w-full flex items-center justify-center gap-2 text-sm px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-gray-700 text-white disabled:text-slate-500 rounded-lg transition-colors"
+                  >
+                    {autoLoading ? (
+                      <><Loader2 size={16} className="animate-spin" /> Analizando...</>
+                    ) : autoStatus.can_run ? (
+                      <><Sparkles size={16} /> Ejecutar optimización ahora</>
+                    ) : (
+                      <><span className="text-lg">⏳</span> Esperando más trades...</>
+                    )}
+                  </button>
+                  
+                  {/* Historial reciente */}
+                  {autoStatus.history && autoStatus.history.length > 0 && (
+                    <div className="pt-3 border-t border-blue-200 dark:border-blue-800/50">
+                      <h4 className="text-xs font-medium text-slate-500 mb-2">
+                        Últimos cambios automáticos
+                      </h4>
+                      <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                        {autoStatus.history.slice(-3).reverse().map((entry, i) => (
+                          <div key={i} className="text-xs bg-white/50 dark:bg-gray-800/30 rounded p-2">
+                            <div className="flex justify-between text-slate-500 mb-1">
+                              <span>{new Date(entry.timestamp).toLocaleDateString()}</span>
+                              <span className="text-blue-500">{entry.confidence}</span>
+                            </div>
+                            <div className="font-mono text-slate-600 dark:text-gray-400">
+                              {Object.entries(entry.changes).map(([k, v]) => (
+                                <span key={k} className="mr-2">
+                                  {k.replace(/_/g, ' ')}: {typeof v === 'object' ? JSON.stringify(v) : v}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {!autoStatus.enabled && (
+                <p className="text-xs text-slate-500 dark:text-gray-400 mt-2">
+                  Activa para permitir que el bot se auto-ajuste gradualmente basándose en su rendimiento.
+                  Los cambios son conservadores y respetan múltiples niveles de seguridad.
+                </p>
+              )}
+            </div>
+          )}
+          
+          {/* ── Dashboard de Efectividad ── */}
+          {effectivenessDashboard?.summary && (
+            <div className="bg-slate-50 dark:bg-gray-800/60 rounded-xl p-4">
+              <h3 className="text-sm font-medium mb-3 flex items-center gap-2">
+                📊 Dashboard de Efectividad
+                {effectivenessDashboard.weighted_stats?.trend === 'improving' && (
+                  <span className="text-green-500 text-xs">↗ Mejorando</span>
+                )}
+                {effectivenessDashboard.weighted_stats?.trend === 'declining' && (
+                  <span className="text-red-400 text-xs">↘ Empeorando</span>
+                )}
+              </h3>
+              
+              {/* Resumen */}
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                <div className="bg-white dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Efectividad Ponderada</p>
+                  <p className={`text-xl font-bold ${
+                    effectivenessDashboard.summary.weighted_effectiveness > 0 ? 'text-green-500' : 
+                    effectivenessDashboard.summary.weighted_effectiveness < 0 ? 'text-red-400' : 'text-slate-400'
+                  }`}>
+                    {effectivenessDashboard.summary.weighted_effectiveness > 0 ? '+' : ''}
+                    {effectivenessDashboard.summary.weighted_effectiveness}
+                  </p>
+                </div>
+                <div className="bg-white dark:bg-gray-700/50 rounded-lg p-3 text-center">
+                  <p className="text-xs text-slate-500">Cambios Auto</p>
+                  <p className="text-xl font-bold text-blue-500">
+                    {effectivenessDashboard.summary.total_auto_changes}
+                  </p>
+                </div>
+              </div>
+              
+              {/* Mejor parámetro */}
+              {effectivenessDashboard.summary.most_effective_param && (
+                <div className="mb-4 p-3 bg-green-50 dark:bg-green-900/20 rounded-lg">
+                  <p className="text-xs text-green-700 dark:text-green-400">
+                    🏆 Parámetro más efectivo: {' '}
+                    <span className="font-medium">
+                      {effectivenessDashboard.summary.most_effective_param.replace(/_/g, ' ')}
+                    </span>
+                  </p>
+                </div>
+              )}
+              
+              {/* Efectividad por parámetro */}
+              {Object.keys(effectivenessDashboard.changes_by_parameter || {}).length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs font-medium text-slate-500">Efectividad por parámetro:</p>
+                  {Object.entries(effectivenessDashboard.changes_by_parameter).map(([param, data]) => (
+                    <div key={param} className="flex items-center justify-between text-sm">
+                      <span className="text-slate-600 dark:text-gray-400">
+                        {param.replace(/_/g, ' ')} ({data.count}x)
+                      </span>
+                      <span className={`font-mono ${
+                        data.avg_effectiveness > 0 ? 'text-green-500' : 
+                        data.avg_effectiveness < 0 ? 'text-red-400' : 'text-slate-400'
+                      }`}>
+                        {data.avg_effectiveness > 0 ? '+' : ''}{data.avg_effectiveness}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              
+              {/* Timeline resumido */}
+              {effectivenessDashboard.timeline?.length > 0 && (
+                <div className="mt-4 pt-3 border-t border-slate-200 dark:border-gray-700">
+                  <p className="text-xs font-medium text-slate-500 mb-2">Últimos cambios:</p>
+                  <div className="space-y-1 max-h-24 overflow-y-auto">
+                    {effectivenessDashboard.timeline.slice(-5).reverse().map((entry, i) => (
+                      <div key={i} className="flex justify-between text-xs">
+                        <span className="text-slate-500">
+                          {new Date(entry.timestamp).toLocaleDateString()}
+                        </span>
+                        <span className={`font-mono ${
+                          entry.effectiveness > 0 ? 'text-green-500' : 
+                          entry.effectiveness < 0 ? 'text-red-400' : 'text-slate-400'
+                        }`}>
+                          {entry.effectiveness > 0 ? '+' : ''}{entry.effectiveness || '?'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

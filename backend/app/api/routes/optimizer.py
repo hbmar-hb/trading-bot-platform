@@ -12,7 +12,7 @@ Analiza el histórico de posiciones cerradas y señales de un bot y propone:
 """
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -685,7 +685,6 @@ async def apply_optimizer_suggestions(
             setattr(bot, key, value)
     
     # Registrar estado del optimizer para cooldown
-    from datetime import timezone
     bot.optimizer_applied_at = datetime.now(timezone.utc)
     bot.optimizer_trades_at_apply = current_trade_count
     bot.optimizer_applied_params = applied_params
@@ -699,4 +698,1181 @@ async def apply_optimizer_suggestions(
         "applied_params": applied_params,
         "trades_at_apply": current_trade_count,
         "cooldown_until": current_trade_count + 3,
+    }
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# AUTO-OPTIMIZACIÓN INTELIGENTE
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ─── Niveles de confianza por cantidad de trades ───────────────────────────
+
+CONFIDENCE_LEVELS = {
+    50: {"name": "muy_alta", "factor": 1.00, "label": "Confianza total", "color": "green"},
+    20: {"name": "alta",     "factor": 0.90, "label": "Confiado",       "color": "green"},
+    10: {"name": "media",    "factor": 0.70, "label": "Moderado",       "color": "yellow"},
+    5:  {"name": "baja",     "factor": 0.50, "label": "Conservador",    "color": "orange"},
+    3:  {"name": "muy_baja", "factor": 0.20, "label": "Muy conservador", "color": "red"},
+}
+
+# ─── Límites Absolutos de Seguridad ───────────────────────────────────────
+# Nunca permitir valores fuera de estos rangos
+SAFETY_LIMITS = {
+    "initial_sl_percentage": {"min": 0.3, "max": 8.0},  # SL entre 0.3% y 8%
+    "leverage": {"min": 1, "max": 25},                  # Leverage 1x-25x
+    "signal_confirmation_minutes": {"min": 0, "max": 10}, # 0-10 minutos
+    "take_profits": {"min_tp": 0.5, "max_tp": 50.0},    # TP entre 0.5% y 50%
+}
+
+# ─── Zona de Confort ─────────────────────────────────────────────────────
+# Si todos los indicadores están en estos rangos, no hacer cambios
+COMFORT_ZONE = {
+    "win_rate": (0.55, 0.75),        # 55-75% win rate
+    "profit_factor": (1.5, 3.0),     # PF entre 1.5 y 3
+    "sl_hit_rate": (0.30, 0.50),     # SL hit entre 30-50%
+    "real_rr": (1.2, 2.0),           # R:R entre 1.2 y 2.0
+}
+
+# ─── Umbrales Adaptativos por Volatilidad del Activo ─────────────────────
+# Símbolos volátiles (memes, altcoins pequeñas) tienen umbrales más permisivos
+VOLATILITY_PROFILES = {
+    # Perfil: Extremo (nuevas memecoins, muy volátiles)
+    "extreme": {
+        "symbols": ["FLOKI", "BONK", "WIF", "PEPE2", "BABYDOGE", "ELON", "SAMO", "DOBO"],
+        "thresholds": {
+            "win_rate_green": 0.45,      # 45% (muy tolerante)
+            "win_rate_yellow": 0.35,
+            "sl_hit_green": 0.70,        # Muy tolerante con SL hits
+            "sl_hit_yellow": 0.85,
+            "pf_green": 1.2,             # PF muy permisivo
+            "pf_yellow": 0.8,
+        }
+    },
+    # Perfil: Volátil (memes, low-cap alts)
+    "volatile": {
+        "symbols": ["PEPE", "SHIB", "DOGE", "MOG", "1000PEPE", "1000SHIB", "1000FLOKI"],
+        "thresholds": {
+            "win_rate_green": 0.50,      # 50% (más bajo por volatilidad)
+            "win_rate_yellow": 0.40,
+            "sl_hit_green": 0.60,        # Más tolerante con SL hits
+            "sl_hit_yellow": 0.75,
+            "pf_green": 1.3,             # PF más permisivo
+            "pf_yellow": 0.9,
+        }
+    },
+    # Perfil: Moderado (alts medianas)
+    "moderate": {
+        "symbols": ["SOL", "AVAX", "MATIC", "LINK", "UNI", "AAVE", "LDO", "CRV"],
+        "thresholds": {
+            "win_rate_green": 0.52,
+            "win_rate_yellow": 0.42,
+            "sl_hit_green": 0.55,
+            "sl_hit_yellow": 0.70,
+            "pf_green": 1.4,
+            "pf_yellow": 0.95,
+        }
+    },
+    # Perfil: Estable (BTC, ETH, stable pairs)
+    "stable": {
+        "symbols": ["BTC", "ETH", "BNB", "XRP", "ADA"],
+        "thresholds": {
+            "win_rate_green": 0.55,
+            "win_rate_yellow": 0.45,
+            "sl_hit_green": 0.50,
+            "sl_hit_yellow": 0.70,
+            "pf_green": 1.5,
+            "pf_yellow": 1.0,
+        }
+    }
+}
+
+def _get_volatility_profile(symbol: str) -> dict:
+    """Retorna el perfil de volatilidad para un símbolo dado."""
+    symbol_upper = symbol.upper().replace("USDT", "").replace("/", "").replace(":", "")
+    
+    for profile_name, profile in VOLATILITY_PROFILES.items():
+        if any(sym in symbol_upper for sym in profile["symbols"]):
+            return profile["thresholds"]
+    
+    # Default: perfil moderado
+    return VOLATILITY_PROFILES["moderate"]["thresholds"]
+
+
+def _is_in_comfort_zone(analysis: dict) -> tuple[bool, dict]:
+    """
+    Verifica si todos los indicadores están en zona de confort.
+    Retorna (en_zona_confort, detalle_por_indicador)
+    """
+    indicators = {}
+    all_in_comfort = True
+    
+    for key, (min_val, max_val) in COMFORT_ZONE.items():
+        value = analysis.get(key, 0) or 0
+        in_comfort = min_val <= value <= max_val
+        indicators[key] = {
+            "value": value,
+            "min": min_val,
+            "max": max_val,
+            "in_comfort": in_comfort
+        }
+        if not in_comfort:
+            all_in_comfort = False
+    
+    return all_in_comfort, indicators
+
+
+def _calculate_health_score(analysis: dict) -> dict:
+    """
+    Calcula el score de salud del bot (0-100).
+    Retorna score y nivel de salud.
+    """
+    score = 0
+    details = {}
+    
+    # Win Rate (0-25 puntos)
+    wr = analysis.get("win_rate", 0)
+    if wr >= 0.55:
+        score += 25
+        details["win_rate"] = {"score": 25, "max": 25, "status": "excellent"}
+    elif wr >= 0.45:
+        score += 15
+        details["win_rate"] = {"score": 15, "max": 25, "status": "good"}
+    elif wr >= 0.35:
+        score += 5
+        details["win_rate"] = {"score": 5, "max": 25, "status": "poor"}
+    else:
+        details["win_rate"] = {"score": 0, "max": 25, "status": "critical"}
+    
+    # Profit Factor (0-30 puntos)
+    pf = analysis.get("profit_factor") or 0
+    if pf >= 1.5:
+        score += 30
+        details["profit_factor"] = {"score": 30, "max": 30, "status": "excellent"}
+    elif pf >= 1.0:
+        score += 15
+        details["profit_factor"] = {"score": 15, "max": 30, "status": "good"}
+    elif pf >= 0.8:
+        score += 5
+        details["profit_factor"] = {"score": 5, "max": 30, "status": "poor"}
+    else:
+        details["profit_factor"] = {"score": 0, "max": 30, "status": "critical"}
+    
+    # SL Hit Rate (0-25 puntos) - Menos es mejor
+    sl_hit = analysis.get("sl_hit_rate", 0)
+    if sl_hit <= 0.50:
+        score += 25
+        details["sl_hit_rate"] = {"score": 25, "max": 25, "status": "excellent"}
+    elif sl_hit <= 0.65:
+        score += 15
+        details["sl_hit_rate"] = {"score": 15, "max": 25, "status": "good"}
+    elif sl_hit <= 0.80:
+        score += 5
+        details["sl_hit_rate"] = {"score": 5, "max": 25, "status": "poor"}
+    else:
+        details["sl_hit_rate"] = {"score": 0, "max": 25, "status": "critical"}
+    
+    # Ratio R:R (0-20 puntos)
+    rr = analysis.get("real_rr") or 0
+    if rr >= 1.5:
+        score += 20
+        details["real_rr"] = {"score": 20, "max": 20, "status": "excellent"}
+    elif rr >= 1.2:
+        score += 10
+        details["real_rr"] = {"score": 10, "max": 20, "status": "good"}
+    elif rr >= 1.0:
+        score += 5
+        details["real_rr"] = {"score": 5, "max": 20, "status": "poor"}
+    else:
+        details["real_rr"] = {"score": 0, "max": 20, "status": "critical"}
+    
+    # Determinar nivel de salud
+    if score >= 80:
+        level = "excellent"
+        message = "Bot en excelente estado - Mantener configuración actual"
+        action = "none"  # No hacer cambios
+    elif score >= 60:
+        level = "good"
+        message = "Bot funcionando bien - Micro-ajustes si es necesario"
+        action = "micro"
+    elif score >= 40:
+        level = "fair"
+        message = "Rendimiento aceptable - Ajustes moderados recomendados"
+        action = "moderate"
+    else:
+        level = "critical"
+        message = "Rendimiento deficiente - Modo crisis activado"
+        action = "crisis"  # Cambios más agresivos permitidos
+    
+    return {
+        "score": score,
+        "max_score": 100,
+        "level": level,
+        "message": message,
+        "recommended_action": action,
+        "details": details,
+    }
+
+
+def _apply_time_decay(effectiveness: float, days_ago: float, decay_rate: float = 0.95) -> float:
+    """
+    Aplica decaimiento temporal a la efectividad.
+    Fórmula: efectividad × (decay_rate ^ días)
+    """
+    if days_ago <= 0:
+        return effectiveness
+    return effectiveness * (decay_rate ** days_ago)
+
+
+def _calculate_weighted_effectiveness(history: list) -> dict:
+    """
+    Calcula efectividad ponderada por confianza y decaimiento temporal.
+    """
+    if not history:
+        return {"weighted_avg": 0, "trend": "neutral", "total_changes": 0}
+    
+    now = datetime.now(timezone.utc)
+    weighted_sum = 0
+    weight_sum = 0
+    recent_scores = []
+    
+    for entry in history:
+        if entry.get("effectiveness") is None:
+            continue
+        
+        # Peso base por confianza
+        confidence_factor = {
+            "muy_alta": 1.0, "alta": 0.9, "media": 0.7,
+            "baja": 0.5, "muy_baja": 0.2
+        }.get(entry.get("confidence", ""), 0.5)
+        
+        # Aplicar decaimiento temporal
+        timestamp = entry.get("timestamp", "")
+        if timestamp:
+            try:
+                entry_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                days_ago = (now - entry_date).days
+                effectiveness = _apply_time_decay(entry["effectiveness"], days_ago)
+            except:
+                effectiveness = entry["effectiveness"]
+        else:
+            effectiveness = entry["effectiveness"]
+        
+        # Ponderar
+        weighted_sum += effectiveness * confidence_factor
+        weight_sum += confidence_factor
+        
+        # Guardar scores recientes para tendencia
+        if len(recent_scores) < 5:
+            recent_scores.append(effectiveness)
+    
+    if weight_sum == 0:
+        return {"weighted_avg": 0, "trend": "neutral", "total_changes": 0}
+    
+    weighted_avg = weighted_sum / weight_sum
+    
+    # Calcular tendencia
+    trend = "neutral"
+    if len(recent_scores) >= 3:
+        first_half = sum(recent_scores[:len(recent_scores)//2]) / (len(recent_scores)//2)
+        second_half = sum(recent_scores[len(recent_scores)//2:]) / (len(recent_scores) - len(recent_scores)//2)
+        
+        if second_half > first_half + 5:
+            trend = "improving"
+        elif second_half < first_half - 5:
+            trend = "declining"
+    
+    return {
+        "weighted_avg": round(weighted_avg, 2),
+        "trend": trend,
+        "total_changes": len([e for e in history if e.get("effectiveness") is not None]),
+        "recent_scores": recent_scores,
+    }
+
+def _get_confidence_level(trade_count: int) -> dict:
+    """Retorna nivel de confianza basado en cantidad de trades."""
+    for threshold, level in sorted(CONFIDENCE_LEVELS.items(), reverse=True):
+        if trade_count >= threshold:
+            return level
+    return {"name": "insuficiente", "factor": 0.0, "label": "Sin confianza", "color": "gray"}
+
+
+# ─── Evaluación de indicadores ─────────────────────────────────────────────
+
+def _evaluate_indicators(analysis: dict, symbol: str = "") -> dict:
+    """
+    Evalúa 4 indicadores clave y determina nivel de acción.
+    Usa umbrales adaptativos según la volatilidad del activo.
+    Retorna: {"level": 1|2|3, "name": str, "message": str, "indicators": dict}
+    """
+    # Obtener umbrales adaptativos según el símbolo
+    thresholds = _get_volatility_profile(symbol)
+    
+    indicators = {}
+    
+    # Win Rate: usar umbrales adaptativos
+    wr = analysis.get("win_rate", 0)
+    wr_green = thresholds.get("win_rate_green", 0.55)
+    wr_yellow = thresholds.get("win_rate_yellow", 0.45)
+    
+    if wr >= wr_green:
+        indicators["win_rate"] = {"value": wr, "zone": "green", "score": 0}
+    elif wr >= wr_yellow:
+        indicators["win_rate"] = {"value": wr, "zone": "yellow", "score": 1}
+    else:
+        indicators["win_rate"] = {"value": wr, "zone": "red", "score": 2}
+    
+    # Profit Factor: usar umbrales adaptativos
+    pf = analysis.get("profit_factor") or 0
+    pf_green = thresholds.get("pf_green", 1.5)
+    pf_yellow = thresholds.get("pf_yellow", 1.0)
+    
+    if pf >= pf_green:
+        indicators["profit_factor"] = {"value": pf, "zone": "green", "score": 0}
+    elif pf >= pf_yellow:
+        indicators["profit_factor"] = {"value": pf, "zone": "yellow", "score": 1}
+    else:
+        indicators["profit_factor"] = {"value": pf, "zone": "red", "score": 2}
+    
+    # SL Hit Rate: usar umbrales adaptativos (invertido: menos es mejor)
+    sl_hit = analysis.get("sl_hit_rate", 0)
+    sl_green = thresholds.get("sl_hit_green", 0.50)  # <= 50% es verde
+    sl_yellow = thresholds.get("sl_hit_yellow", 0.70)  # <= 70% es amarillo
+    
+    if sl_hit <= sl_green:
+        indicators["sl_hit_rate"] = {"value": sl_hit, "zone": "green", "score": 0}
+    elif sl_hit <= sl_yellow:
+        indicators["sl_hit_rate"] = {"value": sl_hit, "zone": "yellow", "score": 1}
+    else:
+        indicators["sl_hit_rate"] = {"value": sl_hit, "zone": "red", "score": 2}
+    
+    # Ratio R:R: estándar (no varía mucho por volatilidad)
+    rr = analysis.get("real_rr") or 0
+    if rr >= 1.5:
+        indicators["real_rr"] = {"value": rr, "zone": "green", "score": 0}
+    elif rr >= 1.0:
+        indicators["real_rr"] = {"value": rr, "zone": "yellow", "score": 1}
+    else:
+        indicators["real_rr"] = {"value": rr, "zone": "red", "score": 2}
+    
+    # Calcular nivel de acción
+    total_score = sum(i["score"] for i in indicators.values())
+    
+    if total_score >= 4:  # 2+ rojos o equivalente
+        return {
+            "level": 3,
+            "name": "conservador",
+            "message": "Problemas graves detectados - Ajustes significativos necesarios",
+            "indicators": indicators
+        }
+    elif total_score >= 1:  # 1 rojo o 2+ amarillos
+        return {
+            "level": 2,
+            "name": "moderado",
+            "message": "Ajustes recomendados - Algunos indicadores en zona de alerta",
+            "indicators": indicators
+        }
+    else:  # Todo verde
+        return {
+            "level": 1,
+            "name": "micro",
+            "message": "Rendimiento óptimo - Solo micro-ajustes",
+            "indicators": indicators
+        }
+
+
+# ─── Cálculo de cambios seguros ────────────────────────────────────────────
+
+def _calculate_safe_change(
+    current: float,
+    suggested: float,
+    max_change_pct: float,
+    confidence_factor: float,
+    min_change: float = 0.01,
+    absolute_limits: dict | None = None
+) -> float | None:
+    """
+    Calcula un cambio seguro respetando límites de confianza y límites absolutos.
+    Retorna None si el cambio es menor al mínimo significativo.
+    """
+    if current == 0:
+        result = suggested if suggested != 0 else None
+    else:
+        # Cambio bruto sugerido
+        raw_change = suggested - current
+        
+        # Máximo cambio permitido por configuración
+        max_change = abs(current) * (max_change_pct / 100)
+        
+        # Aplicar factor de confianza
+        allowed_change = max_change * confidence_factor
+        
+        # Si el cambio sugerido es mayor al permitido, limitarlo
+        if abs(raw_change) > allowed_change:
+            sign = 1 if raw_change > 0 else -1
+            result = round(current + (sign * allowed_change), 4)
+        else:
+            result = round(suggested, 4)
+        
+        # Si el cambio es menor al mínimo significativo, ignorarlo
+        if abs(raw_change) < min_change:
+            return None
+    
+    # Aplicar límites absolutos de seguridad si existen
+    if absolute_limits and result is not None:
+        min_val = absolute_limits.get("min")
+        max_val = absolute_limits.get("max")
+        
+        if min_val is not None:
+            result = max(min_val, result)
+        if max_val is not None:
+            result = min(max_val, result)
+    
+    return result
+
+
+# ─── Endpoints de Auto-Optimización ────────────────────────────────────────
+
+@router.get("/{bot_id}/auto-status")
+async def get_auto_optimize_status(
+    bot_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retorna el estado actual de auto-optimización del bot."""
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    # Contar trades actuales
+    trades_result = await db.execute(
+        select(ExchangeTrade).where(
+            ExchangeTrade.bot_id == bot_id,
+            ExchangeTrade.source == "bot",
+            ExchangeTrade.closed_at.is_not(None),
+        )
+    )
+    trades = trades_result.scalars().all()
+    trade_count = len(trades)
+    
+    # Calcular trades desde última evaluación
+    trades_since_eval = trade_count - (bot.auto_optimize_trades_at_eval or 0)
+    config = bot.auto_optimize_config or {}
+    reeval_after = config.get("reeval_after_trades", 5)
+    
+    confidence = _get_confidence_level(trade_count)
+    
+    return {
+        "enabled": bot.auto_optimize_enabled,
+        "trade_count": trade_count,
+        "trades_since_eval": trades_since_eval,
+        "trades_needed": max(0, reeval_after - trades_since_eval),
+        "can_run": trades_since_eval >= reeval_after and trade_count >= 3,
+        "confidence": confidence,
+        "last_eval_at": bot.auto_optimize_last_eval_at.isoformat() if bot.auto_optimize_last_eval_at else None,
+        "config": config,
+        "history": bot.auto_optimize_history or [],
+    }
+
+
+@router.post("/{bot_id}/auto-toggle")
+async def toggle_auto_optimize(
+    bot_id: uuid.UUID,
+    payload: dict,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Activa o desactiva la auto-optimización."""
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    enabled = payload.get("enabled", False)
+    bot.auto_optimize_enabled = enabled
+    
+    if enabled:
+        # Inicializar contador de trades al activar
+        trades_result = await db.execute(
+            select(ExchangeTrade).where(
+                ExchangeTrade.bot_id == bot_id,
+                ExchangeTrade.source == "bot",
+                ExchangeTrade.closed_at.is_not(None),
+            )
+        )
+        trades = trades_result.scalars().all()
+        bot.auto_optimize_trades_at_eval = len(trades)
+        bot.auto_optimize_last_eval_at = datetime.now(timezone.utc)
+    
+    await db.commit()
+    
+    return {
+        "enabled": bot.auto_optimize_enabled,
+        "message": f"Auto-optimización {'activada' if enabled else 'desactivada'}"
+    }
+
+
+@router.post("/{bot_id}/auto-config")
+async def update_auto_optimize_config(
+    bot_id: uuid.UUID,
+    payload: dict,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Actualiza la configuración de auto-optimización."""
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    # Merge con configuración existente
+    current_config = bot.auto_optimize_config or {}
+    new_config = {**current_config, **payload}
+    bot.auto_optimize_config = new_config
+    
+    await db.commit()
+    
+    return {"config": new_config}
+
+
+@router.post("/{bot_id}/auto-run")
+async def run_auto_optimize(
+    bot_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Ejecuta el algoritmo de auto-optimización y aplica cambios si corresponde.
+    """
+    # Obtener bot
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    # 1. Verificar si está habilitado
+    if not bot.auto_optimize_enabled:
+        return {"status": "disabled", "message": "Auto-optimización desactivada"}
+    
+    config = bot.auto_optimize_config or {}
+    
+    # 2. Obtener trades del bot
+    trades_result = await db.execute(
+        select(ExchangeTrade).where(
+            ExchangeTrade.bot_id == bot_id,
+            ExchangeTrade.source == "bot",
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl.is_not(None),
+        ).order_by(ExchangeTrade.closed_at)
+    )
+    trades = trades_result.scalars().all()
+    trade_count = len(trades)
+    
+    # 3. Verificar si hay suficientes trades nuevos desde última evaluación
+    trades_since_eval = trade_count - (bot.auto_optimize_trades_at_eval or 0)
+    reeval_after = config.get("reeval_after_trades", 5)
+    
+    if trades_since_eval < reeval_after:
+        return {
+            "status": "waiting",
+            "message": f"Esperando {reeval_after - trades_since_eval} trades más para re-evaluar",
+            "trades_since_eval": trades_since_eval,
+            "trades_needed": reeval_after,
+        }
+    
+    # 4. Obtener análisis y sugerencias
+    sig_result = await db.execute(
+        select(SignalLog).where(
+            SignalLog.bot_id == bot_id,
+            SignalLog.signal_action.in_(["long", "short"]),
+        )
+    )
+    signals = sig_result.scalars().all()
+    
+    # Convertir trades a TradeView para análisis
+    trade_views = [
+        _TradeView(
+            realized_pnl=t.realized_pnl,
+            entry_price=t.entry_price,
+            quantity=t.quantity,
+            side=t.side or "long",
+            opened_at=t.opened_at,
+            closed_at=t.closed_at,
+        )
+        for t in trades
+    ]
+    
+    analysis = _analyze_trades(trade_views, signals)
+    suggestions = _suggest(bot, analysis)
+    
+    # 5. Actualizar efectividad de cambios anteriores en el historial
+    history = bot.auto_optimize_history or []
+    for entry in history:
+        # Si tiene cambios pero no tiene métricas "after", actualizarlas
+        if entry.get("changes") and entry.get("trades_after") is None:
+            entry["trades_after"] = trade_count
+            entry["win_rate_after"] = analysis.get("win_rate")
+            entry["profit_factor_after"] = analysis.get("profit_factor")
+            entry["sl_hit_rate_after"] = analysis.get("sl_hit_rate")
+            entry["real_rr_after"] = analysis.get("real_rr")
+            
+            # Calcular efectividad general (+ positivo, - negativo)
+            effectiveness = 0
+            indicators_before = entry.get("indicators_before", {})
+            
+            # Comparar Win Rate
+            if entry["win_rate_after"] and indicators_before.get("win_rate", {}).get("value"):
+                wr_diff = entry["win_rate_after"] - indicators_before["win_rate"]["value"]
+                effectiveness += wr_diff * 100  # 1% = 1 punto
+            
+            # Comparar Profit Factor
+            if entry["profit_factor_after"] and indicators_before.get("profit_factor", {}).get("value"):
+                pf_before = indicators_before["profit_factor"]["value"]
+                pf_after = entry["profit_factor_after"]
+                if pf_before > 0:
+                    effectiveness += ((pf_after - pf_before) / pf_before) * 50
+            
+            entry["effectiveness"] = round(effectiveness, 2)
+    
+    bot.auto_optimize_history = history
+    
+    # 6. Verificar Zona de Confort
+    in_comfort_zone, comfort_details = _is_in_comfort_zone(analysis)
+    if in_comfort_zone:
+        # Actualizar tracking pero no hacer cambios
+        bot.auto_optimize_last_eval_at = datetime.now(timezone.utc)
+        bot.auto_optimize_trades_at_eval = trade_count
+        await db.commit()
+        
+        return {
+            "status": "comfort_zone",
+            "message": "Todos los indicadores en zona óptima - No se requieren cambios",
+            "comfort_details": comfort_details,
+            "trade_count": trade_count,
+            "next_eval_after": trade_count + reeval_after,
+        }
+    
+    # 6. Evaluar indicadores (con umbrales adaptativos por símbolo)
+    action_eval = _evaluate_indicators(analysis, bot.symbol)
+    
+    # 7. Obtener nivel de confianza
+    confidence = _get_confidence_level(trade_count)
+    
+    if confidence["factor"] == 0:
+        return {
+            "status": "insufficient_data",
+            "message": "Se necesitan al menos 3 trades para auto-optimizar",
+            "min_trades": 3,
+            "current_trades": trade_count,
+        }
+    
+    # 7b. Calcular Score de Salud
+    health = _calculate_health_score(analysis)
+    
+    # Si el bot está en excelente estado (score >= 80), no hacer cambios
+    if health["score"] >= 80:
+        bot.auto_optimize_last_eval_at = datetime.now(timezone.utc)
+        bot.auto_optimize_trades_at_eval = trade_count
+        await db.commit()
+        
+        return {
+            "status": "excellent_health",
+            "message": f"Bot en excelente estado (Salud: {health['score']}/100) - No se requieren cambios",
+            "health_score": health,
+            "trade_count": trade_count,
+            "next_eval_after": trade_count + reeval_after,
+        }
+    
+    # 8. Calcular cambios seguros según nivel de acción y salud (con límites absolutos)
+    # Modo crisis: si salud < 40, permitir cambios más agresivos
+    is_crisis_mode = health["score"] < 40
+    crisis_multiplier = 1.5 if is_crisis_mode else 1.0  # 50% más agresivo en crisis
+    
+    changes = {}
+    
+    # SL inicial (con límites absolutos 0.3% - 8%)
+    if suggestions.get("initial_sl_percentage"):
+        current_sl = float(bot.initial_sl_percentage)
+        suggested_sl = suggestions["initial_sl_percentage"]["value"]
+        max_sl_change = config.get("max_sl_change_pct", 30) * crisis_multiplier
+        
+        new_sl = _calculate_safe_change(
+            current_sl, suggested_sl, max_sl_change, confidence["factor"],
+            absolute_limits=SAFETY_LIMITS["initial_sl_percentage"]
+        )
+        if new_sl is not None:
+            changes["initial_sl_percentage"] = new_sl
+    
+    # Apalancamiento (con límites absolutos 1x - 25x)
+    if suggestions.get("leverage"):
+        current_lev = bot.leverage
+        suggested_lev = suggestions["leverage"]["value"]
+        max_lev_change = config.get("max_leverage_change", 2) * crisis_multiplier
+        
+        # Para apalancamiento usamos cambio absoluto, no porcentual
+        raw_change = suggested_lev - current_lev
+        allowed_change = max_lev_change * confidence["factor"]
+        
+        if abs(raw_change) > allowed_change:
+            sign = 1 if raw_change > 0 else -1
+            new_lev = current_lev + int(sign * allowed_change)
+        elif abs(raw_change) > 0:
+            new_lev = suggested_lev
+        else:
+            new_lev = None
+        
+        # Aplicar límites absolutos
+        if new_lev is not None:
+            limits = SAFETY_LIMITS["leverage"]
+            new_lev = max(limits["min"], min(limits["max"], new_lev))
+            if new_lev != current_lev:
+                changes["leverage"] = new_lev
+    
+    # Take Profits (solo si el nivel de acción es 2 o 3)
+    if action_eval["level"] >= 2 and suggestions.get("take_profits"):
+        # Para TPs, aplicamos el cambio proporcionalmente si todos los niveles cambian similarmente
+        current_tps = bot.take_profits or []
+        suggested_tps = suggestions["take_profits"]["value"]
+        max_tp_change = config.get("max_tp_change_pct", 20)
+        
+        if len(current_tps) == len(suggested_tps) and len(current_tps) > 0:
+            adjusted_tps = []
+            for curr, sugg in zip(current_tps, suggested_tps):
+                new_profit = _calculate_safe_change(
+                    float(curr.get("profit_percent", 0)),
+                    float(sugg.get("profit_percent", 0)),
+                    max_tp_change,
+                    confidence["factor"]
+                )
+                if new_profit is not None:
+                    adjusted_tps.append({
+                        "profit_percent": new_profit,
+                        "close_percent": curr.get("close_percent", 30)
+                    })
+            
+            if adjusted_tps:
+                changes["take_profits"] = adjusted_tps
+    
+    # Signal confirmation (solo micro-ajustes)
+    if action_eval["level"] == 1 and suggestions.get("signal_confirmation_minutes"):
+        current_conf = bot.signal_confirmation_minutes
+        suggested_conf = suggestions["signal_confirmation_minutes"]["value"]
+        
+        # Máximo cambio de 2 minutos, ajustado por confianza
+        max_conf_change = 2 * confidence["factor"]
+        raw_change = suggested_conf - current_conf
+        
+        if abs(raw_change) > max_conf_change:
+            sign = 1 if raw_change > 0 else -1
+            changes["signal_confirmation_minutes"] = current_conf + int(sign * max_conf_change)
+        elif abs(raw_change) > 0:
+            changes["signal_confirmation_minutes"] = suggested_conf
+    
+    # 8. Limitar a máximo 2 cambios por evaluación (prioridad: SL > Leverage > TPs > Conf)
+    if len(changes) > 2:
+        priority = ["initial_sl_percentage", "leverage", "take_profits", "signal_confirmation_minutes"]
+        sorted_changes = sorted(changes.items(), 
+                               key=lambda x: priority.index(x[0]) if x[0] in priority else 99)
+        changes = dict(sorted_changes[:2])
+    
+    # 9. Si no hay cambios significativos, solo actualizar tracking
+    if not changes:
+        bot.auto_optimize_last_eval_at = datetime.now(timezone.utc)
+        bot.auto_optimize_trades_at_eval = trade_count
+        await db.commit()
+        
+        return {
+            "status": "no_changes",
+            "message": "No hay cambios significativos que aplicar en este momento",
+            "action_level": action_eval["name"],
+            "confidence": confidence["name"],
+            "indicators": action_eval["indicators"],
+        }
+    
+    # 10. Pausar bot si está activo, aplicar cambios, y reactivar
+    was_active = bot.status == "active"
+    
+    if was_active:
+        bot.status = "paused"
+        logger.info(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} pausado temporalmente para aplicar cambios")
+    
+    try:
+        for key, value in changes.items():
+            if key == "initial_sl_percentage":
+                bot.initial_sl_percentage = Decimal(str(value))
+            else:
+                setattr(bot, key, value)
+        
+        # Reactivar el bot si estaba activo
+        if was_active:
+            bot.status = "active"
+            logger.info(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} reactivado con nuevos parámetros")
+    except Exception as e:
+        # Si hay error, mantener el bot pausado para revisión manual
+        logger.error(f"[AUTO-OPTIMIZE] Error aplicando cambios a {bot.bot_name}: {e}")
+        if was_active:
+            logger.warning(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} permanece pausado por error")
+    
+    # 11. Actualizar tracking
+    now = datetime.now(timezone.utc)
+    bot.auto_optimize_last_eval_at = now
+    bot.auto_optimize_trades_at_eval = trade_count
+    
+    # También actualizar el tracking general del optimizer (para cooldown visual)
+    bot.optimizer_applied_at = now
+    bot.optimizer_trades_at_apply = trade_count
+    bot.optimizer_applied_params = changes
+    
+    # Agregar al historial con tracking completo para medir efectividad
+    history = bot.auto_optimize_history or []
+    
+    # Guardar valores ANTES de los cambios
+    before_values = {}
+    if "initial_sl_percentage" in changes:
+        before_values["initial_sl_percentage"] = float(bot.initial_sl_percentage)
+    if "leverage" in changes:
+        before_values["leverage"] = bot.leverage
+    if "take_profits" in changes:
+        before_values["take_profits"] = bot.take_profits
+    if "signal_confirmation_minutes" in changes:
+        before_values["signal_confirmation_minutes"] = bot.signal_confirmation_minutes
+    
+    history_entry = {
+        "timestamp": now.isoformat(),
+        "trade_count": trade_count,
+        "changes": changes,
+        "before": before_values,
+        "confidence": confidence["name"],
+        "action_level": action_eval["name"],
+        "indicators_before": {
+            k: {"value": v["value"], "zone": v["zone"]} 
+            for k, v in action_eval["indicators"].items()
+        },
+        # Campos para calcular efectividad después
+        "effectiveness": None,  # Se calculará en próximas evaluaciones
+        "trades_after": None,   # Trades después de aplicar
+        "win_rate_after": None,
+        "profit_factor_after": None,
+    }
+    history.append(history_entry)
+    
+    # Mantener solo últimos 20 registros para análisis de largo plazo
+    bot.auto_optimize_history = history[-20:]
+    
+    await db.commit()
+    
+    logger.info(f"[AUTO-OPTIMIZE] Bot {bot.bot_name}: aplicados {len(changes)} cambios. "
+                f"Confianza: {confidence['name']}, Nivel: {action_eval['name']}")
+    
+    return {
+        "status": "applied",
+        "message": f"Cambios aplicados con {confidence['label']}",
+        "changes": changes,
+        "confidence": confidence,
+        "action_level": action_eval,
+        "trade_count": trade_count,
+        "next_eval_after": trade_count + reeval_after,
+        "indicators": action_eval["indicators"],
+    }
+
+
+
+@router.get("/{bot_id}/effectiveness-dashboard")
+async def get_effectiveness_dashboard(
+    bot_id: uuid.UUID,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retorna el dashboard de efectividad con análisis de qué cambios funcionaron mejor.
+    """
+    bot_result = await db.execute(
+        select(BotConfig).where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id
+        )
+    )
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+    
+    history = bot.auto_optimize_history or []
+    
+    # Si no hay historial, retornar vacío
+    if not history:
+        return {
+            "message": "No hay datos de auto-optimización todavía",
+            "summary": None,
+            "changes_by_parameter": {},
+            "timeline": [],
+        }
+    
+    # Calcular efectividad ponderada
+    weighted_stats = _calculate_weighted_effectiveness(history)
+    
+    # Analizar efectividad por parámetro
+    changes_by_param = {}
+    for entry in history:
+        if entry.get("effectiveness") is None:
+            continue
+        
+        for param, value in entry.get("changes", {}).items():
+            if param not in changes_by_param:
+                changes_by_param[param] = {
+                    "count": 0,
+                    "total_effectiveness": 0,
+                    "values_tried": [],
+                    "best_value": None,
+                    "best_effectiveness": float('-inf'),
+                }
+            
+            # Aplicar decaimiento temporal
+            timestamp = entry.get("timestamp", "")
+            effectiveness = entry["effectiveness"]
+            if timestamp:
+                try:
+                    entry_date = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                    days_ago = (datetime.now(timezone.utc) - entry_date).days
+                    effectiveness = _apply_time_decay(effectiveness, days_ago)
+                except:
+                    pass
+            
+            changes_by_param[param]["count"] += 1
+            changes_by_param[param]["total_effectiveness"] += effectiveness
+            changes_by_param[param]["values_tried"].append({
+                "value": value,
+                "effectiveness": effectiveness,
+                "timestamp": timestamp,
+            })
+            
+            # Guardar el mejor valor
+            if effectiveness > changes_by_param[param]["best_effectiveness"]:
+                changes_by_param[param]["best_effectiveness"] = effectiveness
+                changes_by_param[param]["best_value"] = value
+    
+    # Calcular promedios
+    for param in changes_by_param:
+        count = changes_by_param[param]["count"]
+        if count > 0:
+            changes_by_param[param]["avg_effectiveness"] = round(
+                changes_by_param[param]["total_effectiveness"] / count, 2
+            )
+        del changes_by_param[param]["total_effectiveness"]
+    
+    # Timeline de cambios
+    timeline = []
+    for entry in history[-20:]:  # Últimos 20 cambios
+        if entry.get("changes"):
+            timeline.append({
+                "timestamp": entry.get("timestamp"),
+                "changes": entry.get("changes"),
+                "effectiveness": entry.get("effectiveness"),
+                "confidence": entry.get("confidence"),
+                "action_level": entry.get("action_level"),
+                "trade_count": entry.get("trade_count"),
+            })
+    
+    # Resumen ejecutivo
+    summary = {
+        "total_auto_changes": len([e for e in history if e.get("changes")]),
+        "weighted_effectiveness": weighted_stats["weighted_avg"],
+        "trend": weighted_stats["trend"],
+        "most_effective_param": max(
+            changes_by_param.items(),
+            key=lambda x: x[1].get("avg_effectiveness", float('-inf'))
+        )[0] if changes_by_param else None,
+    }
+    
+    return {
+        "summary": summary,
+        "weighted_stats": weighted_stats,
+        "changes_by_parameter": changes_by_param,
+        "timeline": timeline,
+        "config": bot.auto_optimize_config,
+    }
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OPTIMIZER DB - Centro de Control Global
+# ═══════════════════════════════════════════════════════════════════════════
+
+@router.get("/db/global")
+async def get_optimizer_db_global(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Retorna datos globales de todos los bots para el Optimizer DB.
+    KPIs agregados y listado completo.
+    """
+    # Obtener solo bots REALES - mismo criterio que /bots
+    # Excluir posiciones manuales (prefijo [MANUAL])
+    from sqlalchemy import not_
+    bots_result = await db.execute(
+        select(BotConfig)
+        .where(
+            BotConfig.user_id == user_id,
+            not_(BotConfig.bot_name.like("[MANUAL]%")),
+        )
+        .order_by(BotConfig.created_at.desc())
+    )
+    bots = bots_result.scalars().all()
+    
+    if not bots:
+        return {
+            "kpis": {
+                "total_bots": 0,
+                "auto_enabled": 0,
+                "global_success_rate": 0,
+                "total_improvement": 0,
+                "critical_bots": 0,
+            },
+            "bots": [],
+            "alerts": [],
+        }
+    
+    bots_data = []
+    total_changes = 0
+    positive_changes = 0
+    total_effectiveness = 0
+    critical_bots = 0
+    alerts = []
+    
+    for bot in bots:
+        # Contar trades del bot
+        trades_result = await db.execute(
+            select(ExchangeTrade).where(
+                ExchangeTrade.bot_id == bot.id,
+                ExchangeTrade.source == "bot",
+                ExchangeTrade.closed_at.is_not(None),
+            )
+        )
+        trades = trades_result.scalars().all()
+        trade_count = len(trades)
+        
+        # Análisis básico
+        analysis = None
+        health = None
+        if trade_count >= 3:
+            trade_views = [
+                _TradeView(
+                    realized_pnl=t.realized_pnl,
+                    entry_price=t.entry_price,
+                    quantity=t.quantity,
+                    side=t.side or "long",
+                    opened_at=t.opened_at,
+                    closed_at=t.closed_at,
+                )
+                for t in trades
+            ]
+            
+            sig_result = await db.execute(
+                select(SignalLog).where(
+                    SignalLog.bot_id == bot.id,
+                    SignalLog.signal_action.in_(["long", "short"]),
+                )
+            )
+            signals = sig_result.scalars().all()
+            
+            analysis = _analyze_trades(trade_views, signals)
+            health = _calculate_health_score(analysis)
+        
+        # Datos de auto-optimización
+        history = bot.auto_optimize_history or []
+        auto_changes = [h for h in history if h.get("effectiveness") is not None]
+        
+        bot_effectiveness = sum(h.get("effectiveness", 0) for h in auto_changes)
+        bot_positive = len([h for h in auto_changes if (h.get("effectiveness") or 0) > 0])
+        
+        total_changes += len(auto_changes)
+        positive_changes += bot_positive
+        total_effectiveness += bot_effectiveness
+        
+        # Verificar si está en zona crítica
+        is_critical = health and health["score"] < 40
+        if is_critical:
+            critical_bots += 1
+            alerts.append({
+                "type": "critical_bot",
+                "bot_id": str(bot.id),
+                "bot_name": bot.bot_name,
+                "message": f"{bot.bot_name} tiene salud crítica ({health['score']}/100)",
+            })
+        
+        # Alerta si no hay cambios recientes
+        last_change = history[-1] if history else None
+        if last_change and last_change.get("timestamp"):
+            try:
+                last_date = datetime.fromisoformat(last_change["timestamp"].replace("Z", "+00:00"))
+                days_ago = (datetime.now(timezone.utc) - last_date).days
+                if days_ago > 30 and bot.auto_optimize_enabled:
+                    alerts.append({
+                        "type": "stale_bot",
+                        "bot_id": str(bot.id),
+                        "bot_name": bot.bot_name,
+                        "message": f"{bot.bot_name} sin cambios en {days_ago} días",
+                    })
+            except:
+                pass
+        
+        bots_data.append({
+            "id": str(bot.id),
+            "name": bot.bot_name,
+            "symbol": bot.symbol,
+            "timeframe": bot.timeframe,
+            "status": bot.status,
+            "auto_enabled": bot.auto_optimize_enabled,
+            "trade_count": trade_count,
+            "win_rate": analysis.get("win_rate") if analysis else None,
+            "profit_factor": analysis.get("profit_factor") if analysis else None,
+            "health_score": health["score"] if health else None,
+            "health_level": health["level"] if health else None,
+            "effectiveness": bot_effectiveness,
+            "total_changes": len(auto_changes),
+            "positive_changes": bot_positive,
+            "success_rate": round((bot_positive / len(auto_changes)) * 100, 1) if auto_changes else 0,
+            "last_change": last_change.get("timestamp") if last_change else None,
+            "last_change_summary": last_change.get("changes") if last_change else None,
+            "config": bot.auto_optimize_config,
+        })
+    
+    # Ordenar bots: primero los críticos, luego por salud
+    bots_data.sort(key=lambda b: (b.get("health_score") or 100))
+    
+    # Calcular KPIs globales
+    global_success_rate = round((positive_changes / total_changes) * 100, 1) if total_changes else 0
+    
+    return {
+        "kpis": {
+            "total_bots": len(bots),
+            "auto_enabled": len([b for b in bots if b.auto_optimize_enabled]),
+            "global_success_rate": global_success_rate,
+            "total_improvement": round(total_effectiveness, 2),
+            "critical_bots": critical_bots,
+            "total_changes": total_changes,
+        },
+        "bots": bots_data,
+        "alerts": alerts,
     }
