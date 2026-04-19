@@ -96,13 +96,20 @@ export default function ChartPage() {
       setLoading(true)
       try {
         const [posRes, botsRes, symRes] = await Promise.all([
-          positionsService.getUnified({ include_manual: true }),
+          positionsService.unified(true),
           botsService.list(),
           chartingService.searchSymbols(''),
         ])
-        setPositions(posRes.data || [])
-        setBots(botsRes.data || [])
-        setAvailableSymbols(symRes.data || [])
+        // Asegurar que los datos son arrays
+        const positionsData = Array.isArray(posRes?.data) ? posRes.data : 
+                             Array.isArray(posRes) ? posRes : []
+        const botsData = Array.isArray(botsRes?.data) ? botsRes.data : 
+                        Array.isArray(botsRes) ? botsRes : []
+        const symbolsData = Array.isArray(symRes?.data) ? symRes.data : 
+                           Array.isArray(symRes) ? symRes : []
+        setPositions(positionsData)
+        setBots(botsData)
+        setAvailableSymbols(symbolsData)
         
         // Cargar señales de los últimos 7 días
         if (selectedSymbol) {

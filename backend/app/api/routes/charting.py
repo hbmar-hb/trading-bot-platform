@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_user_id
-from app.exchanges.factory import ExchangeFactory
+from app.exchanges.factory import create_exchange
 from app.services.database import get_db
 from app.models.exchange_account import ExchangeAccount
 
@@ -34,39 +34,52 @@ async def get_chart_history(
     if not account:
         return {"s": "no_data", "errmsg": "No exchange account"}
     
-    # Convertir timeframe
+    # Convertir timeframe (soporta tanto '1h' como '60')
     timeframe_map = {
-        '1': '1m', '5': '5m', '15': '15m', '30': '30m',
-        '60': '1h', '240': '4h', 'D': '1d', 'W': '1w', 'M': '1M'
+        '1': '1m', '1m': '1m',
+        '5': '5m', '5m': '5m',
+        '15': '15m', '15m': '15m',
+        '30': '30m', '30m': '30m',
+        '60': '1h', '1h': '1h',
+        '240': '4h', '4h': '4h',
+        'D': '1d', '1d': '1d',
+        'W': '1w', '1w': '1w',
+        'M': '1M', '1M': '1M'
     }
     timeframe = timeframe_map.get(resolution, '1h')
     
     # Obtener datos del exchange
-    exchange = ExchangeFactory.create(account.exchange, {
-        'api_key': account.api_key,
-        'api_secret': account.api_secret,
-    })
+    exchange = create_exchange(account)
     
     try:
-        klines = await exchange.get_klines(
+        candles = await exchange.get_candles(
             symbol=symbol,
             timeframe=timeframe,
-            limit=1000,
-            since=from_time * 1000
+            limit=1000
         )
         
-        if not klines:
+        if not candles:
             return {"s": "no_data", "errmsg": "No data available"}
+        
+        # Filtrar por rango de tiempo
+        filtered_candles = [
+            c for c in candles 
+            if from_time <= c["time"] <= to_time
+        ]
+        
+        if not filtered_candles:
+            # Si no hay datos en el rango, usar todos los disponibles
+            filtered_candles = candles
         
         # Formato UDF (Universal Data Feed) de TradingView
         return {
             "s": "ok",
-            "t": [int(k[0] / 1000) for k in klines],  # timestamps
-            "o": [float(k[1]) for k in klines],       # open
-            "h": [float(k[2]) for k in klines],       # high
-            "l": [float(k[3]) for k in klines],       # low
-            "c": [float(k[4]) for k in klines],       # close
-            "v": [float(k[5]) for k in klines],       # volume
+            "t": [c["time"] for c in filtered_candles],      # timestamps
+            "o": [c["open"] for c in filtered_candles],      # open
+            "h": [c["high"] for c in filtered_candles],      # high
+            "l": [c["low"] for c in filtered_candles],       # low
+            "c": [c["close"] for c in filtered_candles],     # close
+            "v": [c["volume"] for c in filtered_candles],    # volume
         }
     except Exception as e:
         return {"s": "error", "errmsg": str(e)}
@@ -135,15 +148,12 @@ async def search_symbols(
     if account:
         try:
             # Intentar obtener del exchange
-            exchange_client = ExchangeFactory.create(account.exchange, {
-                'api_key': account.api_key,
-                'api_secret': account.api_secret,
-            })
+            exchange_client = create_exchange(account)
             logger.info(f"Loading markets for {account.exchange}")
-            markets = await exchange_client.load_markets()
-            logger.info(f"Loaded {len(markets)} markets")
-            # Filtrar solo perpetuals de USDT (formato CCXT para BingX es SYMBOL/USDT:USDT)
-            symbols = [s for s in markets.keys() if ':USDT' in s]
+            symbols = await exchange_client.get_markets()
+            logger.info(f"Loaded {len(symbols)} markets")
+            # Filtrar solo perpetuals de USDT
+            symbols = [s for s in symbols if ':USDT' in s]
             symbols.sort()
             logger.info(f"Filtered to {len(symbols)} USDT perpetuals")
         except Exception as e:
