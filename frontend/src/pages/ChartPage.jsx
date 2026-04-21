@@ -55,6 +55,9 @@ function IndicatorBadge({ name, value, color = 'blue' }) {
   )
 }
 
+// Helper to normalize symbol for comparison
+const normalizeSymbol = (s) => s?.replace(':USDT', '').replace(':USDC', '').replace('/USDT', '').replace('/USDC', '').toUpperCase()
+
 export default function ChartPage() {
   const chartContainerRef = useRef(null)
   const chartRef = useRef(null)
@@ -71,6 +74,7 @@ export default function ChartPage() {
   const [symbolSearch, setSymbolSearch] = useState('')
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false)
   const prices = usePositionStore(s => s.prices)
+  const selectedSymbolNorm = useMemo(() => normalizeSymbol(selectedSymbol), [selectedSymbol])
 
   // Cargar símbolos disponibles - Same as BotEditPage
   const loadSymbols = useCallback(async (search = '') => {
@@ -231,10 +235,6 @@ export default function ChartPage() {
     })
 
     candleSeries.setData(candleData)
-    
-    // Helper to normalize symbol for comparison
-    const normalizeSymbol = (s) => s?.replace(':USDT', '').replace(':USDC', '').replace('/USDT', '').replace('/USDC', '').toUpperCase()
-    const selectedSymbolNorm = normalizeSymbol(selectedSymbol)
     
     // Añadir marcadores de señales
     if (showSignals && signals.length > 0) {
