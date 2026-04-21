@@ -1,10 +1,15 @@
 """Chart endpoints - Using same logic as markets-by-exchange"""
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, Query, HTTPException, status
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
 import time
 
 from app.api.dependencies import get_current_user_id
+from app.exchanges.factory import create_exchange
+from app.services.database import get_db
+from app.models.exchange_account import ExchangeAccount
 
 router = APIRouter(prefix="/charting", tags=["charting"])
 
@@ -13,111 +18,184 @@ _symbols_cache = {}
 _SYMBOLS_TTL_SECONDS = 300
 
 
+@router.get("/history")
+async def get_chart_history(
+    symbol: str,
+    resolution: str,  # 1, 5, 15, 60, 240, D, W, M
+    from_time: int,   # Unix timestamp
+    to_time: int,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Datos históricos de velas para el gráfico."""
+    # Obtener cuenta de exchange por defecto
+    result = await db.execute(
+        select(ExchangeAccount)
+        .where(ExchangeAccount.user_id == user_id, ExchangeAccount.is_active == True)
+        .limit(1)
+    )
+    account = result.scalar_one_or_none()
+    
+    if not account:
+        return {"s": "no_data", "errmsg": "No exchange account"}
+    
+    # Convertir timeframe (soporta tanto '1h' como '60')
+    timeframe_map = {
+        '1': '1m', '1m': '1m',
+        '5': '5m', '5m': '5m',
+        '15': '15m', '15m': '15m',
+        '30': '30m', '30m': '30m',
+        '60': '1h', '1h': '1h',
+        '240': '4h', '4h': '4h',
+        'D': '1d', '1d': '1d',
+        'W': '1w', '1w': '1w',
+        'M': '1M', '1M': '1M'
+    }
+    timeframe = timeframe_map.get(resolution, '1h')
+    
+    # Obtener datos del exchange
+    exchange = create_exchange(account)
+    
+    try:
+        candles = await exchange.get_candles(
+            symbol=symbol,
+            timeframe=timeframe,
+            limit=1000
+        )
+        
+        if not candles:
+            return {"s": "no_data", "errmsg": "No data available"}
+        
+        # Filtrar por rango de tiempo
+        filtered_candles = [
+            c for c in candles 
+            if from_time <= c["time"] <= to_time
+        ]
+        
+        if not filtered_candles:
+            # Si no hay datos en el rango, usar todos los disponibles
+            filtered_candles = candles
+        
+        # Formato UDF (Universal Data Feed) de TradingView
+        return {
+            "s": "ok",
+            "t": [c["time"] for c in filtered_candles],      # timestamps
+            "o": [c["open"] for c in filtered_candles],      # open
+            "h": [c["high"] for c in filtered_candles],      # high
+            "l": [c["low"] for c in filtered_candles],       # low
+            "c": [c["close"] for c in filtered_candles],     # close
+            "v": [c["volume"] for c in filtered_candles],    # volume
+        }
+    except Exception as e:
+        return {"s": "error", "errmsg": str(e)}
+
+
+@router.get("/config")
+async def get_chart_config(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+):
+    """Configuración del gráfico para el usuario."""
+    return {
+        "supports_search": True,
+        "supports_group_request": False,
+        "supports_marks": True,
+        "supports_timescale_marks": True,
+        "supports_time": True,
+        "exchanges": [
+            {"value": "BingX", "name": "BingX", "desc": "BingX Futures"},
+        ],
+        "symbols_types": [
+            {"name": "Crypto", "value": "crypto"},
+        ],
+        "supported_resolutions": ["1", "5", "15", "30", "60", "240", "D", "W", "M"],
+    }
+
+
 @router.get("/symbols")
 async def search_symbols(
     query: str = Query(default=""),
     exchange: str = Query(default="bingx"),
     user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
 ):
-    """
-    Get symbols - EXACT same logic as /exchange-accounts/markets-by-exchange/{exchange}
-    Returns list of symbols like ["BTC/USDT:USDT", "ETH/USDT:USDT", ...]
-    """
-    cache_key = exchange.lower()
+    """Búsqueda de símbolos disponibles en el exchange."""
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    # Lista completa de pares populares como fallback
+    POPULAR_SYMBOLS = [
+        "BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "XRP/USDT:USDT", 
+        "DOGE/USDT:USDT", "ADA/USDT:USDT", "AVAX/USDT:USDT", "LINK/USDT:USDT",
+        "DOT/USDT:USDT", "MATIC/USDT:USDT", "LTC/USDT:USDT", "BCH/USDT:USDT",
+        "UNI/USDT:USDT", "ATOM/USDT:USDT", "ETC/USDT:USDT", "XLM/USDT:USDT",
+        "NEAR/USDT:USDT", "FIL/USDT:USDT", "ALGO/USDT:USDT", "VET/USDT:USDT",
+        "ICP/USDT:USDT", "MANA/USDT:USDT", "SAND/USDT:USDT", "AXS/USDT:USDT",
+        "THETA/USDT:USDT", "FTM/USDT:USDT", "GRT/USDT:USDT", "CAKE/USDT:USDT",
+        "1000PEPE/USDT:USDT", "1000SHIB/USDT:USDT", "1000FLOKI/USDT:USDT",
+        "WIF/USDT:USDT", "BONK/USDT:USDT", "FARTCOIN/USDT:USDT", "MOODENG/USDT:USDT",
+        "LUNC/USDT:USDT", "PEOPLE/USDT:USDT", "WLD/USDT:USDT", "ARKM/USDT:USDT",
+        "JUP/USDT:USDT", "PYTH/USDT:USDT", "SEI/USDT:USDT", "SUI/USDT:USDT",
+        "TIA/USDT:USDT", "APT/USDT:USDT", "IMX/USDT:USDT", "OP/USDT:USDT",
+        "ARB/USDT:USDT", "STRK/USDT:USDT", "ENA/USDT:USDT", "HYPE/USDT:USDT",
+        "ICNT/USDT:USDT", "AI16Z/USDT:USDT", "ZRO/USDT:USDT", "JTO/USDT:USDT",
+    ]
+    
+    cache_key = f"{exchange.lower()}:{user_id}"
     now = time.time()
     cached = _symbols_cache.get(cache_key)
-
-    try:
-        if cached and (now - cached["ts"]) < _SYMBOLS_TTL_SECONDS:
-            symbols = cached["data"]
+    
+    symbols = []
+    
+    if cached and (now - cached["ts"]) < _SYMBOLS_TTL_SECONDS:
+        symbols = cached["data"]
+        logger.info(f"Using cached symbols for {exchange} ({len(symbols)} symbols)")
+    else:
+        # Obtener cuenta del usuario
+        result = await db.execute(
+            select(ExchangeAccount)
+            .where(ExchangeAccount.user_id == user_id, ExchangeAccount.is_active == True)
+            .limit(1)
+        )
+        account = result.scalar_one_or_none()
+        
+        if account:
+            try:
+                # Intentar obtener del exchange
+                exchange_client = create_exchange(account)
+                logger.info(f"Loading markets for {account.exchange}")
+                symbols = await exchange_client.get_markets()
+                logger.info(f"Loaded {len(symbols)} markets")
+                # Filtrar solo perpetuals de USDT
+                symbols = [s for s in symbols if ':USDT' in s]
+                symbols.sort()
+                logger.info(f"Filtered to {len(symbols)} USDT perpetuals")
+                _symbols_cache[cache_key] = {"data": symbols, "ts": now}
+            except Exception as e:
+                logger.error(f"Error loading markets: {e}", exc_info=True)
+                # Fallback a lista popular
+                symbols = POPULAR_SYMBOLS
         else:
-            # Same code as working endpoint
-            exchange_class = getattr(ccxt, exchange.lower(), None)
-            if not exchange_class:
-                raise HTTPException(
-                    status.HTTP_400_BAD_REQUEST,
-                    f"Exchange no soportado: {exchange}"
-                )
-
-            ex = exchange_class({'enableRateLimit': True})
-            markets = await ex.load_markets()
-
-            # Filter perpetuals (same logic)
-            perpetuals = [
-                symbol for symbol, market in markets.items()
-                if market.get('swap') and market.get('linear')
-            ]
-
-            await ex.close()
-
-            symbols = sorted(perpetuals)
-            _symbols_cache[cache_key] = {"data": symbols, "ts": now}
-
-        # Filter by query if provided
-        if query:
-            q = query.upper()
-            symbols = [s for s in symbols if q in s.upper()]
-
-        # Return format expected by frontend (sin límite artificial)
-        return [
-            {"symbol": s, "description": s.replace("/USDT:USDT", "").replace("/USDC:USDC", "")}
-            for s in symbols
-        ]
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        # Fallback
-        return [
-            {"symbol": "BTC/USDT:USDT", "description": "BTC"},
-            {"symbol": "ETH/USDT:USDT", "description": "ETH"},
-            {"symbol": "SOL/USDT:USDT", "description": "SOL"},
-            {"symbol": "XRP/USDT:USDT", "description": "XRP"},
-        ]
-
-
-@router.get("/history")
-async def get_history(
-    symbol: str,
-    resolution: str,
-    from_time: int,
-    to_time: int,
-    user_id: uuid.UUID = Depends(get_current_user_id),
-):
-    """Get candle data using CCXT directly."""
-    try:
-        ex = ccxt.bingx({'enableRateLimit': True})
-        
-        # Map resolution to timeframe
-        tf_map = {
-            '1': '1m', '1m': '1m',
-            '5': '5m', '5m': '5m', 
-            '15': '15m', '15m': '15m',
-            '30': '30m', '30m': '30m',
-            '60': '1h', '1h': '1h',
-            '240': '4h', '4h': '4h',
-            'D': '1d', '1d': '1d', '1D': '1d'
+            logger.warning("No exchange account found, using default symbols")
+            # Fallback si no hay cuenta
+            symbols = POPULAR_SYMBOLS[:20]
+    
+    # Si no hay símbolos, usar fallback
+    if not symbols:
+        logger.warning("No symbols loaded, using fallback")
+        symbols = POPULAR_SYMBOLS
+    
+    # Filtrar por query si se proporciona
+    if query:
+        symbols = [s for s in symbols if query.upper() in s.upper()]
+    
+    return [
+        {
+            "symbol": s,
+            "full_name": f"{exchange}:{s}",
+            "description": s.replace("/USDT:USDT", "").replace("/USDT", ""),
+            "exchange": exchange,
+            "type": "crypto",
+            "currency_code": "USDT",
         }
-        timeframe = tf_map.get(resolution, '1h')
-        
-        # Fetch OHLCV
-        since = from_time * 1000  # CCXT uses milliseconds
-        ohlcv = await ex.fetch_ohlcv(symbol, timeframe, since=since, limit=500)
-        await ex.close()
-        
-        if not ohlcv or len(ohlcv) == 0:
-            return {"s": "no_data", "errmsg": "No data available"}
-        
-        # TradingView UDF format
-        return {
-            "s": "ok",
-            "t": [int(x[0]/1000) for x in ohlcv],
-            "o": [x[1] for x in ohlcv],
-            "h": [x[2] for x in ohlcv],
-            "l": [x[3] for x in ohlcv],
-            "c": [x[4] for x in ohlcv],
-            "v": [x[5] for x in ohlcv],
-        }
-        
-    except Exception as e:
-        return {"s": "error", "errmsg": str(e)}
+        for s in symbols  # Sin límite artificial
+    ]

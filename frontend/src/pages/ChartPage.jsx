@@ -112,8 +112,13 @@ export default function ChartPage() {
           positionsService.unified(true),
           botsService.list(),
         ])
-        setPositions(posRes.data || [])
-        setBots(botsRes.data || [])
+        // Asegurar que los datos son arrays
+        const positionsData = Array.isArray(posRes?.data) ? posRes.data : 
+                             Array.isArray(posRes) ? posRes : []
+        const botsData = Array.isArray(botsRes?.data) ? botsRes.data : 
+                        Array.isArray(botsRes) ? botsRes : []
+        setPositions(positionsData)
+        setBots(botsData)
         // Load symbols using the same method as dropdown
         await loadSymbols('')
         
