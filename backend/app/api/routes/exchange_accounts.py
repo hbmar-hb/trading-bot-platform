@@ -150,6 +150,11 @@ async def get_markets(
         await exchange.close()
 
 
+# In-memory cache for markets-by-exchange (TTL 5 min)
+_markets_cache = {}
+_MARKETS_TTL_SECONDS = 300
+
+
 @router.get("/markets-by-exchange/{exchange_name}", response_model=list[str])
 async def get_markets_by_exchange(
     exchange_name: str,
@@ -160,37 +165,46 @@ async def get_markets_by_exchange(
     sin necesidad de tener una cuenta configurada. Útil para paper trading.
     """
     import ccxt.async_support as ccxt
-    
+    import time
+
+    cache_key = exchange_name.lower()
+    now = time.time()
+    cached = _markets_cache.get(cache_key)
+    if cached and (now - cached["ts"]) < _MARKETS_TTL_SECONDS:
+        return cached["data"]
+
     try:
         # Crear instancia del exchange sin credenciales
         exchange_class = getattr(ccxt, exchange_name.lower(), None)
         if not exchange_class:
             raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, 
+                status.HTTP_400_BAD_REQUEST,
                 f"Exchange no soportado: {exchange_name}"
             )
-        
+
         exchange = exchange_class({'enableRateLimit': True})
-        
+
         # Cargar mercados
         markets = await exchange.load_markets()
-        
+
         # Filtrar solo futuros perpetuos (swap)
         perpetuals = [
             symbol for symbol, market in markets.items()
             if market.get('swap') and market.get('linear')  # Futuros perpetuos lineales (USDT margined)
         ]
-        
+
         await exchange.close()
-        
-        # Ordenar y limitar
-        return sorted(perpetuals)[:500]
-        
+
+        # Ordenar (sin límite — devolvemos todos)
+        result = sorted(perpetuals)
+        _markets_cache[cache_key] = {"data": result, "ts": now}
+        return result
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, 
+            status.HTTP_502_BAD_GATEWAY,
             f"Error al obtener mercados de {exchange_name}: {e}"
         )
 

@@ -2,10 +2,15 @@
 import ccxt.async_support as ccxt
 from fastapi import APIRouter, Depends, Query, HTTPException, status
 import uuid
+import time
 
 from app.api.dependencies import get_current_user_id
 
 router = APIRouter(prefix="/charting", tags=["charting"])
+
+# In-memory cache for symbol lists (TTL 5 min)
+_symbols_cache = {}
+_SYMBOLS_TTL_SECONDS = 300
 
 
 @router.get("/symbols")
@@ -18,40 +23,47 @@ async def search_symbols(
     Get symbols - EXACT same logic as /exchange-accounts/markets-by-exchange/{exchange}
     Returns list of symbols like ["BTC/USDT:USDT", "ETH/USDT:USDT", ...]
     """
+    cache_key = exchange.lower()
+    now = time.time()
+    cached = _symbols_cache.get(cache_key)
+
     try:
-        # Same code as working endpoint
-        exchange_class = getattr(ccxt, exchange.lower(), None)
-        if not exchange_class:
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, 
-                f"Exchange no soportado: {exchange}"
-            )
-        
-        ex = exchange_class({'enableRateLimit': True})
-        markets = await ex.load_markets()
-        
-        # Filter perpetuals (same logic)
-        perpetuals = [
-            symbol for symbol, market in markets.items()
-            if market.get('swap') and market.get('linear')
-        ]
-        
-        await ex.close()
-        
-        # Sort
-        symbols = sorted(perpetuals)
-        
+        if cached and (now - cached["ts"]) < _SYMBOLS_TTL_SECONDS:
+            symbols = cached["data"]
+        else:
+            # Same code as working endpoint
+            exchange_class = getattr(ccxt, exchange.lower(), None)
+            if not exchange_class:
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"Exchange no soportado: {exchange}"
+                )
+
+            ex = exchange_class({'enableRateLimit': True})
+            markets = await ex.load_markets()
+
+            # Filter perpetuals (same logic)
+            perpetuals = [
+                symbol for symbol, market in markets.items()
+                if market.get('swap') and market.get('linear')
+            ]
+
+            await ex.close()
+
+            symbols = sorted(perpetuals)
+            _symbols_cache[cache_key] = {"data": symbols, "ts": now}
+
         # Filter by query if provided
         if query:
             q = query.upper()
             symbols = [s for s in symbols if q in s.upper()]
-        
-        # Return format expected by frontend
+
+        # Return format expected by frontend (sin límite artificial)
         return [
             {"symbol": s, "description": s.replace("/USDT:USDT", "").replace("/USDC:USDC", "")}
-            for s in symbols[:200]
+            for s in symbols
         ]
-        
+
     except HTTPException:
         raise
     except Exception as e:
