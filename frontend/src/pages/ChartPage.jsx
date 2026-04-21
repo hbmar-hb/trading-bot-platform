@@ -4,9 +4,10 @@ import { positionsService } from '@/services/positions'
 import { botsService } from '@/services/bots'
 import { tradingSignalsService } from '@/services/tradingSignals'
 import { chartingService } from '@/services/charting'
+import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import usePositionStore from '@/store/positionStore'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
-import { TrendingUp, TrendingDown, Target, AlertTriangle, Activity, Clock, BarChart3, ChevronDown, Settings2 } from 'lucide-react'
+import { TrendingUp, TrendingDown, Target, AlertTriangle, Activity, Clock, BarChart3, ChevronDown } from 'lucide-react'
 
 function formatPrice(price) {
   if (price === null || price === undefined) return '—'
@@ -71,47 +72,60 @@ export default function ChartPage() {
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false)
   const prices = usePositionStore(s => s.prices)
 
-  // Cargar símbolos disponibles
+  // Cargar símbolos disponibles - Same as BotEditPage
   const loadSymbols = useCallback(async (search = '') => {
     try {
-      const res = await chartingService.searchSymbols(search)
-      setAvailableSymbols(res.data || [])
-      // Si no hay símbolo seleccionado y tenemos resultados, seleccionar el primero
-      if (res.data?.length > 0 && !selectedSymbol) {
-        setSelectedSymbol(res.data[0].symbol)
+      // Use same endpoint as BotEditPage (marketsByExchange)
+      const res = await exchangeAccountsService.marketsByExchange('bingx')
+      // Response is list of strings: ["BTC/USDT:USDT", "ETH/USDT:USDT", ...]
+      const symbols = Array.isArray(res.data) ? res.data : []
+      // Format for dropdown
+      let formatted = symbols.map(s => ({
+        symbol: s,
+        description: s.replace('/USDT:USDT', '').replace('/USDC:USDC', '')
+      }))
+      // Filter by search if provided
+      if (search) {
+        const q = search.toUpperCase()
+        formatted = formatted.filter(s => s.symbol.toUpperCase().includes(q))
       }
+      setAvailableSymbols(formatted)
     } catch (e) {
       console.error('Error loading symbols:', e)
-      // Fallback
       setAvailableSymbols([
-        { symbol: 'BTC/USDT:USDT', description: 'BTC Perpetual' },
-        { symbol: 'ETH/USDT:USDT', description: 'ETH Perpetual' },
+        { symbol: 'BTC/USDT:USDT', description: 'BTC' },
+        { symbol: 'ETH/USDT:USDT', description: 'ETH' },
       ])
     }
-  }, [selectedSymbol])
+  }, [])
 
   // Cargar datos iniciales
   useEffect(() => {
     const loadData = async () => {
       setLoading(true)
       try {
-        const [posRes, botsRes, symRes] = await Promise.all([
-          positionsService.getUnified({ include_manual: true }),
+        const [posRes, botsRes] = await Promise.all([
+          positionsService.unified(true),
           botsService.list(),
-          chartingService.searchSymbols(''),
         ])
         setPositions(posRes.data || [])
         setBots(botsRes.data || [])
-        setAvailableSymbols(symRes.data || [])
+        // Load symbols using the same method as dropdown
+        await loadSymbols('')
         
         // Cargar señales de los últimos 7 días
         if (selectedSymbol) {
-          const signalsRes = await tradingSignalsService.list({ 
-            symbol: selectedSymbol, 
-            days: 7,
-            limit: 100 
-          })
-          setSignals(signalsRes.data?.signals || [])
+          try {
+            const signalsRes = await tradingSignalsService.list({ 
+              symbol: selectedSymbol, 
+              days: 7,
+              limit: 100 
+            })
+            setSignals(signalsRes.data?.signals || [])
+          } catch (e) {
+            console.log('Trading signals not available')
+            setSignals([])
+          }
         }
       } catch (e) {
         console.error('Error loading chart data:', e)
@@ -137,7 +151,7 @@ export default function ChartPage() {
         to_time: to,
       })
       
-      if (res.data?.s === 'ok') {
+      if (res.data?.s === 'ok' && res.data.t) {
         const candles = res.data.t.map((time, i) => ({
           time,
           open: res.data.o[i],
@@ -147,7 +161,6 @@ export default function ChartPage() {
         }))
         setCandleData(candles)
       } else {
-        // Generar datos mock para demo
         setCandleData(generateMockData(selectedSymbol, timeframe))
       }
     } catch (e) {
@@ -224,14 +237,11 @@ export default function ChartPage() {
       const signalMarkers = signals
         .filter(s => s.symbol === selectedSymbol)
         .map(s => {
-          const price = parseFloat(s.price || 0)
-          const candle = candleData.find(c => {
-            const signalTime = Math.floor(new Date(s.received_at).getTime() / 1000)
-            return c.time === signalTime
-          })
+          const signalTime = Math.floor(new Date(s.received_at).getTime() / 1000)
+          const candle = candleData.find(c => c.time === signalTime)
           
           return {
-            time: candle ? candle.time : Math.floor(new Date(s.received_at).getTime() / 1000),
+            time: candle ? candle.time : signalTime,
             position: s.action === 'long' ? 'belowBar' : 'aboveBar',
             color: s.action === 'long' ? '#22c55e' : '#ef4444',
             shape: s.action === 'long' ? 'arrowUp' : 'arrowDown',
@@ -326,7 +336,7 @@ export default function ChartPage() {
     const data = []
     const now = new Date()
     const multiplier = tf === '1m' ? 60000 : tf === '5m' ? 300000 : tf === '15m' ? 900000 : tf === '1h' ? 3600000 : tf === '4h' ? 14400000 : 86400000
-    let price = symbol.includes('BTC') ? 67500 : symbol.includes('ETH') ? 3450 : 150
+    let price = symbol?.includes('BTC') ? 67500 : symbol?.includes('ETH') ? 3450 : 150
     
     for (let i = 200; i >= 0; i--) {
       const time = new Date(now.getTime() - i * multiplier)
@@ -352,7 +362,7 @@ export default function ChartPage() {
   const filteredSymbols = useMemo(() => {
     if (!symbolSearch) return availableSymbols
     return availableSymbols.filter(s => 
-      s.symbol.toLowerCase().includes(symbolSearch.toLowerCase()) ||
+      s.symbol?.toLowerCase().includes(symbolSearch.toLowerCase()) ||
       s.description?.toLowerCase().includes(symbolSearch.toLowerCase())
     )
   }, [availableSymbols, symbolSearch])
@@ -365,11 +375,11 @@ export default function ChartPage() {
     // Recargar señales para el nuevo símbolo
     tradingSignalsService.list({ symbol, days: 7, limit: 100 })
       .then(res => setSignals(res.data?.signals || []))
+      .catch(() => setSignals([]))
   }
 
   // Current price
   const currentPrice = prices[selectedSymbol]
-  const symbolInfo = availableSymbols.find(s => s.symbol === selectedSymbol)
 
   if (loading) {
     return (
@@ -411,7 +421,10 @@ export default function ChartPage() {
                     type="text"
                     placeholder="Buscar par..."
                     value={symbolSearch}
-                    onChange={(e) => setSymbolSearch(e.target.value)}
+                    onChange={(e) => {
+                      setSymbolSearch(e.target.value)
+                      loadSymbols(e.target.value)
+                    }}
                     className="w-full px-3 py-2 text-sm bg-slate-100 dark:bg-gray-900 border-none rounded-lg focus:ring-2 focus:ring-blue-500"
                     autoFocus
                   />
