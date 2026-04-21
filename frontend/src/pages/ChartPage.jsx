@@ -353,33 +353,30 @@ export default function ChartPage() {
       
       relevantPositions.forEach(pos => {
         const entryTime = Math.floor(new Date(pos.opened_at).getTime() / 1000)
-        const entryPrice = parseFloat(pos.entry_price)
         
-        // Línea de entrada (no afecta auto-escalado del eje Y)
+        // Línea de entrada
         const entryLine = chart.addLineSeries({
           color: pos.side === 'long' ? '#22c55e' : '#ef4444',
           lineWidth: 2,
           lineStyle: 2,
+          title: `Entry ${pos.side.toUpperCase()}`,
           lastValueVisible: false,
-          priceLineVisible: false,
-          autoscaleInfoProvider: () => null,
         })
         entryLine.setData([
-          { time: entryTime, value: entryPrice },
-          { time: lastTime, value: entryPrice },
+          { time: entryTime, value: parseFloat(pos.entry_price) },
+          { time: lastTime, value: parseFloat(pos.entry_price) },
         ])
         
         // SL
         if (pos.current_sl_price) {
-          const slPrice = parseFloat(pos.current_sl_price)
           const slLine = chart.addLineSeries({
             color: '#ef4444',
             lineWidth: 1,
             lineStyle: 3,
+            title: 'SL',
             lastValueVisible: false,
-            priceLineVisible: false,
-            autoscaleInfoProvider: () => null,
           })
+          const slPrice = parseFloat(pos.current_sl_price)
           slLine.setData([
             { time: entryTime, value: slPrice },
             { time: lastTime, value: slPrice },
@@ -389,15 +386,14 @@ export default function ChartPage() {
         // TPs
         if (pos.current_tp_prices?.length > 0) {
           pos.current_tp_prices.forEach((tp, idx) => {
-            const tpPrice = parseFloat(tp)
             const tpLine = chart.addLineSeries({
               color: '#22c55e',
               lineWidth: 1,
               lineStyle: 3,
+              title: `TP${idx + 1}`,
               lastValueVisible: false,
-              priceLineVisible: false,
-              autoscaleInfoProvider: () => null,
             })
+            const tpPrice = parseFloat(tp)
             tpLine.setData([
               { time: entryTime, value: tpPrice },
               { time: lastTime, value: tpPrice },
