@@ -70,6 +70,7 @@ export default function ChartPage() {
   const [bots, setBots] = useState([])
   const [showSignals, setShowSignals] = useState(true)
   const [showPositions, setShowPositions] = useState(true)
+  const [showClosedPositions, setShowClosedPositions] = useState(true)
   const [candleData, setCandleData] = useState([])
   const [symbolSearch, setSymbolSearch] = useState('')
   const [showSymbolDropdown, setShowSymbolDropdown] = useState(false)
@@ -241,7 +242,10 @@ export default function ChartPage() {
 
     candleSeries.setData(candleData)
     
-    // Añadir marcadores de señales
+    // Preparar marcadores combinados (señales + posiciones cerradas)
+    const allMarkers = []
+    
+    // Marcadores de señales
     if (showSignals && signals.length > 0) {
       const signalMarkers = signals
         .filter(s => normalizeSymbol(s.symbol) === selectedSymbolNorm)
@@ -260,9 +264,75 @@ export default function ChartPage() {
         })
         .filter(m => m.time)
       
-      if (signalMarkers.length > 0) {
-        candleSeries.setMarkers(signalMarkers)
-      }
+      allMarkers.push(...signalMarkers)
+    }
+    
+    // Posiciones cerradas en el gráfico (líneas + marcadores)
+    if (showClosedPositions) {
+      const closedPositions = positions.filter(
+        p => normalizeSymbol(p.symbol) === selectedSymbolNorm && p.status === 'closed' && p.closed_at
+      )
+      
+      closedPositions.forEach(pos => {
+        const entryTime = Math.floor(new Date(pos.opened_at).getTime() / 1000)
+        const closeTime = Math.floor(new Date(pos.closed_at).getTime() / 1000)
+        const entryPrice = parseFloat(pos.entry_price)
+        
+        // Calcular exit_price aproximado desde realized_pnl
+        let exitPrice
+        const pnl = parseFloat(pos.realized_pnl || 0)
+        const qty = parseFloat(pos.quantity || 0)
+        if (pos.realized_pnl !== null && qty > 0) {
+          if (pos.side === 'long') {
+            exitPrice = entryPrice + (pnl / qty)
+          } else {
+            exitPrice = entryPrice - (pnl / qty)
+          }
+        } else {
+          // Fallback: precio de cierre de la vela más cercana
+          const candle = candleData.find(c => c.time >= closeTime)
+          exitPrice = candle ? candle.close : entryPrice
+        }
+        
+        const isWin = pnl >= 0
+        const color = isWin ? '#22c55e' : '#ef4444'
+        
+        // Línea conectando entrada y salida
+        const tradeLine = chart.addLineSeries({
+          color,
+          lineWidth: 2,
+          lineStyle: 0,
+          lastValueVisible: false,
+        })
+        tradeLine.setData([
+          { time: entryTime, value: entryPrice },
+          { time: closeTime, value: exitPrice },
+        ])
+        
+        // Marcadores de entrada y salida
+        allMarkers.push({
+          time: entryTime,
+          position: pos.side === 'long' ? 'belowBar' : 'aboveBar',
+          color,
+          shape: pos.side === 'long' ? 'arrowUp' : 'arrowDown',
+          text: `${pos.side === 'long' ? 'L' : 'S'}`,
+          size: 1,
+        })
+        
+        allMarkers.push({
+          time: closeTime,
+          position: pos.side === 'long' ? 'aboveBar' : 'belowBar',
+          color,
+          shape: 'circle',
+          text: `${pnl >= 0 ? '+' : ''}${pnl.toFixed(1)}`,
+          size: 1,
+        })
+      })
+    }
+    
+    // Aplicar todos los marcadores
+    if (allMarkers.length > 0) {
+      candleSeries.setMarkers(allMarkers)
     }
     
     // Añadir líneas de precio para posiciones abiertas
@@ -338,7 +408,7 @@ export default function ChartPage() {
       window.removeEventListener('resize', handleResize)
       chart.remove()
     }
-  }, [selectedSymbol, timeframe, positions, signals, showSignals, showPositions, candleData, loading])
+  }, [selectedSymbol, timeframe, positions, signals, showSignals, showPositions, showClosedPositions, candleData, loading])
 
   // Generar datos mock para demo
   const generateMockData = (symbol, tf) => {
@@ -502,7 +572,19 @@ export default function ChartPage() {
           />
           <span className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-gray-300">
             <Target size={14} className="text-blue-500" />
-            Mostrar posiciones
+            Mostrar posiciones abiertas
+          </span>
+        </label>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={showClosedPositions}
+            onChange={(e) => setShowClosedPositions(e.target.checked)}
+            className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+          />
+          <span className="flex items-center gap-1.5 text-sm text-slate-700 dark:text-gray-300">
+            <TrendingUp size={14} className="text-purple-500" />
+            Mostrar posiciones cerradas
           </span>
         </label>
       </div>
@@ -559,6 +641,59 @@ export default function ChartPage() {
                       </div>
                     </div>
                   ))}
+              </div>
+            )}
+          </div>
+
+          {/* Posiciones cerradas */}
+          <div className="card space-y-3">
+            <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-900 dark:text-white">
+              <TrendingUp size={14} className="text-purple-500" />
+              Posiciones cerradas
+              <span className="ml-auto text-xs bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400 px-2 py-0.5 rounded-full">
+                {positions.filter(p => p.status === 'closed' && normalizeSymbol(p.symbol) === selectedSymbolNorm).length}
+              </span>
+            </h3>
+            {positions.filter(p => p.status === 'closed' && normalizeSymbol(p.symbol) === selectedSymbolNorm).length === 0 ? (
+              <p className="text-sm text-slate-400">Sin posiciones cerradas</p>
+            ) : (
+              <div className="space-y-2 max-h-80 overflow-y-auto">
+                {positions
+                  .filter(p => p.status === 'closed' && normalizeSymbol(p.symbol) === selectedSymbolNorm)
+                  .map(pos => {
+                    const pnl = parseFloat(pos.realized_pnl || 0)
+                    const isWin = pnl >= 0
+                    return (
+                      <div key={pos.id} className="p-3 bg-slate-50 dark:bg-gray-800/50 rounded-lg text-sm">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className={`font-semibold ${pos.side === 'long' ? 'text-green-500' : 'text-red-500'}`}>
+                            {pos.side === 'long' ? 'LONG' : 'SHORT'}
+                          </span>
+                          <span className={`font-mono font-bold ${isWin ? 'text-green-500' : 'text-red-500'}`}>
+                            {isWin ? '+' : ''}{pnl.toFixed(2)} USDT
+                          </span>
+                        </div>
+                        <div className="space-y-1 text-xs">
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Entrada:</span>
+                            <span className="font-mono">{formatPrice(pos.entry_price)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Cantidad:</span>
+                            <span className="font-mono">{parseFloat(pos.quantity).toFixed(4)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Abierta:</span>
+                            <span className="text-slate-500">{formatTime(pos.opened_at)}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-400">Cerrada:</span>
+                            <span className="text-slate-500">{formatTime(pos.closed_at)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
               </div>
             )}
           </div>
@@ -635,6 +770,14 @@ export default function ChartPage() {
               <div className="flex items-center gap-3">
                 <div className="w-8 h-0.5 bg-red-500 border-dashed border-t border-red-500" />
                 <span className="text-slate-600 dark:text-gray-400">Stop Loss</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-0.5 bg-purple-500" />
+                <span className="text-slate-600 dark:text-gray-400">Posición cerrada (ganancia)</span>
+              </div>
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-0.5 bg-orange-500" />
+                <span className="text-slate-600 dark:text-gray-400">Posición cerrada (pérdida)</span>
               </div>
             </div>
           </div>
