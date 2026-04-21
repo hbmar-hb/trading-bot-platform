@@ -232,10 +232,14 @@ export default function ChartPage() {
 
     candleSeries.setData(candleData)
     
+    // Helper to normalize symbol for comparison
+    const normalizeSymbol = (s) => s?.replace(':USDT', '').replace(':USDC', '').replace('/USDT', '').replace('/USDC', '').toUpperCase()
+    const selectedSymbolNorm = normalizeSymbol(selectedSymbol)
+    
     // Añadir marcadores de señales
     if (showSignals && signals.length > 0) {
       const signalMarkers = signals
-        .filter(s => s.symbol === selectedSymbol)
+        .filter(s => normalizeSymbol(s.symbol) === selectedSymbolNorm)
         .map(s => {
           const signalTime = Math.floor(new Date(s.received_at).getTime() / 1000)
           const candle = candleData.find(c => c.time === signalTime)
@@ -258,7 +262,7 @@ export default function ChartPage() {
     
     // Añadir líneas de precio para posiciones abiertas
     if (showPositions) {
-      const relevantPositions = positions.filter(p => p.symbol === selectedSymbol && p.status === 'open')
+      const relevantPositions = positions.filter(p => normalizeSymbol(p.symbol) === selectedSymbolNorm && p.status === 'open')
       
       relevantPositions.forEach(pos => {
         const entryTime = Math.floor(new Date(pos.opened_at).getTime() / 1000)
@@ -513,15 +517,15 @@ export default function ChartPage() {
               <Activity size={14} className="text-blue-500" />
               Posiciones abiertas
               <span className="ml-auto text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400 px-2 py-0.5 rounded-full">
-                {positions.filter(p => p.status === 'open' && p.symbol === selectedSymbol).length}
+                {positions.filter(p => p.status === 'open' && normalizeSymbol(p.symbol) === selectedSymbolNorm).length}
               </span>
             </h3>
-            {positions.filter(p => p.status === 'open' && p.symbol === selectedSymbol).length === 0 ? (
+            {positions.filter(p => p.status === 'open' && normalizeSymbol(p.symbol) === selectedSymbolNorm).length === 0 ? (
               <p className="text-sm text-slate-400">Sin posiciones abiertas</p>
             ) : (
               <div className="space-y-2">
                 {positions
-                  .filter(p => p.status === 'open' && p.symbol === selectedSymbol)
+                  .filter(p => p.status === 'open' && normalizeSymbol(p.symbol) === selectedSymbolNorm)
                   .map(pos => (
                     <div key={pos.id} className="p-3 bg-slate-50 dark:bg-gray-800/50 rounded-lg text-sm">
                       <div className="flex items-center justify-between mb-2">
