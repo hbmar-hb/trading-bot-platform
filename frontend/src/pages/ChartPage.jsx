@@ -346,41 +346,62 @@ export default function ChartPage() {
       candleSeries.setMarkers(allMarkers)
     }
     
-    // Añadir líneas de precio para posiciones abiertas (usando priceLines nativas)
+    // Añadir líneas de precio para posiciones abiertas
     if (showPositions) {
       const relevantPositions = positions.filter(p => normalizeSymbol(p.symbol) === selectedSymbolNorm && p.status === 'open')
+      const lastTime = candleData[candleData.length - 1]?.time || Math.floor(Date.now() / 1000)
       
       relevantPositions.forEach(pos => {
-        // Línea de entrada
-        candleSeries.createPriceLine({
-          price: parseFloat(pos.entry_price),
+        const entryTime = Math.floor(new Date(pos.opened_at).getTime() / 1000)
+        const entryPrice = parseFloat(pos.entry_price)
+        
+        // Línea de entrada (no afecta auto-escalado del eje Y)
+        const entryLine = chart.addLineSeries({
           color: pos.side === 'long' ? '#22c55e' : '#ef4444',
           lineWidth: 2,
           lineStyle: 2,
-          title: `Entry ${pos.side.toUpperCase()}`,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          autoscaleInfoProvider: () => null,
         })
+        entryLine.setData([
+          { time: entryTime, value: entryPrice },
+          { time: lastTime, value: entryPrice },
+        ])
         
         // SL
         if (pos.current_sl_price) {
-          candleSeries.createPriceLine({
-            price: parseFloat(pos.current_sl_price),
+          const slPrice = parseFloat(pos.current_sl_price)
+          const slLine = chart.addLineSeries({
             color: '#ef4444',
             lineWidth: 1,
             lineStyle: 3,
-            title: 'SL',
+            lastValueVisible: false,
+            priceLineVisible: false,
+            autoscaleInfoProvider: () => null,
           })
+          slLine.setData([
+            { time: entryTime, value: slPrice },
+            { time: lastTime, value: slPrice },
+          ])
         }
         
         // TPs
         if (pos.current_tp_prices?.length > 0) {
           pos.current_tp_prices.forEach((tp, idx) => {
-            candleSeries.createPriceLine({
-              price: parseFloat(tp),
+            const tpPrice = parseFloat(tp)
+            const tpLine = chart.addLineSeries({
               color: '#22c55e',
               lineWidth: 1,
               lineStyle: 3,
-              title: `TP${idx + 1}`,
+              lastValueVisible: false,
+              priceLineVisible: false,
+              autoscaleInfoProvider: () => null,
             })
+            tpLine.setData([
+              { time: entryTime, value: tpPrice },
+              { time: lastTime, value: tpPrice },
+            ])
           })
         }
       })
