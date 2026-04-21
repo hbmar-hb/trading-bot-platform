@@ -55,6 +55,9 @@ _cors_origins = os.getenv(
     "http://localhost:5173,http://localhost:5274,http://localhost:80,http://localhost:8080"
 ).split(",")
 
+# Add wildcard for external access (any IP/domain)
+_cors_origins.append("*")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
