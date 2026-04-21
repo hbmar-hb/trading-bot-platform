@@ -286,36 +286,39 @@ export default function ChartPage() {
         const closeTime = Math.floor(new Date(pos.closed_at).getTime() / 1000)
         const entryPrice = parseFloat(pos.entry_price)
         
-        // Calcular exit_price aproximado desde realized_pnl
-        let exitPrice
-        const pnl = parseFloat(pos.realized_pnl || 0)
-        const qty = parseFloat(pos.quantity || 0)
-        if (pos.realized_pnl !== null && qty > 0) {
-          if (pos.side === 'long') {
-            exitPrice = entryPrice + (pnl / qty)
-          } else {
-            exitPrice = entryPrice - (pnl / qty)
-          }
+        // Usar precio de cierre de la vela en closed_at como exitPrice (más preciso visualmente)
+        let exitPrice = entryPrice
+        const closeCandle = candleData.find(c => c.time >= closeTime)
+        if (closeCandle) {
+          exitPrice = closeCandle.close
         } else {
-          // Fallback: precio de cierre de la vela más cercana
-          const candle = candleData.find(c => c.time >= closeTime)
-          exitPrice = candle ? candle.close : entryPrice
+          // Fallback: estimar desde realized_pnl
+          const pnlVal = parseFloat(pos.realized_pnl || 0)
+          const qty = parseFloat(pos.quantity || 0)
+          if (qty > 0 && Math.abs(pnlVal) > 0.00000001) {
+            exitPrice = pos.side === 'long'
+              ? entryPrice + (pnlVal / qty)
+              : entryPrice - (pnlVal / qty)
+          }
         }
         
+        const pnl = parseFloat(pos.realized_pnl || 0)
         const isWin = pnl >= 0
         const color = isWin ? '#22c55e' : '#ef4444'
         
-        // Línea conectando entrada y salida
-        const tradeLine = chart.addLineSeries({
-          color,
-          lineWidth: 2,
-          lineStyle: 0,
-          lastValueVisible: false,
-        })
-        tradeLine.setData([
-          { time: entryTime, value: entryPrice },
-          { time: closeTime, value: exitPrice },
-        ])
+        // Línea conectando entrada y salida (solo si hay diferencia de tiempo visible)
+        if (Math.abs(exitPrice - entryPrice) > 0.00000001 || closeTime > entryTime) {
+          const tradeLine = chart.addLineSeries({
+            color,
+            lineWidth: 2,
+            lineStyle: 0,
+            lastValueVisible: false,
+          })
+          tradeLine.setData([
+            { time: entryTime, value: entryPrice },
+            { time: closeTime, value: exitPrice },
+          ])
+        }
         
         // Marcadores de entrada y salida
         allMarkers.push({
@@ -343,58 +346,41 @@ export default function ChartPage() {
       candleSeries.setMarkers(allMarkers)
     }
     
-    // Añadir líneas de precio para posiciones abiertas
+    // Añadir líneas de precio para posiciones abiertas (usando priceLines nativas)
     if (showPositions) {
       const relevantPositions = positions.filter(p => normalizeSymbol(p.symbol) === selectedSymbolNorm && p.status === 'open')
       
       relevantPositions.forEach(pos => {
-        const entryTime = Math.floor(new Date(pos.opened_at).getTime() / 1000)
-        const lastTime = candleData[candleData.length - 1]?.time || entryTime + 86400
-        
         // Línea de entrada
-        const entryLine = chart.addLineSeries({
+        candleSeries.createPriceLine({
+          price: parseFloat(pos.entry_price),
           color: pos.side === 'long' ? '#22c55e' : '#ef4444',
           lineWidth: 2,
           lineStyle: 2,
           title: `Entry ${pos.side.toUpperCase()}`,
-          lastValueVisible: false,
         })
-        entryLine.setData([
-          { time: entryTime, value: parseFloat(pos.entry_price) },
-          { time: lastTime, value: parseFloat(pos.entry_price) },
-        ])
         
         // SL
         if (pos.current_sl_price) {
-          const slLine = chart.addLineSeries({
+          candleSeries.createPriceLine({
+            price: parseFloat(pos.current_sl_price),
             color: '#ef4444',
             lineWidth: 1,
             lineStyle: 3,
             title: 'SL',
-            lastValueVisible: false,
           })
-          const slPrice = parseFloat(pos.current_sl_price)
-          slLine.setData([
-            { time: entryTime, value: slPrice },
-            { time: lastTime, value: slPrice },
-          ])
         }
         
         // TPs
         if (pos.current_tp_prices?.length > 0) {
           pos.current_tp_prices.forEach((tp, idx) => {
-            const tpLine = chart.addLineSeries({
+            candleSeries.createPriceLine({
+              price: parseFloat(tp),
               color: '#22c55e',
               lineWidth: 1,
               lineStyle: 3,
               title: `TP${idx + 1}`,
-              lastValueVisible: false,
             })
-            const tpPrice = parseFloat(tp)
-            tpLine.setData([
-              { time: entryTime, value: tpPrice },
-              { time: lastTime, value: tpPrice },
-            ])
           })
         }
       })
