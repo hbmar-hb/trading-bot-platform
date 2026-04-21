@@ -109,16 +109,20 @@ export default function ChartPage() {
     const loadData = async () => {
       setLoading(true)
       try {
-        const [posRes, botsRes] = await Promise.all([
+        const [posRes, botsRes, closedPosRes] = await Promise.all([
           positionsService.unified(true),
           botsService.list(),
+          positionsService.list({ status: 'closed', limit: 500 }),
         ])
         // Asegurar que los datos son arrays
-        const positionsData = Array.isArray(posRes?.data) ? posRes.data : 
+        const openPositions = Array.isArray(posRes?.data) ? posRes.data : 
                              Array.isArray(posRes) ? posRes : []
+        const closedPositions = Array.isArray(closedPosRes?.data) ? closedPosRes.data : 
+                               Array.isArray(closedPosRes) ? closedPosRes : []
         const botsData = Array.isArray(botsRes?.data) ? botsRes.data : 
                         Array.isArray(botsRes) ? botsRes : []
-        setPositions(positionsData)
+        // Combinar abiertas (unified) y cerradas (list)
+        setPositions([...openPositions, ...closedPositions])
         setBots(botsData)
         // Load symbols using the same method as dropdown
         await loadSymbols('')
