@@ -152,7 +152,15 @@ export default function ChartPage() {
     
     try {
       const to = Math.floor(Date.now() / 1000)
-      const from = to - (timeframe === '1m' ? 3600 : timeframe === '5m' ? 7200 : timeframe === '15m' ? 21600 : timeframe === '1h' ? 86400 : timeframe === '4h' ? 259200 : 604800)
+      // Ampliar histórico para poder ver posiciones antiguas (max ~1000 velas)
+      const from = to - (
+        timeframe === '1m' ? 43200 :      // 12h
+        timeframe === '5m' ? 172800 :     // 2d
+        timeframe === '15m' ? 432000 :    // 5d
+        timeframe === '1h' ? 2592000 :    // 30d
+        timeframe === '4h' ? 7776000 :    // 90d
+        31536000                          // 1d -> 365d
+      )
       
       const res = await chartingService.getHistory({
         symbol: selectedSymbol,
