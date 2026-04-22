@@ -1,6 +1,7 @@
-import { useEffect, useRef, useCallback, useState } from 'react'
+import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
 import { createChart, LineStyle } from 'lightweight-charts'
 import api from '@/services/api'
+import useBalanceStore from '@/store/balanceStore'
 import { getDateRange, toISODate } from '@/utils/dateRanges'
 
 // ── Helpers de fecha ──────────────────────────────────────────
@@ -46,7 +47,7 @@ const PRESETS = [
 
 // ── Gráfico Acumulado (área) ───────────────────────────────────
 
-function AreaChart({ data, height = 260, isDark }) {
+function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
   const containerRef = useRef(null)
   const chartRef     = useRef(null)
   const seriesRef    = useRef(null)
@@ -73,6 +74,9 @@ function AreaChart({ data, height = 260, isDark }) {
       bottomColor: 'rgba(59,130,246,0.02)',
       lineWidth: 2,
       crosshairMarkerVisible: true,
+      priceFormat: valueMode === 'percent'
+        ? { type: 'price', precision: 2, minMove: 0.01 }
+        : { type: 'price', precision: 2, minMove: 0.01 },
     })
 
     series.createPriceLine({
@@ -103,7 +107,7 @@ function AreaChart({ data, height = 260, isDark }) {
 
 // ── Gráfico Diario (barras) ────────────────────────────────────
 
-function BarChart({ data, height = 260, isDark }) {
+function BarChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
   const containerRef = useRef(null)
   const chartRef     = useRef(null)
   const seriesRef    = useRef(null)
@@ -126,7 +130,9 @@ function BarChart({ data, height = 260, isDark }) {
 
     const series = chart.addHistogramSeries({
       color: 'rgba(74,222,128,0.8)',
-      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      priceFormat: valueMode === 'percent'
+        ? { type: 'price', precision: 2, minMove: 0.01 }
+        : { type: 'price', precision: 2, minMove: 0.01 },
     })
 
     series.createPriceLine({
@@ -175,6 +181,7 @@ export default function PnlChart() {
   const [loading,   setLoading]   = useState(false)
   const [isDark,    setIsDark]    = useState(false)
   const [chartMode, setChartMode] = useState('cumulative') // 'cumulative' | 'daily'
+  const [valueMode, setValueMode] = useState('usdt') // 'usdt' | 'percent'
 
   // Detectar tema
   useEffect(() => {
@@ -237,26 +244,41 @@ export default function PnlChart() {
     fetchData({ ...p, symbol, source: s })
   }
 
+  // Equity para cálculo de %
+  const totalEquity = useBalanceStore(s => s.getTotalEquity())
+
+  // Datos transformados según modo de visualización
+  const displayData = useMemo(() => {
+    if (valueMode === 'usdt' || totalEquity <= 0) return data
+    return data.map(d => ({
+      ...d,
+      cumulative_pnl: (parseFloat(d.cumulative_pnl) / totalEquity) * 100,
+      daily_pnl: (parseFloat(d.daily_pnl) / totalEquity) * 100,
+    }))
+  }, [data, valueMode, totalEquity])
+
   // ── Estadísticas del período ──────────────────────────────
-  const totalPnl     = data.reduce((s, d) => s + parseFloat(d.daily_pnl), 0)
+  const totalPnl     = displayData.reduce((s, d) => s + parseFloat(d.daily_pnl), 0)
   const totalTrades  = data.reduce((s, d) => s + (d.trade_count || 0), 0)
-  const winDays      = data.filter(d => parseFloat(d.daily_pnl) > 0).length
-  const lossDays     = data.filter(d => parseFloat(d.daily_pnl) < 0).length
+  const winDays      = displayData.filter(d => parseFloat(d.daily_pnl) > 0).length
+  const lossDays     = displayData.filter(d => parseFloat(d.daily_pnl) < 0).length
   const winDayRate   = (winDays + lossDays) > 0
     ? Math.round(winDays / (winDays + lossDays) * 100)
     : 0
-  const bestDay      = data.length ? Math.max(...data.map(d => parseFloat(d.daily_pnl))) : 0
-  const worstDay     = data.length ? Math.min(...data.map(d => parseFloat(d.daily_pnl))) : 0
+  const bestDay      = displayData.length ? Math.max(...displayData.map(d => parseFloat(d.daily_pnl))) : 0
+  const worstDay     = displayData.length ? Math.min(...displayData.map(d => parseFloat(d.daily_pnl))) : 0
   const isPos        = totalPnl >= 0
+  const suffix       = valueMode === 'percent' ? '%' : ' USDT'
+  const numFmt       = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}${suffix}`
 
   const STATS = [
-    { label: 'PnL del período',  value: `${isPos ? '+' : ''}${totalPnl.toFixed(2)} USDT`, color: isPos ? 'text-green-400' : 'text-red-400' },
-    { label: 'Trades cerrados',  value: totalTrades,                                        color: 'text-slate-700 dark:text-white' },
-    { label: 'Win rate (días)',  value: `${winDayRate}%`,                                   color: winDayRate >= 50 ? 'text-green-400' : 'text-red-400' },
-    { label: 'Días positivos',   value: winDays,                                            color: 'text-green-400' },
-    { label: 'Días negativos',   value: lossDays,                                           color: 'text-red-400' },
-    { label: 'Mejor día',        value: `${bestDay >= 0 ? '+' : ''}${bestDay.toFixed(2)}`, color: 'text-blue-400' },
-    { label: 'Peor día',         value: `${worstDay >= 0 ? '+' : ''}${worstDay.toFixed(2)}`, color: worstDay >= 0 ? 'text-blue-400' : 'text-red-400' },
+    { label: 'PnL del período',  value: numFmt(totalPnl),              color: isPos ? 'text-green-400' : 'text-red-400' },
+    { label: 'Trades cerrados',  value: totalTrades,                   color: 'text-slate-700 dark:text-white' },
+    { label: 'Win rate (días)',  value: `${winDayRate}%`,              color: winDayRate >= 50 ? 'text-green-400' : 'text-red-400' },
+    { label: 'Días positivos',   value: winDays,                       color: 'text-green-400' },
+    { label: 'Días negativos',   value: lossDays,                      color: 'text-red-400' },
+    { label: 'Mejor día',        value: numFmt(bestDay),               color: 'text-blue-400' },
+    { label: 'Peor día',         value: numFmt(worstDay),              color: worstDay >= 0 ? 'text-blue-400' : 'text-red-400' },
   ]
 
   return (
@@ -362,6 +384,29 @@ export default function PnlChart() {
         </div>
       )}
 
+      {/* Toggle USDT / % */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-gray-400">Mostrar en:</span>
+        <div className="flex rounded-md overflow-hidden border border-slate-300 dark:border-gray-700">
+          {[
+            { key: 'usdt',    label: 'USDT' },
+            { key: 'percent', label: '% Equity' },
+          ].map(opt => (
+            <button
+              key={opt.key}
+              onClick={() => setValueMode(opt.key)}
+              className={`px-2.5 py-1 text-xs transition-colors ${
+                valueMode === opt.key
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {/* ── Gráfico ── */}
       {loading ? (
         <div className="flex items-center justify-center h-[260px] text-slate-500 dark:text-gray-400 text-sm">
@@ -372,9 +417,9 @@ export default function PnlChart() {
           Sin trades en este período
         </div>
       ) : chartMode === 'cumulative' ? (
-        <AreaChart data={data} height={260} isDark={isDark} />
+        <AreaChart data={displayData} height={260} isDark={isDark} valueMode={valueMode} />
       ) : (
-        <BarChart data={data} height={260} isDark={isDark} />
+        <BarChart data={displayData} height={260} isDark={isDark} valueMode={valueMode} />
       )}
 
       {/* Nota UTC */}
