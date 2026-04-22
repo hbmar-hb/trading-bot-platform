@@ -20,7 +20,12 @@ export function useUnifiedPositions() {
     }
   }, [])
 
-  useEffect(() => { refresh() }, [refresh])
+  useEffect(() => {
+    refresh()
+    // Polling fallback cada 15s por si el WS se cae o el símbolo no está monitorizado
+    const interval = setInterval(refresh, 15000)
+    return () => clearInterval(interval)
+  }, [refresh])
 
   // Enriquecer posiciones con precios actuales y calcular PnL + ROI en tiempo real
   const enrichedPositions = positions.map(pos => {

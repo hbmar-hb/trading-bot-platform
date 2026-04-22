@@ -14,7 +14,12 @@ export function usePositions() {
     finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    refresh()
+    // Polling fallback cada 15s por si el WS se cae
+    const interval = setInterval(refresh, 15000)
+    return () => clearInterval(interval)
+  }, [])
 
   return { openPositions, loading, refresh }
 }

@@ -14,7 +14,12 @@ export function useBots() {
     finally { setLoading(false) }
   }, [])
 
-  useEffect(() => { refresh() }, [])
+  useEffect(() => {
+    refresh()
+    // Polling fallback cada 30s por si el WS se cae
+    const interval = setInterval(refresh, 30000)
+    return () => clearInterval(interval)
+  }, [])
 
   const toggleStatus = useCallback(async (bot) => {
     const next = bot.status === 'active' ? 'paused' : 'active'

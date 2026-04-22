@@ -255,25 +255,38 @@ export default function DashboardPage() {
   const updateBalance = useBalanceStore(s => s.updateBalance)
 
   useEffect(() => {
+    const loadBalances = () => {
+      exchangeAccountsService.allBalances().then(r => {
+        r.data.accounts.forEach(acc => {
+          if (!acc.error) {
+            updateBalance(acc.account_id, {
+              total_equity:      acc.total_equity,
+              available_balance: acc.available_balance,
+            })
+          }
+        })
+      }).catch(() => {})
+    }
+
+    const loadAccounts = () => {
+      exchangeAccountsService.list().then(r => {
+        const map = {}
+        r.data.forEach(a => { map[a.id] = a.label })
+        setAccountMap(map)
+      }).catch(() => {})
+    }
+
     botsService.list().then(r => setBots(r.data)).catch(() => {})
+    loadAccounts()
+    loadBalances()
 
-    // Cargar cuentas y también obtener balances directamente (sin depender del WS)
-    exchangeAccountsService.list().then(r => {
-      const map = {}
-      r.data.forEach(a => { map[a.id] = a.label })
-      setAccountMap(map)
-    }).catch(() => {})
-
-    exchangeAccountsService.allBalances().then(r => {
-      r.data.accounts.forEach(acc => {
-        if (!acc.error) {
-          updateBalance(acc.account_id, {
-            total_equity:      acc.total_equity,
-            available_balance: acc.available_balance,
-          })
-        }
-      })
-    }).catch(() => {})
+    // Polling fallback cada 30s (balances) y 60s (accounts health)
+    const balanceInterval = setInterval(loadBalances, 30000)
+    const accountInterval = setInterval(loadAccounts, 60000)
+    return () => {
+      clearInterval(balanceInterval)
+      clearInterval(accountInterval)
+    }
   }, [updateBalance])
 
   const prices     = usePositionStore(s => s.prices)

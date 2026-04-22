@@ -1,6 +1,7 @@
 """
-Monitoriza los precios de los símbolos de los bots activos
-y los publica en Redis (cache + pub/sub).
+Monitoriza los precios de los símbolos de los bots activos,
+posiciones abiertas (manuales, paper, bots) y los publica en
+Redis (cache + pub/sub).
 
 Usa clientes públicos de cada exchange (sin credenciales — precios son públicos).
 Se ejecuta como background task asyncio en el lifespan de FastAPI.
@@ -14,7 +15,8 @@ from sqlalchemy import select
 
 from app.models.bot_config import BotConfig
 from app.models.exchange_account import ExchangeAccount
-from app.services.cache import set_price
+from app.models.position import Position
+from app.services.cache import async_redis, set_price
 from app.services.database import AsyncSessionLocal
 
 POLL_INTERVAL = 2   # segundos entre ciclos
@@ -80,20 +82,32 @@ class PriceMonitor:
                 logger.debug(f"Error precio {exchange_name}/{symbol}: {exc}")
 
     async def _get_active_pairs(self) -> list[tuple[str, str]]:
-        """Devuelve todos los pares únicos de todos los bots (activos y pausados)
-        para mostrar precios en tiempo real en la lista de bots.
-        Incluye bots de paper trading (usan bingx como fuente pública)."""
+        """Devuelve todos los pares únicos que necesitan precio en tiempo real:
+        - Bots activos/pausados (reales y paper)
+        - Posiciones abiertas o pendientes (manuales app, bots, paper)
+        - Posiciones manuales externas guardadas en Redis por el unified endpoint.
+        """
+        pairs: list[tuple[str, str]] = []
+        seen = set()
+
+        def _add(exchange: str, symbol: str) -> None:
+            pair = (exchange, symbol)
+            if pair not in seen:
+                seen.add(pair)
+                pairs.append(pair)
+
         async with AsyncSessionLocal() as db:
-            # Bots con exchange real
+            # ── 1. Bots con exchange real ──────────────────────────
             result = await db.execute(
                 select(ExchangeAccount.exchange, BotConfig.symbol)
                 .join(BotConfig, BotConfig.exchange_account_id == ExchangeAccount.id)
                 .where(BotConfig.status.in_(["active", "paused"]))
                 .distinct()
             )
-            pairs = list(result.all())
+            for row in result.all():
+                _add(row[0], row[1])
 
-            # Bots de paper trading — usan bingx como fuente pública de precio
+            # ── 2. Bots de paper trading ───────────────────────────
             paper_result = await db.execute(
                 select(BotConfig.symbol)
                 .where(
@@ -103,11 +117,39 @@ class PriceMonitor:
                 .distinct()
             )
             for row in paper_result.all():
-                pair = ("bingx", row[0])
-                if pair not in pairs:
-                    pairs.append(pair)
+                _add("bingx", row[0])
 
-            return pairs
+            # ── 3. Posiciones abiertas/pendientes (DB) ─────────────
+            # Cubre bots reales, app_manual y paper.  Usa el exchange
+            # guardado en la posición; para paper cae a bingx.
+            pos_result = await db.execute(
+                select(Position.exchange, Position.symbol)
+                .where(Position.status.in_(["open", "pending_limit"]))
+                .distinct()
+            )
+            for row in pos_result.all():
+                exchange = row[0].lower() if row[0] else "bingx"
+                if exchange in ("paper", "unknown"):
+                    exchange = "bingx"
+                _add(exchange, row[1])
+
+        # ── 4. Posiciones manuales externas (Redis) ──────────────
+        # El endpoint /positions/unified guarda aquí los símbolos
+        # que encuentra en el exchange para que también tengan precio.
+        try:
+            raw = await async_redis.get("manual_position_symbols")
+            if raw:
+                import json
+                manual_symbols = json.loads(raw)
+                for item in manual_symbols:
+                    exchange = item.get("exchange", "bingx").lower()
+                    symbol = item.get("symbol")
+                    if symbol:
+                        _add(exchange, symbol)
+        except Exception:
+            pass
+
+        return pairs
 
     def _get_client(self, exchange_name: str) -> ccxt.Exchange:
         if exchange_name not in self._clients:

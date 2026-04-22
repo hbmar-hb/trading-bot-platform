@@ -1,3 +1,4 @@
+import json
 import uuid
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from app.exchanges.factory import create_exchange
 from app.models.bot_config import BotConfig
 from app.models.position import Position
 from app.schemas.position import PositionResponse
+from app.services.cache import async_redis
 from app.services.database import get_db
 
 router = APIRouter(prefix="/positions", tags=["positions"])
@@ -307,6 +309,21 @@ async def list_unified_positions(
                             pass
         
         logger.info(f"[UNIFIED POSITIONS] Total final: {len(unified_positions)}")
+        
+        # Guardar en Redis los símbolos de posiciones manuales externas
+        # para que el price_monitor también los vigile.
+        manual_symbols = [
+            {"exchange": p.exchange, "symbol": p.symbol}
+            for p in unified_positions
+            if p.source == "manual" and p.status == "open"
+        ]
+        try:
+            if manual_symbols:
+                await async_redis.setex("manual_position_symbols", 60, json.dumps(manual_symbols))
+            else:
+                await async_redis.delete("manual_position_symbols")
+        except Exception as e:
+            logger.warning(f"[UNIFIED POSITIONS] Error guardando manual symbols en Redis: {e}")
         
         # Ordenar por símbolo (o podríamos ordenar por opened_at si quisiéramos)
         unified_positions.sort(key=lambda x: x.symbol)
