@@ -291,6 +291,15 @@ export default function DashboardPage() {
     return s + pnl
   }, 0)
 
+  // Margen total y %PNL (ROI global)
+  const totalMargin = positions.reduce((s, p) => {
+    const entry = parseFloat(p.entry_price)
+    const qty   = parseFloat(p.quantity)
+    const lev   = parseFloat(p.leverage || 1)
+    return s + (entry > 0 && qty > 0 ? (entry * qty) / lev : 0)
+  }, 0)
+  const totalPnlPercent = totalMargin > 0 ? (totalPnl / totalMargin) * 100 : 0
+
   // Subtext de posiciones
   const posSubParts = []
   if (counts.bot)         posSubParts.push(`${counts.bot} bots`)
@@ -313,7 +322,7 @@ export default function DashboardPage() {
         <StatCard
           label="PnL no realizado"
           value={`${totalPnl >= 0 ? '+' : ''}${totalPnl.toFixed(2)}`}
-          sub="USDT · posiciones abiertas"
+          sub={`USDT · ${totalPnlPercent >= 0 ? '+' : ''}${totalPnlPercent.toFixed(2)}% ROI`}
           color={totalPnl >= 0 ? 'text-green-400' : 'text-red-400'}
         />
         <StatCard
