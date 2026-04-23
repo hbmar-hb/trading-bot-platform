@@ -983,7 +983,7 @@ export default function AnalyticsPage() {
           </div>
           <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
         </div>
-        <ActivityHeatmap data={heatmapData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <ActivityHeatmap key={`act-${displayMode}`} data={heatmapData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* Distribución horaria */}
@@ -994,13 +994,13 @@ export default function AnalyticsPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
           </div>
         </div>
-        <HourlyChart data={hourlyData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <HourlyChart key={`hour-${displayMode}`} data={hourlyData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Curva de equity</h2>
-        <EquityChart data={summary.equity_curve} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <EquityChart key={`eq-${displayMode}`} data={summary.equity_curve} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* PnL diario */}
@@ -1020,7 +1020,7 @@ export default function AnalyticsPage() {
             <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
           </div>
         </div>
-        <DailyPnlChart data={dailyPnl} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <DailyPnlChart key={`daily-${displayMode}`} data={dailyPnl} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
         {dailyStats && (
           <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
