@@ -104,12 +104,8 @@ function StreakBadge({ streak }) {
 
 // ─── Equity chart (line) ──────────────────────────────────────
 
-function EquityChart({ data, isDark, displayMode, totalEquity }) {
+function EquityChart({ data, isDark }) {
   const ref = useRef(null)
-  const isPercent = displayMode === 'percent' && totalEquity > 0
-  const toVal = (v) => isPercent ? (Number(v) / totalEquity * 100) : Number(v)
-  const suffix = isPercent ? '%' : ' USDT'
-  const fmtVal = (v) => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)}${suffix}`
 
   useEffect(() => {
     if (!ref.current || !data?.length) return
@@ -132,14 +128,14 @@ function EquityChart({ data, isDark, displayMode, totalEquity }) {
       topColor:    'rgba(59,130,246,0.15)',
       bottomColor: 'rgba(59,130,246,0)',
       crosshairMarkerVisible: true,
-      priceFormat: { type: 'custom', formatter: v => fmtVal(v) },
+      priceFormat: { type: 'custom', formatter: v => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)} USDT` },
     })
 
     const points = data
       .filter(p => p.timestamp && p.cumulative_pnl !== null && p.cumulative_pnl !== undefined)
       .map(p => {
         const time = Math.floor(new Date(p.timestamp).getTime() / 1000)
-        const value = toVal(parseFloat(p.cumulative_pnl))
+        const value = parseFloat(p.cumulative_pnl)
         return { 
           time: Number.isFinite(time) ? time : 0, 
           value: Number.isFinite(value) ? value : 0 
@@ -147,13 +143,11 @@ function EquityChart({ data, isDark, displayMode, totalEquity }) {
       })
       .filter(p => p.time > 0)
     
-    const validPoints = points.filter(p => Number.isFinite(p.value))
-    if (validPoints.length === 0) {
-      chart.remove()
-      return
+    if (points.length === 0) {
+      return () => { destroyed = true; obs.disconnect(); chart.remove() }
     }
 
-    series.setData(validPoints)
+    series.setData(points)
     chart.timeScale().fitContent()
 
     let destroyed = false
@@ -163,7 +157,7 @@ function EquityChart({ data, isDark, displayMode, totalEquity }) {
     obs.observe(ref.current)
 
     return () => { destroyed = true; obs.disconnect(); chart.remove() }
-  }, [data, isDark, isPercent, totalEquity])
+  }, [data, isDark])
 
   if (!data?.length) return (
     <div className="h-[220px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
@@ -176,12 +170,8 @@ function EquityChart({ data, isDark, displayMode, totalEquity }) {
 
 // ─── PnL diario (barras) ──────────────────────────────────────
 
-function DailyPnlChart({ data, isDark, displayMode, totalEquity }) {
+function DailyPnlChart({ data, isDark }) {
   const ref = useRef(null)
-  const isPercent = displayMode === 'percent' && totalEquity > 0
-  const toVal = (v) => isPercent ? (Number(v) / totalEquity * 100) : Number(v)
-  const suffix = isPercent ? '%' : ''
-  const fmtVal = (v) => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}${suffix}`
 
   useEffect(() => {
     if (!ref.current) return
@@ -199,21 +189,19 @@ function DailyPnlChart({ data, isDark, displayMode, totalEquity }) {
     })
 
     const series = chart.addHistogramSeries({
-      priceFormat: { type: 'custom', formatter: v => fmtVal(v) },
+      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}` },
     })
 
     const validData = (data || [])
       .filter(p => p.date && p.daily_pnl !== null && p.daily_pnl !== undefined)
       .map(p => {
-        const raw = parseFloat(p.daily_pnl)
-        const value = toVal(raw)
+        const value = parseFloat(p.daily_pnl)
         return {
           time: p.date,
           value: Number.isFinite(value) ? value : 0,
-          color: raw >= 0 ? '#22c55e' : '#ef4444',
+          color: value >= 0 ? '#22c55e' : '#ef4444',
         }
       })
-      .filter(p => Number.isFinite(p.value))
     
     if (validData.length > 0) {
       series.setData(validData)
@@ -228,7 +216,7 @@ function DailyPnlChart({ data, isDark, displayMode, totalEquity }) {
     obs.observe(ref.current)
 
     return () => { destroyed = true; obs.disconnect(); chart.remove() }
-  }, [data, isDark, isPercent, totalEquity])
+  }, [data, isDark])
 
   if (!data?.length) return (
     <div className="h-[180px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
@@ -241,13 +229,9 @@ function DailyPnlChart({ data, isDark, displayMode, totalEquity }) {
 
 // ─── Activity Chart (Barras NARANJAS) ─────────────────────────
 
-function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
+function ActivityHeatmap({ data, isDark }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
-  const isPercent = displayMode === 'percent' && totalEquity > 0
-  const toVal = (v) => isPercent ? (Number(v) / totalEquity * 100) : Number(v)
-  const pnlSuffix = isPercent ? '%' : ' USDT'
-  const fmtPnl = (v) => `${signed(v)}${pnlSuffix}`
   
   useEffect(() => {
     if (!ref.current || safeData.length === 0) return
@@ -279,7 +263,7 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
     const pnlSeries = chart.addLineSeries({
       color: '#3b82f6',  // Azul
       lineWidth: 2,
-      priceFormat: { type: 'custom', formatter: v => fmtPnl(v) },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
       priceScaleId: 'left',
     })
 
@@ -298,11 +282,10 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
       color: (p.trades || 0) > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
     })))
 
-    const pnlPoints = points
-      .filter(p => p.time && !isNaN(p.pnl))
-      .map(p => ({ time: p.time, value: toVal(p.pnl) }))
-      .filter(p => Number.isFinite(p.value))
-    pnlSeries.setData(pnlPoints)
+    pnlSeries.setData(points.filter(p => p.time && !isNaN(p.pnl)).map(p => ({
+      time: p.time,
+      value: p.pnl,
+    })))
 
     // Tooltip
     const toolTip = document.createElement('div')
@@ -335,14 +318,13 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
         return
       }
 
-      const rawPnl = parseFloat(dayData.pnl || 0)
-      const pnl = toVal(rawPnl)
-      const pnlColor = rawPnl >= 0 ? '#22c55e' : '#ef4444'
+      const pnl = parseFloat(dayData.pnl || 0)
+      const pnlColor = pnl >= 0 ? '#22c55e' : '#ef4444'
       
       toolTip.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
         <div>Trades: <span style="font-weight: 600; color: #f97316;">${dayData.count || 0}</span></div>
-        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${fmtPnl(pnl)}</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)} USDT</span></div>
       `
 
       const rect = ref.current.getBoundingClientRect()
@@ -365,7 +347,7 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
       toolTip.remove()
       chart.remove()
     }
-  }, [safeData, isDark, isPercent, totalEquity])
+  }, [safeData, isDark])
 
   if (safeData.length === 0) {
     return (
@@ -396,13 +378,9 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
 
 // ─── Hourly Distribution Chart (Lineal con MEDIA) ─────────────
 
-function HourlyChart({ data, isDark, displayMode, totalEquity }) {
+function HourlyChart({ data, isDark }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
-  const isPercent = displayMode === 'percent' && totalEquity > 0
-  const toVal = (v) => isPercent ? (Number(v) / totalEquity * 100) : Number(v)
-  const pnlSuffix = isPercent ? '%' : ' USDT'
-  const fmtPnl = (v) => `${signed(v)}${pnlSuffix}`
 
   useEffect(() => {
     if (!ref.current || safeData.length === 0) return
@@ -426,7 +404,7 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
     // Calcular la MEDIA de PnL por hora (solo horas con trades)
     const hoursWithTrades = safeData.filter(d => (d.trades || 0) > 0)
     const avgPnl = hoursWithTrades.length > 0
-      ? toVal(hoursWithTrades.reduce((sum, d) => sum + parseFloat(d.pnl || 0), 0) / hoursWithTrades.length)
+      ? hoursWithTrades.reduce((sum, d) => sum + parseFloat(d.pnl || 0), 0) / hoursWithTrades.length
       : 0
 
     // Serie de PnL (línea MORADA)
@@ -434,7 +412,7 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
       color: '#a855f7',  // Morado
       lineWidth: 2,
       title: 'PnL',
-      priceFormat: { type: 'custom', formatter: v => fmtPnl(v) },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
       priceScaleId: 'right',
     })
 
@@ -444,7 +422,7 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
       lineWidth: 1,
       lineStyle: 2,  // Punteada
       title: 'Media',
-      priceFormat: { type: 'custom', formatter: v => fmtPnl(v) },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
       priceScaleId: 'right',
     })
 
@@ -466,16 +444,16 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
       }
     })
 
-    const hourlyPnlPoints = hourlyPoints
-      .map(p => ({ time: p.time, value: toVal(p.pnl) }))
-      .filter(p => Number.isFinite(p.value))
-    pnlSeries.setData(hourlyPnlPoints)
+    pnlSeries.setData(hourlyPoints.map(p => ({
+      time: p.time,
+      value: p.pnl,
+    })))
 
     // Línea de media (mismo valor para todas las horas)
-    const avgPoints = hourlyPoints
-      .map(p => ({ time: p.time, value: avgPnl }))
-      .filter(p => Number.isFinite(p.value))
-    avgSeries.setData(avgPoints)
+    avgSeries.setData(hourlyPoints.map(p => ({
+      time: p.time,
+      value: avgPnl,
+    })))
 
     tradesSeries.setData(hourlyPoints.map(p => ({
       time: p.time,
@@ -548,7 +526,7 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
       toolTip.remove()
       chart.remove()
     }
-  }, [safeData, isDark, isPercent, totalEquity])
+  }, [safeData, isDark])
 
   if (safeData.length === 0) {
     return (
@@ -697,14 +675,10 @@ export default function AnalyticsPage() {
   const [selectedBot, setSelectedBot] = useState('')
   const [selectedSource, setSelectedSource] = useState('')
   const [isDark, setIsDark]       = useState(false)
-  const [displayMode, setDisplayMode] = useState('usdt') // 'usdt' | 'percent'
   
   // Estado para modal de detalle de trades
   const [selectedBotDetail, setSelectedBotDetail] = useState(null)
   const [showTradeModal, setShowTradeModal] = useState(false)
-
-  // Hook SIEMPRE antes de cualquier return condicional
-  const totalEquity = useBalanceStore(s => s.getTotalEquity())
 
   useEffect(() => {
     const check = () => setIsDark(document.documentElement.classList.contains('dark'))
@@ -807,7 +781,8 @@ export default function AnalyticsPage() {
   const pnlColor = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
   const ddColor = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
 
-  // % ROI sobre equity total (totalEquity declarado arriba, antes de returns)
+  // Equity total para calcular % ROI en analytics
+  const totalEquity = useBalanceStore(s => s.getTotalEquity())
   const pnlPct = (pnl) => {
     if (!totalEquity || totalEquity <= 0) return null
     return (Number(pnl ?? 0) / totalEquity * 100).toFixed(2)
@@ -954,30 +929,6 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* Toggle USDT / % */}
-      {totalEquity > 0 && (
-        <div className="flex justify-end">
-          <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
-            {[
-              { value: 'usdt', label: 'USDT $' },
-              { value: 'percent', label: '% ROI' },
-            ].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setDisplayMode(opt.value)}
-                className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                  displayMode === opt.value
-                    ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
-                    : 'text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-200'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Heatmap de actividad */}
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
@@ -987,7 +938,7 @@ export default function AnalyticsPage() {
           </div>
           <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
         </div>
-        <ActivityHeatmap data={heatmapData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <ActivityHeatmap data={heatmapData} isDark={isDark} />
       </div>
 
       {/* Distribución horaria */}
@@ -998,13 +949,13 @@ export default function AnalyticsPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
           </div>
         </div>
-        <HourlyChart data={hourlyData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <HourlyChart data={hourlyData} isDark={isDark} />
       </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Curva de equity</h2>
-        <EquityChart data={summary.equity_curve} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <EquityChart data={summary.equity_curve} isDark={isDark} />
       </div>
 
       {/* PnL diario */}
@@ -1024,7 +975,7 @@ export default function AnalyticsPage() {
             <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
           </div>
         </div>
-        <DailyPnlChart data={dailyPnl} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <DailyPnlChart data={dailyPnl} isDark={isDark} />
         {dailyStats && (
           <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
