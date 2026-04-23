@@ -104,7 +104,7 @@ function StreakBadge({ streak }) {
 
 // ─── Equity chart (line) ──────────────────────────────────────
 
-function EquityChart({ data, isDark }) {
+function EquityChart({ data, isDark, suffix }) {
   const ref = useRef(null)
 
   useEffect(() => {
@@ -128,7 +128,7 @@ function EquityChart({ data, isDark }) {
       topColor:    'rgba(59,130,246,0.15)',
       bottomColor: 'rgba(59,130,246,0)',
       crosshairMarkerVisible: true,
-      priceFormat: { type: 'custom', formatter: v => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)} USDT` },
+      priceFormat: { type: 'custom', formatter: v => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)}${suffix || ' USDT'}` },
     })
 
     const points = data
@@ -170,7 +170,7 @@ function EquityChart({ data, isDark }) {
 
 // ─── PnL diario (barras) ──────────────────────────────────────
 
-function DailyPnlChart({ data, isDark }) {
+function DailyPnlChart({ data, isDark, suffix }) {
   const ref = useRef(null)
 
   useEffect(() => {
@@ -189,7 +189,7 @@ function DailyPnlChart({ data, isDark }) {
     })
 
     const series = chart.addHistogramSeries({
-      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}` },
+      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}${suffix || ''}` },
     })
 
     const validData = (data || [])
@@ -229,7 +229,7 @@ function DailyPnlChart({ data, isDark }) {
 
 // ─── Activity Chart (Barras NARANJAS) ─────────────────────────
 
-function ActivityHeatmap({ data, isDark }) {
+function ActivityHeatmap({ data, isDark, suffix }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
   
@@ -263,7 +263,7 @@ function ActivityHeatmap({ data, isDark }) {
     const pnlSeries = chart.addLineSeries({
       color: '#3b82f6',  // Azul
       lineWidth: 2,
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'left',
     })
 
@@ -324,7 +324,7 @@ function ActivityHeatmap({ data, isDark }) {
       toolTip.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
         <div>Trades: <span style="font-weight: 600; color: #f97316;">${dayData.count || 0}</span></div>
-        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)} USDT</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)}${suffix || ' USDT'}</span></div>
       `
 
       const rect = ref.current.getBoundingClientRect()
@@ -347,7 +347,7 @@ function ActivityHeatmap({ data, isDark }) {
       toolTip.remove()
       chart.remove()
     }
-  }, [safeData, isDark])
+  }, [safeData, isDark, suffix])
 
   if (safeData.length === 0) {
     return (
@@ -378,7 +378,7 @@ function ActivityHeatmap({ data, isDark }) {
 
 // ─── Hourly Distribution Chart (Lineal con MEDIA) ─────────────
 
-function HourlyChart({ data, isDark }) {
+function HourlyChart({ data, isDark, suffix }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
 
@@ -412,7 +412,7 @@ function HourlyChart({ data, isDark }) {
       color: '#a855f7',  // Morado
       lineWidth: 2,
       title: 'PnL',
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'right',
     })
 
@@ -422,7 +422,7 @@ function HourlyChart({ data, isDark }) {
       lineWidth: 1,
       lineStyle: 2,  // Punteada
       title: 'Media',
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)} USDT` },
+      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'right',
     })
 
@@ -500,9 +500,9 @@ function HourlyChart({ data, isDark }) {
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}:00 - ${param.time}:59</div>
         <div>Trades: <span style="font-weight: 600;">${hourData.trades}</span></div>
         <div>Win Rate: <span style="font-weight: 600;">${(hourData.winRate * 100).toFixed(1)}%</span></div>
-        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)} USDT</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)}${suffix || ' USDT'}</span></div>
         <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid ${isDark ? '#374151' : '#e5e7eb'};">
-          vs Media: <span style="font-weight: 600; color: ${vsAvgColor}">${vsAvg} ${signed(avgPnl)}</span>
+          vs Media: <span style="font-weight: 600; color: ${vsAvgColor}">${vsAvg} ${signed(avgPnl)}${suffix || ' USDT'}</span>
         </div>
       `
 
@@ -526,7 +526,7 @@ function HourlyChart({ data, isDark }) {
       toolTip.remove()
       chart.remove()
     }
-  }, [safeData, isDark])
+  }, [safeData, isDark, suffix])
 
   if (safeData.length === 0) {
     return (
@@ -675,6 +675,7 @@ export default function AnalyticsPage() {
   const [selectedBot, setSelectedBot] = useState('')
   const [selectedSource, setSelectedSource] = useState('')
   const [isDark, setIsDark]       = useState(false)
+  const [displayMode, setDisplayMode] = useState('usdt') // 'usdt' | 'percent'
   
   // Estado para modal de detalle de trades
   const [selectedBotDetail, setSelectedBotDetail] = useState(null)
@@ -789,6 +790,32 @@ export default function AnalyticsPage() {
     if (!totalEquity || totalEquity <= 0) return null
     return (Number(pnl ?? 0) / totalEquity * 100).toFixed(2)
   }
+
+  // Transformar datos de gráficas a % si es necesario
+  const toChartVal = (val) => displayMode === 'percent' && totalEquity > 0
+    ? (Number(val) / totalEquity * 100)
+    : Number(val)
+  const chartSuffix = displayMode === 'percent' && totalEquity > 0 ? '%' : null
+
+  const equityCurveData = useMemo(() => {
+    if (!summary?.equity_curve || displayMode === 'usdt') return summary?.equity_curve
+    return summary.equity_curve.map(p => ({ ...p, cumulative_pnl: toChartVal(p.cumulative_pnl) }))
+  }, [summary?.equity_curve, displayMode, totalEquity])
+
+  const dailyPnlData = useMemo(() => {
+    if (!dailyPnl || displayMode === 'usdt') return dailyPnl
+    return dailyPnl.map(p => ({ ...p, daily_pnl: toChartVal(p.daily_pnl) }))
+  }, [dailyPnl, displayMode, totalEquity])
+
+  const heatmapDataPct = useMemo(() => {
+    if (!heatmapData || displayMode === 'usdt') return heatmapData
+    return heatmapData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+  }, [heatmapData, displayMode, totalEquity])
+
+  const hourlyDataPct = useMemo(() => {
+    if (!hourlyData || displayMode === 'usdt') return hourlyData
+    return hourlyData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+  }, [hourlyData, displayMode, totalEquity])
 
   return (
     <div className="space-y-6">
@@ -931,6 +958,30 @@ export default function AnalyticsPage() {
         </div>
       )}
 
+      {/* Toggle USDT / % */}
+      {totalEquity > 0 && (
+        <div className="flex justify-end">
+          <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
+            {[
+              { value: 'usdt', label: 'USDT' },
+              { value: 'percent', label: '%' },
+            ].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setDisplayMode(opt.value)}
+                className={`px-3 py-1 text-xs rounded-md transition-colors ${
+                  displayMode === opt.value
+                    ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
+                    : 'text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-200'
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Heatmap de actividad */}
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
@@ -940,7 +991,7 @@ export default function AnalyticsPage() {
           </div>
           <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
         </div>
-        <ActivityHeatmap data={heatmapData} isDark={isDark} />
+        <ActivityHeatmap data={heatmapDataPct} isDark={isDark} suffix={chartSuffix} />
       </div>
 
       {/* Distribución horaria */}
@@ -951,13 +1002,13 @@ export default function AnalyticsPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
           </div>
         </div>
-        <HourlyChart data={hourlyData} isDark={isDark} />
+        <HourlyChart data={hourlyDataPct} isDark={isDark} suffix={chartSuffix} />
       </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Curva de equity</h2>
-        <EquityChart data={summary.equity_curve} isDark={isDark} />
+        <EquityChart data={equityCurveData} isDark={isDark} suffix={chartSuffix} />
       </div>
 
       {/* PnL diario */}
@@ -977,7 +1028,7 @@ export default function AnalyticsPage() {
             <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
           </div>
         </div>
-        <DailyPnlChart data={dailyPnl} isDark={isDark} />
+        <DailyPnlChart data={dailyPnlData} isDark={isDark} suffix={chartSuffix} />
         {dailyStats && (
           <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
