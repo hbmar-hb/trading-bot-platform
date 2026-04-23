@@ -4,6 +4,7 @@ import { createChart } from 'lightweight-charts'
 import { analyticsService } from '@/services/analytics'
 import { botsService } from '@/services/bots'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
+import useBalanceStore from '@/store/balanceStore'
 import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw, Filter, Clock, Calendar, Bot, User, ChevronDown, ChevronUp, Eye } from 'lucide-react'
 import { getDateRange } from '@/utils/dateRanges'
 import TradeDetailModal from '@/components/Analytics/TradeDetailModal'
@@ -587,6 +588,7 @@ function HourlyChart({ data, isDark }) {
 function PeriodComparison({ summary }) {
   const [periodData, setPeriodData] = useState({})
   const [loading, setLoading] = useState(false)
+  const totalEquity = useBalanceStore(s => s.getTotalEquity())
 
   useEffect(() => {
     const fetchPeriods = async () => {
@@ -633,12 +635,14 @@ function PeriodComparison({ summary }) {
       {['7d', '30d'].map(periodLabel => {
         const d = periodData[periodLabel]
         if (!d) return null
+        const pct = totalEquity > 0 ? (d.pnl / totalEquity * 100).toFixed(2) : null
         
         return (
           <div key={periodLabel} className="bg-slate-50 dark:bg-gray-800/40 rounded-lg p-3">
             <p className="text-xs text-slate-400 mb-2">Últimos {periodLabel}</p>
             <p className={`text-lg font-bold font-mono ${d.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {signed(d.pnl)} USDT
+              {pct && <span className="text-sm ml-1 opacity-80">({signed(pct)}%)</span>}
             </p>
             <div className="flex gap-2 text-xs text-slate-400 mt-1">
               <span className="text-green-400">{d.positive}d ↑</span>
@@ -777,6 +781,13 @@ export default function AnalyticsPage() {
   const pnlColor = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
   const ddColor = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
 
+  // Equity total para calcular % ROI en analytics
+  const totalEquity = useBalanceStore(s => s.getTotalEquity())
+  const pnlPct = (pnl) => {
+    if (!totalEquity || totalEquity <= 0) return null
+    return (Number(pnl ?? 0) / totalEquity * 100).toFixed(2)
+  }
+
   return (
     <div className="space-y-6">
 
@@ -858,7 +869,7 @@ export default function AnalyticsPage() {
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           <StatCard label="PnL total" value={`${signed(g.total_pnl)} USDT`}
-            sub={`Media ${signed(g.average_pnl)} / trade`}
+            sub={pnlPct(g.total_pnl) ? `Media ${signed(g.average_pnl)} · ${signed(pnlPct(g.total_pnl))}%` : `Media ${signed(g.average_pnl)} / trade`}
             color={pnlColor} />
           <StatCard label="Win rate"
             value={pct(g.win_rate)}
@@ -870,15 +881,19 @@ export default function AnalyticsPage() {
             color={g.profit_factor >= 1.5 ? 'green' : g.profit_factor >= 1 ? 'yellow' : 'red'} />
           <StatCard label="Max drawdown"
             value={`-${fmt(g.max_drawdown)} USDT`}
-            sub="caída máx. desde pico"
+            sub={pnlPct(-g.max_drawdown) ? `${signed(pnlPct(-g.max_drawdown))}% del equity` : 'caída máx. desde pico'}
             color={ddColor} />
         </div>
       </div>
 
       {/* Fila 2: detalles */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Mejor trade"  value={`+${fmt(g.best_trade)} USDT`}  color="green" />
-        <StatCard label="Peor trade"   value={`${signed(g.worst_trade)} USDT`} color="red" />
+        <StatCard label="Mejor trade"  value={`+${fmt(g.best_trade)} USDT`}
+          sub={pnlPct(g.best_trade) ? `${signed(pnlPct(g.best_trade))}%` : null}
+          color="green" />
+        <StatCard label="Peor trade"   value={`${signed(g.worst_trade)} USDT`}
+          sub={pnlPct(g.worst_trade) ? `${signed(pnlPct(g.worst_trade))}%` : null}
+          color="red" />
         <StatCard label="Duración media" value={`${fmt(g.avg_duration_hours, 1)}h`} sub="por operación" />
         <StatCard label="Trades totales" value={g.total_trades}
           sub={`${g.long_trades} longs · ${g.short_trades} shorts`} />
@@ -895,6 +910,7 @@ export default function AnalyticsPage() {
             </div>
             <p className={`text-lg font-bold font-mono ${parseFloat(g.long_pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {signed(g.long_pnl)} USDT
+              {pnlPct(g.long_pnl) && <span className="text-sm ml-1 opacity-80">({signed(pnlPct(g.long_pnl))}%)</span>}
             </p>
             <WinRateBar rate={g.long_win_rate} />
           </div>
@@ -906,6 +922,7 @@ export default function AnalyticsPage() {
             </div>
             <p className={`text-lg font-bold font-mono ${parseFloat(g.short_pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {signed(g.short_pnl)} USDT
+              {pnlPct(g.short_pnl) && <span className="text-sm ml-1 opacity-80">({signed(pnlPct(g.short_pnl))}%)</span>}
             </p>
             <WinRateBar rate={g.short_win_rate} />
           </div>
@@ -969,10 +986,12 @@ export default function AnalyticsPage() {
             </span>
             <span>
               Mejor día: <span className="text-green-400 font-medium">+{fmt(dailyStats.best)} USDT</span>
+              {pnlPct(dailyStats.best) && <span className="opacity-70 ml-1">({signed(pnlPct(dailyStats.best))}%)</span>}
             </span>
             {dailyStats.worst < 0 && (
               <span>
                 Peor día: <span className="text-red-400 font-medium">{signed(dailyStats.worst)} USDT</span>
+                {pnlPct(dailyStats.worst) && <span className="opacity-70 ml-1">({signed(pnlPct(dailyStats.worst))}%)</span>}
               </span>
             )}
           </div>
@@ -1000,6 +1019,7 @@ export default function AnalyticsPage() {
                   <div className="flex items-center gap-2">
                     <span className={`text-sm font-bold font-mono ${parseFloat(bot.total_pnl) >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                       {signed(bot.total_pnl)} USDT
+                      {pnlPct(bot.total_pnl) && <span className="text-xs ml-1 opacity-80">({signed(pnlPct(bot.total_pnl))}%)</span>}
                     </span>
                     <button
                       onClick={() => {
