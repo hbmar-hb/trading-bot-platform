@@ -759,6 +759,32 @@ export default function AnalyticsPage() {
     }
   }, [dailyPnl])
 
+  // Transformar datos de gráficas a % si es necesario (antes de cualquier return)
+  const toChartVal = (val) => displayMode === 'percent' && totalEquity > 0
+    ? (Number(val) / totalEquity * 100)
+    : Number(val)
+  const chartSuffix = displayMode === 'percent' && totalEquity > 0 ? '%' : null
+
+  const equityCurveData = useMemo(() => {
+    if (!summary?.equity_curve || displayMode === 'usdt') return summary?.equity_curve
+    return summary.equity_curve.map(p => ({ ...p, cumulative_pnl: toChartVal(p.cumulative_pnl) }))
+  }, [summary?.equity_curve, displayMode, totalEquity])
+
+  const dailyPnlData = useMemo(() => {
+    if (!dailyPnl || displayMode === 'usdt') return dailyPnl
+    return dailyPnl.map(p => ({ ...p, daily_pnl: toChartVal(p.daily_pnl) }))
+  }, [dailyPnl, displayMode, totalEquity])
+
+  const heatmapDataPct = useMemo(() => {
+    if (!heatmapData || displayMode === 'usdt') return heatmapData
+    return heatmapData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+  }, [heatmapData, displayMode, totalEquity])
+
+  const hourlyDataPct = useMemo(() => {
+    if (!hourlyData || displayMode === 'usdt') return hourlyData
+    return hourlyData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+  }, [hourlyData, displayMode, totalEquity])
+
   if (loading) {
     return (
       <div className="flex justify-center py-20">
@@ -790,32 +816,6 @@ export default function AnalyticsPage() {
     if (!totalEquity || totalEquity <= 0) return null
     return (Number(pnl ?? 0) / totalEquity * 100).toFixed(2)
   }
-
-  // Transformar datos de gráficas a % si es necesario
-  const toChartVal = (val) => displayMode === 'percent' && totalEquity > 0
-    ? (Number(val) / totalEquity * 100)
-    : Number(val)
-  const chartSuffix = displayMode === 'percent' && totalEquity > 0 ? '%' : null
-
-  const equityCurveData = useMemo(() => {
-    if (!summary?.equity_curve || displayMode === 'usdt') return summary?.equity_curve
-    return summary.equity_curve.map(p => ({ ...p, cumulative_pnl: toChartVal(p.cumulative_pnl) }))
-  }, [summary?.equity_curve, displayMode, totalEquity])
-
-  const dailyPnlData = useMemo(() => {
-    if (!dailyPnl || displayMode === 'usdt') return dailyPnl
-    return dailyPnl.map(p => ({ ...p, daily_pnl: toChartVal(p.daily_pnl) }))
-  }, [dailyPnl, displayMode, totalEquity])
-
-  const heatmapDataPct = useMemo(() => {
-    if (!heatmapData || displayMode === 'usdt') return heatmapData
-    return heatmapData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
-  }, [heatmapData, displayMode, totalEquity])
-
-  const hourlyDataPct = useMemo(() => {
-    if (!hourlyData || displayMode === 'usdt') return hourlyData
-    return hourlyData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
-  }, [hourlyData, displayMode, totalEquity])
 
   return (
     <div className="space-y-6">
