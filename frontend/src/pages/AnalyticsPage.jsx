@@ -955,8 +955,8 @@ export default function AnalyticsPage() {
         <div className="flex justify-end">
           <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
             {[
-              { value: 'usdt', label: 'USDT' },
-              { value: 'percent', label: '%' },
+              { value: 'usdt', label: 'USDT $' },
+              { value: 'percent', label: '% ROI' },
             ].map(opt => (
               <button
                 key={opt.value}
