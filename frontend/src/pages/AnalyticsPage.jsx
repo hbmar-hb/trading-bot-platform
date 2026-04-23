@@ -147,11 +147,13 @@ function EquityChart({ data, isDark, displayMode, totalEquity }) {
       })
       .filter(p => p.time > 0)
     
-    if (points.length === 0) {
-      return () => { destroyed = true; obs.disconnect(); chart.remove() }
+    const validPoints = points.filter(p => Number.isFinite(p.value))
+    if (validPoints.length === 0) {
+      chart.remove()
+      return
     }
 
-    series.setData(points)
+    series.setData(validPoints)
     chart.timeScale().fitContent()
 
     let destroyed = false
@@ -211,6 +213,7 @@ function DailyPnlChart({ data, isDark, displayMode, totalEquity }) {
           color: raw >= 0 ? '#22c55e' : '#ef4444',
         }
       })
+      .filter(p => Number.isFinite(p.value))
     
     if (validData.length > 0) {
       series.setData(validData)
@@ -295,10 +298,11 @@ function ActivityHeatmap({ data, isDark, displayMode, totalEquity }) {
       color: (p.trades || 0) > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
     })))
 
-    pnlSeries.setData(points.filter(p => p.time && !isNaN(p.pnl)).map(p => ({
-      time: p.time,
-      value: p.pnl,
-    })))
+    const pnlPoints = points
+      .filter(p => p.time && !isNaN(p.pnl))
+      .map(p => ({ time: p.time, value: toVal(p.pnl) }))
+      .filter(p => Number.isFinite(p.value))
+    pnlSeries.setData(pnlPoints)
 
     // Tooltip
     const toolTip = document.createElement('div')
@@ -462,16 +466,16 @@ function HourlyChart({ data, isDark, displayMode, totalEquity }) {
       }
     })
 
-    pnlSeries.setData(hourlyPoints.map(p => ({
-      time: p.time,
-      value: toVal(p.pnl),
-    })))
+    const hourlyPnlPoints = hourlyPoints
+      .map(p => ({ time: p.time, value: toVal(p.pnl) }))
+      .filter(p => Number.isFinite(p.value))
+    pnlSeries.setData(hourlyPnlPoints)
 
     // Línea de media (mismo valor para todas las horas)
-    avgSeries.setData(hourlyPoints.map(p => ({
-      time: p.time,
-      value: avgPnl,
-    })))
+    const avgPoints = hourlyPoints
+      .map(p => ({ time: p.time, value: avgPnl }))
+      .filter(p => Number.isFinite(p.value))
+    avgSeries.setData(avgPoints)
 
     tradesSeries.setData(hourlyPoints.map(p => ({
       time: p.time,
@@ -983,7 +987,7 @@ export default function AnalyticsPage() {
           </div>
           <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
         </div>
-        <ActivityHeatmap key={`act-${displayMode}`} data={heatmapData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <ActivityHeatmap data={heatmapData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* Distribución horaria */}
@@ -994,13 +998,13 @@ export default function AnalyticsPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
           </div>
         </div>
-        <HourlyChart key={`hour-${displayMode}`} data={hourlyData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <HourlyChart data={hourlyData} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Curva de equity</h2>
-        <EquityChart key={`eq-${displayMode}`} data={summary.equity_curve} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <EquityChart data={summary.equity_curve} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
       </div>
 
       {/* PnL diario */}
@@ -1020,7 +1024,7 @@ export default function AnalyticsPage() {
             <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
           </div>
         </div>
-        <DailyPnlChart key={`daily-${displayMode}`} data={dailyPnl} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
+        <DailyPnlChart data={dailyPnl} isDark={isDark} displayMode={displayMode} totalEquity={totalEquity} />
         {dailyStats && (
           <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
