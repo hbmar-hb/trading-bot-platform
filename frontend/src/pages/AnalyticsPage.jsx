@@ -680,6 +680,9 @@ export default function AnalyticsPage() {
   const [selectedBotDetail, setSelectedBotDetail] = useState(null)
   const [showTradeModal, setShowTradeModal] = useState(false)
 
+  // Hook SIEMPRE antes de cualquier return condicional
+  const totalEquity = useBalanceStore(s => s.getTotalEquity())
+
   useEffect(() => {
     const check = () => setIsDark(document.documentElement.classList.contains('dark'))
     check()
@@ -781,8 +784,7 @@ export default function AnalyticsPage() {
   const pnlColor = parseFloat(g.total_pnl) >= 0 ? 'green' : 'red'
   const ddColor = parseFloat(g.max_drawdown) > 0 ? 'red' : 'default'
 
-  // Equity total para calcular % ROI en analytics
-  const totalEquity = useBalanceStore(s => s.getTotalEquity())
+  // % ROI sobre equity total (totalEquity declarado arriba, antes de returns)
   const pnlPct = (pnl) => {
     if (!totalEquity || totalEquity <= 0) return null
     return (Number(pnl ?? 0) / totalEquity * 100).toFixed(2)
