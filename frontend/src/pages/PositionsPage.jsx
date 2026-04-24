@@ -8,6 +8,16 @@ import PositionChartModal from '@/components/Positions/PositionChartModal'
 import api from '@/services/api'
 
 // Función para formatear precios con decimales dinámicos
+function timeAgo(ts) {
+  const seconds = Math.floor((Date.now() - ts) / 1000)
+  if (seconds < 10) return 'ahora'
+  if (seconds < 60) return `hace ${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `hace ${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  return `hace ${hours}h`
+}
+
 function formatPrice(price, decimals = null) {
   if (price === null || price === undefined) return '—'
   const num = parseFloat(price)
@@ -413,6 +423,19 @@ function ExternalPositionsSection({ onAdopted }) {
 
 export default function PositionsPage() {
   const { positions, loading, refresh, counts } = useUnifiedPositions()
+  const [lastUpdated, setLastUpdated] = useState(Date.now())
+  
+  useEffect(() => {
+    setLastUpdated(Date.now())
+  }, [positions])
+  
+  // Forzar re-render cada 10s para actualizar el texto "hace X seg"
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const interval = setInterval(() => setTick(t => t + 1), 10000)
+    return () => clearInterval(interval)
+  }, [])
+  
   const prices = usePositionStore(s => s.prices)
   const priceChanges = usePositionStore(s => s.priceChanges)
   const [selectedPosition, setSelectedPosition] = useState(null)
@@ -560,6 +583,9 @@ export default function PositionsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-slate-900 dark:text-white">Posiciones</h1>
+          <span className="text-[10px] text-slate-400 dark:text-gray-500 hidden sm:inline">
+            Actualizado {timeAgo(lastUpdated)}
+          </span>
           <button
             onClick={handleSyncAll}
             disabled={syncingAll || loading}
@@ -648,8 +674,10 @@ export default function PositionsPage() {
         </div>
       </div>
 
-      {loading ? (
-        <p className="text-slate-500 dark:text-gray-400 text-sm">Cargando...</p>
+      {loading && positions.length === 0 ? (
+        <div className="card flex items-center justify-center py-10 gap-2 text-slate-500 dark:text-gray-400 text-sm">
+          <Loader2 size={16} className="animate-spin" /> Cargando posiciones...
+        </div>
       ) : filteredPositions.length === 0 ? (
         <div className="card text-center py-10">
           <p className="text-slate-500 dark:text-gray-400">

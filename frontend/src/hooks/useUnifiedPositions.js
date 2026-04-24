@@ -1,29 +1,31 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { positionsService } from '@/services/positions'
 import usePositionStore from '@/store/positionStore'
 
 export function useUnifiedPositions() {
   const [positions, setPositions] = useState([])
   const [loading, setLoading] = useState(true)
+  const hasLoadedOnce = useRef(false)
   const prices = usePositionStore(s => s.prices)
   const priceChanges = usePositionStore(s => s.priceChanges)
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
+  const refresh = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const { data } = await positionsService.unified(true) // includeManual = true
       setPositions(data)
+      hasLoadedOnce.current = true
     } catch (err) {
       console.error('Error loading unified positions:', err)
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [])
 
   useEffect(() => {
-    refresh()
-    // Polling fallback cada 15s por si el WS se cae o el símbolo no está monitorizado
-    const interval = setInterval(refresh, 15000)
+    refresh(false) // Primera carga: loading visible
+    // Polling fallback cada 15s: actualización silenciosa (sin spinner)
+    const interval = setInterval(() => refresh(true), 15000)
     return () => clearInterval(interval)
   }, [refresh])
 

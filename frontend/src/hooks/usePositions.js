@@ -1,23 +1,25 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { positionsService } from '@/services/positions'
 import usePositionStore from '@/store/positionStore'
 
 export function usePositions() {
   const { openPositions, loading, setOpenPositions, setLoading } = usePositionStore()
+  const hasLoadedOnce = useRef(false)
 
-  const refresh = useCallback(async () => {
-    setLoading(true)
+  const refresh = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true)
     try {
       const { data } = await positionsService.open()
       setOpenPositions(data)
+      hasLoadedOnce.current = true
     } catch { /* noop */ }
-    finally { setLoading(false) }
+    finally { if (!silent) setLoading(false) }
   }, [])
 
   useEffect(() => {
-    refresh()
-    // Polling fallback cada 15s por si el WS se cae
-    const interval = setInterval(refresh, 15000)
+    refresh(false) // Primera carga: loading visible
+    // Polling fallback cada 15s: actualización silenciosa (sin spinner)
+    const interval = setInterval(() => refresh(true), 15000)
     return () => clearInterval(interval)
   }, [])
 

@@ -104,60 +104,128 @@ function StreakBadge({ streak }) {
 
 // ─── Equity chart (line) ──────────────────────────────────────
 
-function EquityChart({ data, isDark, suffix }) {
+function EquityChart({ data, isDark, displayMode, setDisplayMode }) {
   const ref = useRef(null)
+  const suffix = displayMode === 'percent' ? '%' : ' USDT'
 
   useEffect(() => {
     if (!ref.current || !data?.length) return
+    let chart = null
+    try {
+      const bg      = isDark ? '#030712' : '#ffffff'
+      const text    = isDark ? '#9ca3af' : '#64748b'
+      const grid    = isDark ? '#1f2937' : '#e2e8f0'
 
-    const bg      = isDark ? '#030712' : '#ffffff'
-    const text    = isDark ? '#9ca3af' : '#64748b'
-    const grid    = isDark ? '#1f2937' : '#e2e8f0'
-
-    const chart = createChart(ref.current, {
-      layout:     { background: { color: bg }, textColor: text },
-      grid:       { vertLines: { color: grid }, horzLines: { color: grid } },
-      timeScale:  { borderColor: grid },
-      rightPriceScale: { borderColor: grid },
-      height: 220,
-    })
-
-    const series = chart.addAreaSeries({
-      lineColor:   '#3b82f6',
-      lineWidth:   2,
-      topColor:    'rgba(59,130,246,0.15)',
-      bottomColor: 'rgba(59,130,246,0)',
-      crosshairMarkerVisible: true,
-      priceFormat: { type: 'custom', formatter: v => `${(v ?? 0) >= 0 ? '+' : ''}${Number(v ?? 0).toFixed(2)}${suffix || ' USDT'}` },
-    })
-
-    const points = data
-      .filter(p => p.timestamp && p.cumulative_pnl !== null && p.cumulative_pnl !== undefined)
-      .map(p => {
-        const time = Math.floor(new Date(p.timestamp).getTime() / 1000)
-        const value = parseFloat(p.cumulative_pnl)
-        return { 
-          time: Number.isFinite(time) ? time : 0, 
-          value: Number.isFinite(value) ? value : 0 
-        }
+      chart = createChart(ref.current, {
+        layout:     { background: { color: bg }, textColor: text },
+        grid:       { vertLines: { color: grid }, horzLines: { color: grid } },
+        timeScale:  { borderColor: grid },
+        rightPriceScale: { borderColor: grid },
+        height: 220,
       })
-      .filter(p => p.time > 0)
-    
-    if (points.length === 0) {
-      return () => { destroyed = true; obs.disconnect(); chart.remove() }
+
+      // Ultra-strict validation
+      const rawPoints = data
+        .map((p, idx) => {
+          if (!p || typeof p !== 'object') return null
+          const ts = p.timestamp
+          const pnl = p.cumulative_pnl
+          if (ts == null || pnl == null) return null
+          const time = Math.floor(new Date(ts).getTime() / 1000)
+          const value = parseFloat(pnl)
+          if (!Number.isFinite(time) || time <= 0) return null
+          if (!Number.isFinite(value)) return null
+          return { time, value, idx }
+        })
+        .filter(Boolean)
+
+      if (rawPoints.length === 0) {
+        chart.remove()
+        return
+      }
+
+      // Sort by time and deduplicate (lightweight-charts requires this)
+      const seen = new Set()
+      const points = rawPoints
+        .sort((a, b) => a.time - b.time)
+        .filter(p => {
+          if (seen.has(p.time)) return false
+          seen.add(p.time)
+          return true
+        })
+        .map(p => ({ time: p.time, value: p.value }))
+
+      if (points.length === 0) {
+        chart.remove()
+        return
+      }
+
+      const series = chart.addLineSeries({
+        color: '#3b82f6',
+        lineWidth: 2,
+      })
+
+      series.setData(points)
+      chart.timeScale().fitContent()
+
+      // Tooltip
+      const toolTip = document.createElement('div')
+      toolTip.style.cssText = `
+        position: absolute;
+        display: none;
+        padding: 8px 12px;
+        box-sizing: border-box;
+        font-size: 12px;
+        text-align: left;
+        z-index: 1000;
+        pointer-events: none;
+        border-radius: 6px;
+        background: ${isDark ? '#1f2937' : '#ffffff'};
+        color: ${isDark ? '#e5e7eb' : '#1f2937'};
+        border: 1px solid ${isDark ? '#374151' : '#e5e7eb'};
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      `
+      ref.current.appendChild(toolTip)
+
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.time || param.point === undefined) {
+          toolTip.style.display = 'none'
+          return
+        }
+
+        const dataPoint = param.seriesData.get(series)
+        if (!dataPoint) {
+          toolTip.style.display = 'none'
+          return
+        }
+
+        const dateStr = new Date(dataPoint.time * 1000).toLocaleDateString('es-ES')
+        const value = dataPoint.value
+        const valColor = value >= 0 ? '#22c55e' : '#ef4444'
+
+        toolTip.innerHTML = `
+          <div style="font-weight: 600; margin-bottom: 4px;">${dateStr}</div>
+          <div>PnL acumulado: <span style="font-weight: 600; color: ${valColor};">${signed(value)}${suffix}</span></div>
+        `
+
+        const rect = ref.current.getBoundingClientRect()
+        toolTip.style.left = `${param.point.x + 10}px`
+        toolTip.style.top = `${param.point.y - 10}px`
+        toolTip.style.display = 'block'
+      })
+
+      let destroyed = false
+      const obs = new ResizeObserver(() => {
+        if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
+      })
+      obs.observe(ref.current)
+
+      return () => { destroyed = true; obs.disconnect(); toolTip.remove(); chart.remove() }
+    } catch (e) {
+      console.error('EquityChart error:', e)
+      if (chart) try { chart.remove() } catch (_) {}
     }
-
-    series.setData(points)
-    chart.timeScale().fitContent()
-
-    let destroyed = false
-    const obs = new ResizeObserver(() => {
-      if (!destroyed && ref.current) chart.applyOptions({ width: ref.current.clientWidth })
-    })
-    obs.observe(ref.current)
-
-    return () => { destroyed = true; obs.disconnect(); chart.remove() }
-  }, [data, isDark])
+  }, [data, isDark, suffix])
 
   if (!data?.length) return (
     <div className="h-[220px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
@@ -165,16 +233,32 @@ function EquityChart({ data, isDark, suffix }) {
     </div>
   )
 
-  return <div ref={ref} className="w-full" />
+  return (
+    <div className="space-y-2">
+      <div ref={ref} className="w-full relative" />
+      <div className="flex items-center justify-center gap-4 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-4 h-0.5 bg-blue-500" />
+          <span
+            className="text-slate-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 transition-colors select-none"
+            onClick={() => setDisplayMode(displayMode === 'usdt' ? 'percent' : 'usdt')}
+          >
+            PnL {displayMode === 'percent' ? '(%)' : '(USDT)'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── PnL diario (barras) ──────────────────────────────────────
 
-function DailyPnlChart({ data, isDark, suffix }) {
+function DailyPnlChart({ data, isDark, displayMode, setDisplayMode }) {
   const ref = useRef(null)
+  const suffix = displayMode === 'percent' ? '%' : ' USDT'
 
   useEffect(() => {
-    if (!ref.current) return
+    if (!ref.current || !data?.length) return
 
     const bg   = isDark ? '#030712' : '#ffffff'
     const text = isDark ? '#9ca3af' : '#64748b'
@@ -189,11 +273,11 @@ function DailyPnlChart({ data, isDark, suffix }) {
     })
 
     const series = chart.addHistogramSeries({
-      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}${suffix || ''}` },
+      priceFormat: { type: 'custom', formatter: v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}` },
     })
 
     const validData = (data || [])
-      .filter(p => p.date && p.daily_pnl !== null && p.daily_pnl !== undefined)
+      .filter(p => p && p.date && p.daily_pnl != null)
       .map(p => {
         const value = parseFloat(p.daily_pnl)
         return {
@@ -203,11 +287,58 @@ function DailyPnlChart({ data, isDark, suffix }) {
         }
       })
     
-    if (validData.length > 0) {
-      series.setData(validData)
+    if (validData.length === 0) {
+      chart.remove()
+      return
     }
 
+    series.setData(validData)
     chart.timeScale().fitContent()
+
+    // Tooltip
+    const toolTip = document.createElement('div')
+    toolTip.style.cssText = `
+      position: absolute;
+      display: none;
+      padding: 8px 12px;
+      box-sizing: border-box;
+      font-size: 12px;
+      text-align: left;
+      z-index: 1000;
+      pointer-events: none;
+      border-radius: 6px;
+      background: ${isDark ? '#1f2937' : '#ffffff'};
+      color: ${isDark ? '#e5e7eb' : '#1f2937'};
+      border: 1px solid ${isDark ? '#374151' : '#e5e7eb'};
+      box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+    `
+    ref.current.appendChild(toolTip)
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || param.point === undefined) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const dataPoint = param.seriesData.get(series)
+      if (!dataPoint) {
+        toolTip.style.display = 'none'
+        return
+      }
+
+      const value = dataPoint.value
+      const color = value >= 0 ? '#22c55e' : '#ef4444'
+
+      toolTip.innerHTML = `
+        <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
+        <div>PnL: <span style="font-weight: 600; color: ${color};">${signed(value)}${suffix}</span></div>
+      `
+
+      const rect = ref.current.getBoundingClientRect()
+      toolTip.style.left = `${param.point.x + 10}px`
+      toolTip.style.top = `${param.point.y - 10}px`
+      toolTip.style.display = 'block'
+    })
 
     let destroyed = false
     const obs = new ResizeObserver(() => {
@@ -215,8 +346,8 @@ function DailyPnlChart({ data, isDark, suffix }) {
     })
     obs.observe(ref.current)
 
-    return () => { destroyed = true; obs.disconnect(); chart.remove() }
-  }, [data, isDark])
+    return () => { destroyed = true; obs.disconnect(); toolTip.remove(); chart.remove() }
+  }, [data, isDark, suffix])
 
   if (!data?.length) return (
     <div className="h-[180px] flex items-center justify-center text-slate-400 dark:text-gray-500 text-sm">
@@ -224,14 +355,37 @@ function DailyPnlChart({ data, isDark, suffix }) {
     </div>
   )
 
-  return <div ref={ref} className="w-full" />
+  return (
+    <div className="space-y-2">
+      <div ref={ref} className="w-full relative" />
+      <div className="flex items-center justify-center gap-4 text-xs">
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded bg-green-500" />
+          <span className="text-slate-500 dark:text-gray-400">Positivo</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="w-3 h-3 rounded bg-red-500" />
+          <span className="text-slate-500 dark:text-gray-400">Negativo</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span
+            className="text-slate-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 transition-colors select-none"
+            onClick={() => setDisplayMode(displayMode === 'usdt' ? 'percent' : 'usdt')}
+          >
+            PnL {displayMode === 'percent' ? '(%)' : '(USDT)'}
+          </span>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 // ─── Activity Chart (Barras NARANJAS) ─────────────────────────
 
-function ActivityHeatmap({ data, isDark, suffix }) {
+function ActivityHeatmap({ data, isDark, displayMode, setDisplayMode }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
+  const suffix = displayMode === 'percent' ? '%' : ' USDT'
   
   useEffect(() => {
     if (!ref.current || safeData.length === 0) return
@@ -263,7 +417,6 @@ function ActivityHeatmap({ data, isDark, suffix }) {
     const pnlSeries = chart.addLineSeries({
       color: '#3b82f6',  // Azul
       lineWidth: 2,
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'left',
     })
 
@@ -276,16 +429,24 @@ function ActivityHeatmap({ data, isDark, suffix }) {
       pnl: parseFloat(d.pnl || 0),
     }))
 
-    tradesSeries.setData(points.filter(p => p.time).map(p => ({
+    const tradesPoints = points.filter(p => p.time).map(p => ({
       time: p.time,
       value: p.trades || 0,
       color: (p.trades || 0) > 0 ? 'rgba(249, 115, 22, 0.7)' : 'rgba(249, 115, 22, 0.2)',
-    })))
+    }))
 
-    pnlSeries.setData(points.filter(p => p.time && !isNaN(p.pnl)).map(p => ({
+    const pnlPoints = points.filter(p => p.time && Number.isFinite(p.pnl)).map(p => ({
       time: p.time,
       value: p.pnl,
-    })))
+    }))
+
+    if (tradesPoints.length === 0 && pnlPoints.length === 0) {
+      chart.remove()
+      return
+    }
+
+    if (tradesPoints.length > 0) tradesSeries.setData(tradesPoints)
+    if (pnlPoints.length > 0) pnlSeries.setData(pnlPoints)
 
     // Tooltip
     const toolTip = document.createElement('div')
@@ -324,7 +485,7 @@ function ActivityHeatmap({ data, isDark, suffix }) {
       toolTip.innerHTML = `
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}</div>
         <div>Trades: <span style="font-weight: 600; color: #f97316;">${dayData.count || 0}</span></div>
-        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)}${suffix || ' USDT'}</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(pnl)}${suffix}</span></div>
       `
 
       const rect = ref.current.getBoundingClientRect()
@@ -359,7 +520,7 @@ function ActivityHeatmap({ data, isDark, suffix }) {
 
   return (
     <div className="space-y-3">
-      <div ref={ref} className="w-full" />
+      <div ref={ref} className="w-full relative" />
       
       {/* Leyenda */}
       <div className="flex items-center justify-center gap-6 text-xs">
@@ -369,7 +530,12 @@ function ActivityHeatmap({ data, isDark, suffix }) {
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-0.5 bg-blue-500" />
-          <span className="text-slate-500 dark:text-gray-400">PnL</span>
+          <span
+            className="text-slate-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 transition-colors select-none"
+            onClick={() => setDisplayMode(displayMode === 'usdt' ? 'percent' : 'usdt')}
+          >
+            PnL {displayMode === 'percent' ? '(%)' : '(USDT)'}
+          </span>
         </div>
       </div>
     </div>
@@ -378,9 +544,10 @@ function ActivityHeatmap({ data, isDark, suffix }) {
 
 // ─── Hourly Distribution Chart (Lineal con MEDIA) ─────────────
 
-function HourlyChart({ data, isDark, suffix }) {
+function HourlyChart({ data, isDark, displayMode, setDisplayMode }) {
   const ref = useRef(null)
   const safeData = Array.isArray(data) ? data : []
+  const suffix = displayMode === 'percent' ? '%' : ' USDT'
 
   useEffect(() => {
     if (!ref.current || safeData.length === 0) return
@@ -409,26 +576,24 @@ function HourlyChart({ data, isDark, suffix }) {
 
     // Serie de PnL (línea MORADA)
     const pnlSeries = chart.addLineSeries({
-      color: '#a855f7',  // Morado
+      color: '#a855f7',
       lineWidth: 2,
       title: 'PnL',
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'right',
     })
 
     // Serie de MEDIA (línea punteada GRIS)
     const avgSeries = chart.addLineSeries({
-      color: '#6b7280',  // Gris
+      color: '#6b7280',
       lineWidth: 1,
-      lineStyle: 2,  // Punteada
+      lineStyle: 2,
       title: 'Media',
-      priceFormat: { type: 'custom', formatter: v => `${signed(v)}${suffix || ' USDT'}` },
       priceScaleId: 'right',
     })
 
     // Serie de trades (barras ROSAS)
     const tradesSeries = chart.addHistogramSeries({
-      color: 'rgba(236, 72, 153, 0.5)',  // Rosa
+      color: 'rgba(236, 72, 153, 0.5)',
       priceFormat: { type: 'volume' },
       priceScaleId: 'left',
     })
@@ -444,22 +609,22 @@ function HourlyChart({ data, isDark, suffix }) {
       }
     })
 
-    pnlSeries.setData(hourlyPoints.map(p => ({
-      time: p.time,
-      value: p.pnl,
-    })))
-
-    // Línea de media (mismo valor para todas las horas)
-    avgSeries.setData(hourlyPoints.map(p => ({
-      time: p.time,
-      value: avgPnl,
-    })))
-
-    tradesSeries.setData(hourlyPoints.map(p => ({
+    const pnlPoints = hourlyPoints.map(p => ({ time: p.time, value: p.pnl }))
+    const avgPoints = hourlyPoints.map(p => ({ time: p.time, value: avgPnl }))
+    const tradesPoints = hourlyPoints.map(p => ({
       time: p.time,
       value: p.trades,
       color: p.trades > 0 ? 'rgba(236, 72, 153, 0.5)' : 'transparent',
-    })))
+    }))
+
+    if (pnlPoints.length === 0 && tradesPoints.length === 0) {
+      chart.remove()
+      return
+    }
+
+    pnlSeries.setData(pnlPoints)
+    avgSeries.setData(avgPoints)
+    tradesSeries.setData(tradesPoints)
 
     // Tooltip personalizado
     const toolTip = document.createElement('div')
@@ -500,9 +665,9 @@ function HourlyChart({ data, isDark, suffix }) {
         <div style="font-weight: 600; margin-bottom: 4px;">${param.time}:00 - ${param.time}:59</div>
         <div>Trades: <span style="font-weight: 600;">${hourData.trades}</span></div>
         <div>Win Rate: <span style="font-weight: 600;">${(hourData.winRate * 100).toFixed(1)}%</span></div>
-        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)}${suffix || ' USDT'}</span></div>
+        <div>PnL: <span style="font-weight: 600; color: ${pnlColor}">${signed(hourData.pnl)}${suffix}</span></div>
         <div style="margin-top: 4px; padding-top: 4px; border-top: 1px solid ${isDark ? '#374151' : '#e5e7eb'};">
-          vs Media: <span style="font-weight: 600; color: ${vsAvgColor}">${vsAvg} ${signed(avgPnl)}${suffix || ' USDT'}</span>
+          vs Media: <span style="font-weight: 600; color: ${vsAvgColor}">${vsAvg} ${signed(avgPnl)}${suffix}</span>
         </div>
       `
 
@@ -538,7 +703,7 @@ function HourlyChart({ data, isDark, suffix }) {
 
   return (
     <div className="space-y-3">
-      <div ref={ref} className="w-full" />
+      <div ref={ref} className="w-full relative" />
       
       {/* Leyenda */}
       <div className="flex items-center justify-center gap-4 text-xs flex-wrap">
@@ -548,7 +713,12 @@ function HourlyChart({ data, isDark, suffix }) {
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-0.5 bg-purple-500" />
-          <span className="text-slate-500 dark:text-gray-400">PnL</span>
+          <span
+            className="text-slate-500 dark:text-gray-400 cursor-pointer hover:text-blue-500 transition-colors select-none"
+            onClick={() => setDisplayMode(displayMode === 'usdt' ? 'percent' : 'usdt')}
+          >
+            PnL {displayMode === 'percent' ? '(%)' : '(USDT)'}
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <div className="w-4 h-0.5 bg-gray-500" style={{borderStyle: 'dashed'}} />
@@ -760,29 +930,26 @@ export default function AnalyticsPage() {
   }, [dailyPnl])
 
   // Transformar datos de gráficas a % si es necesario (antes de cualquier return)
-  const toChartVal = (val) => displayMode === 'percent' && totalEquity > 0
-    ? (Number(val) / totalEquity * 100)
-    : Number(val)
-  const chartSuffix = displayMode === 'percent' && totalEquity > 0 ? '%' : null
+  const toPct = (val) => totalEquity > 0 ? (Number(val) / totalEquity * 100) : Number(val)
 
   const equityCurveData = useMemo(() => {
     if (!summary?.equity_curve || displayMode === 'usdt') return summary?.equity_curve
-    return summary.equity_curve.map(p => ({ ...p, cumulative_pnl: toChartVal(p.cumulative_pnl) }))
+    return summary.equity_curve.map(p => ({ ...p, cumulative_pnl: toPct(p.cumulative_pnl) }))
   }, [summary?.equity_curve, displayMode, totalEquity])
 
   const dailyPnlData = useMemo(() => {
     if (!dailyPnl || displayMode === 'usdt') return dailyPnl
-    return dailyPnl.map(p => ({ ...p, daily_pnl: toChartVal(p.daily_pnl) }))
+    return dailyPnl.map(p => ({ ...p, daily_pnl: toPct(p.daily_pnl) }))
   }, [dailyPnl, displayMode, totalEquity])
 
   const heatmapDataPct = useMemo(() => {
     if (!heatmapData || displayMode === 'usdt') return heatmapData
-    return heatmapData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+    return heatmapData.map(d => ({ ...d, pnl: toPct(d.pnl) }))
   }, [heatmapData, displayMode, totalEquity])
 
   const hourlyDataPct = useMemo(() => {
     if (!hourlyData || displayMode === 'usdt') return hourlyData
-    return hourlyData.map(d => ({ ...d, pnl: toChartVal(d.pnl) }))
+    return hourlyData.map(d => ({ ...d, pnl: toPct(d.pnl) }))
   }, [hourlyData, displayMode, totalEquity])
 
   if (loading) {
@@ -958,30 +1125,6 @@ export default function AnalyticsPage() {
         </div>
       )}
 
-      {/* Toggle USDT / % */}
-      {totalEquity > 0 && (
-        <div className="flex justify-end">
-          <div className="flex gap-1 bg-slate-100 dark:bg-gray-800 rounded-lg p-1">
-            {[
-              { value: 'usdt', label: 'USDT' },
-              { value: 'percent', label: '%' },
-            ].map(opt => (
-              <button
-                key={opt.value}
-                onClick={() => setDisplayMode(opt.value)}
-                className={`px-3 py-1 text-xs rounded-md transition-colors ${
-                  displayMode === opt.value
-                    ? 'bg-white dark:bg-gray-700 text-slate-900 dark:text-white shadow-sm'
-                    : 'text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-200'
-                }`}
-              >
-                {opt.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-
       {/* Heatmap de actividad */}
       <div className="card space-y-3">
         <div className="flex items-center justify-between">
@@ -991,7 +1134,7 @@ export default function AnalyticsPage() {
           </div>
           <span className="text-xs text-slate-400">{heatmapData.length} días activos</span>
         </div>
-        <ActivityHeatmap data={heatmapDataPct} isDark={isDark} suffix={chartSuffix} />
+        <ActivityHeatmap data={heatmapDataPct} isDark={isDark} displayMode={displayMode} setDisplayMode={setDisplayMode} />
       </div>
 
       {/* Distribución horaria */}
@@ -1002,13 +1145,13 @@ export default function AnalyticsPage() {
             <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Rendimiento por hora</h2>
           </div>
         </div>
-        <HourlyChart data={hourlyDataPct} isDark={isDark} suffix={chartSuffix} />
+        <HourlyChart data={hourlyDataPct} isDark={isDark} displayMode={displayMode} setDisplayMode={setDisplayMode} />
       </div>
 
       {/* Curva de equity */}
       <div className="card space-y-3">
         <h2 className="text-sm font-semibold text-slate-700 dark:text-gray-200">Curva de equity</h2>
-        <EquityChart data={equityCurveData} isDark={isDark} suffix={chartSuffix} />
+        <EquityChart data={equityCurveData} isDark={isDark} displayMode={displayMode} setDisplayMode={setDisplayMode} />
       </div>
 
       {/* PnL diario */}
@@ -1028,7 +1171,7 @@ export default function AnalyticsPage() {
             <span className="text-xs text-slate-400 dark:text-gray-500">{range.label}</span>
           </div>
         </div>
-        <DailyPnlChart data={dailyPnlData} isDark={isDark} suffix={chartSuffix} />
+        <DailyPnlChart data={dailyPnlData} isDark={isDark} displayMode={displayMode} setDisplayMode={setDisplayMode} />
         {dailyStats && (
           <div className="flex flex-wrap gap-4 text-xs text-slate-500 dark:text-gray-400 pt-1 border-t border-slate-200 dark:border-gray-700">
             <span>
