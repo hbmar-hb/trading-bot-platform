@@ -564,7 +564,7 @@ export default function BotOptimizerPage() {
               {autoStatus.enabled && (
                 <div className="space-y-4">
                   {/* Estado */}
-                  <div className="flex items-center gap-3 text-sm">
+                  <div className="flex items-center gap-3 text-sm flex-wrap">
                     <span className="text-slate-500">Confianza:</span>
                     <span className={`font-medium ${
                       autoStatus.confidence?.color === 'green' ? 'text-green-500' :
@@ -575,43 +575,123 @@ export default function BotOptimizerPage() {
                       {autoStatus.confidence?.label || 'Sin datos'}
                     </span>
                     <span className="text-slate-400">•</span>
-                    <span className="text-slate-500">
-                      {autoStatus.trade_count} trades
-                    </span>
+                    <span className="text-slate-500">{autoStatus.trade_count} trades</span>
+                    {autoStatus.diagnostics?.health_score && (
+                      <>
+                        <span className="text-slate-400">•</span>
+                        <span className={`font-medium ${
+                          autoStatus.diagnostics.health_score.score >= 80 ? 'text-green-500' :
+                          autoStatus.diagnostics.health_score.score >= 60 ? 'text-yellow-500' :
+                          autoStatus.diagnostics.health_score.score >= 40 ? 'text-orange-500' :
+                          'text-red-500'
+                        }`}>
+                          Salud {autoStatus.diagnostics.health_score.score}/100
+                        </span>
+                      </>
+                    )}
                   </div>
-                  
-                  {/* Progress bar de trades para próxima evaluación */}
+
+                  {/* Diagnóstico de bloqueo */}
+                  {autoStatus.blocked_by && (
+                    <div className={`text-xs p-2.5 rounded-lg border ${
+                      autoStatus.blocked_by === 'comfort_zone' || autoStatus.blocked_by === 'excellent_health'
+                        ? 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/20 dark:border-green-800 dark:text-green-400'
+                        : autoStatus.blocked_by === 'waiting'
+                        ? 'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-400'
+                        : 'bg-yellow-50 border-yellow-200 text-yellow-700 dark:bg-yellow-900/20 dark:border-yellow-800 dark:text-yellow-400'
+                    }`}>
+                      <div className="font-semibold mb-0.5">
+                        {autoStatus.blocked_by === 'comfort_zone' && '😴 Zona de confort'}
+                        {autoStatus.blocked_by === 'excellent_health' && '💚 Excelente salud'}
+                        {autoStatus.blocked_by === 'waiting' && '⏳ Esperando trades'}
+                        {autoStatus.blocked_by === 'insufficient_data' && '📊 Datos insuficientes'}
+                        {autoStatus.blocked_by === 'disabled' && '🔌 Desactivado'}
+                      </div>
+                      <div>
+                        {autoStatus.blocked_by === 'comfort_zone' && 'Todos los indicadores están en rangos óptimos. El bot no necesita cambios.'}
+                        {autoStatus.blocked_by === 'excellent_health' && 'El bot tiene una salud excelente. No se requieren ajustes.'}
+                        {autoStatus.blocked_by === 'waiting' && `Faltan ${autoStatus.trades_needed} trades para la próxima evaluación.`}
+                        {autoStatus.blocked_by === 'insufficient_data' && 'Se necesitan al menos 3 trades cerrados para optimizar.'}
+                        {autoStatus.blocked_by === 'disabled' && 'Activa la auto-optimización para comenzar.'}
+                      </div>
+                      {autoStatus.diagnostics?.crisis_mode && (
+                        <div className="mt-1 font-semibold text-red-600 dark:text-red-400">
+                          ⚠️ Modo crisis: umbral reducido a {autoStatus.diagnostics.effective_reeval_after} trades
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Control de umbral de trades */}
+                  <div className="flex items-center gap-3">
+                    <label className="text-xs text-slate-500 dark:text-gray-400">Evaluar cada:</label>
+                    <input
+                      type="number"
+                      min="1"
+                      max="50"
+                      value={autoStatus.config?.reeval_after_trades || 5}
+                      onChange={async (e) => {
+                        const val = parseInt(e.target.value) || 5
+                        await optimizerService.updateAutoConfig(botId, { reeval_after_trades: val })
+                        loadAutoStatus()
+                      }}
+                      className="w-16 px-2 py-1 text-xs bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded-lg text-center"
+                    />
+                    <span className="text-xs text-slate-500">trades</span>
+                  </div>
+
+                  {/* Progress bar */}
                   <div>
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-slate-500">Próxima evaluación</span>
                       <span className="text-slate-600 dark:text-gray-400">
-                        {autoStatus.trades_since_eval} / {autoStatus.config?.reeval_after_trades || 5} trades
+                        {autoStatus.trades_since_eval} / {autoStatus.diagnostics?.effective_reeval_after || autoStatus.config?.reeval_after_trades || 5} trades
                       </span>
                     </div>
                     <div className="w-full bg-slate-200 dark:bg-gray-700 rounded-full h-2">
                       <div 
-                        className="bg-blue-500 h-2 rounded-full transition-all"
-                        style={{ 
-                          width: `${Math.min(100, (autoStatus.trades_since_eval / (autoStatus.config?.reeval_after_trades || 5)) * 100)}%` 
+                        className={`h-2 rounded-full transition-all ${autoStatus.diagnostics?.crisis_mode ? 'bg-red-500' : 'bg-blue-500'}`}
+                        style={{
+                          width: `${Math.min(100, (autoStatus.trades_since_eval / (autoStatus.diagnostics?.effective_reeval_after || autoStatus.config?.reeval_after_trades || 5)) * 100)}%`
                         }}
                       ></div>
                     </div>
                   </div>
-                  
-                  {/* Botón ejecutar */}
-                  <button
-                    onClick={runAutoOptimize}
-                    disabled={autoLoading || !autoStatus.can_run}
-                    className="w-full flex items-center justify-center gap-2 text-sm px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-gray-700 text-white disabled:text-slate-500 rounded-lg transition-colors"
-                  >
-                    {autoLoading ? (
-                      <><Loader2 size={16} className="animate-spin" /> Analizando...</>
-                    ) : autoStatus.can_run ? (
-                      <><Sparkles size={16} /> Ejecutar optimización ahora</>
-                    ) : (
-                      <><span className="text-lg">⏳</span> Esperando más trades...</>
-                    )}
-                  </button>
+
+                  {/* Botones */}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={runAutoOptimize}
+                      disabled={autoLoading || !autoStatus.can_run}
+                      className="flex-1 flex items-center justify-center gap-2 text-sm px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-gray-700 text-white disabled:text-slate-500 rounded-lg transition-colors"
+                    >
+                      {autoLoading ? (
+                        <><Loader2 size={16} className="animate-spin" /> Analizando...</>
+                      ) : autoStatus.can_run ? (
+                        <><Sparkles size={16} /> Ejecutar ahora</>
+                      ) : (
+                        <><span className="text-lg">⏳</span> Esperando...</>
+                      )}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setAutoLoading(true)
+                        try {
+                          const r = await optimizerService.runAutoDryRun(botId)
+                          alert(JSON.stringify(r.data, null, 2))
+                        } catch (e) {
+                          alert('Error en simulación')
+                        } finally {
+                          setAutoLoading(false)
+                        }
+                      }}
+                      disabled={autoLoading}
+                      className="px-3 py-2.5 text-sm bg-slate-100 hover:bg-slate-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-300 rounded-lg transition-colors"
+                      title="Simular sin aplicar cambios"
+                    >
+                      Simular
+                    </button>
+                  </div>
                   
                   {/* Historial reciente */}
                   {autoStatus.history && autoStatus.history.length > 0 && (

@@ -7,6 +7,7 @@ export const optimizerService = {
   toggleAuto: (botId, enabled) => api.post(`/optimizer/${botId}/auto-toggle`, { enabled }),
   updateAutoConfig: (botId, config) => api.post(`/optimizer/${botId}/auto-config`, config),
   runAuto: (botId) => api.post(`/optimizer/${botId}/auto-run`),
+  runAutoDryRun: (botId) => api.post(`/optimizer/${botId}/auto-run?dry_run=true`),
   getEffectivenessDashboard: (botId) => api.get(`/optimizer/${botId}/effectiveness-dashboard`),
   getGlobalDB: () => api.get('/optimizer/db/global'),
 }

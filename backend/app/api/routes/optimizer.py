@@ -1175,16 +1175,79 @@ async def get_auto_optimize_status(
     
     confidence = _get_confidence_level(trade_count)
     
+    # ── Diagnóstico: simular las puertas del auto-run para mostrar por qué no corre ──
+    diagnostics = {
+        "gate_disabled": not bot.auto_optimize_enabled,
+        "gate_waiting": trades_since_eval < reeval_after,
+        "gate_insufficient": trade_count < 3,
+        "gate_comfort_zone": None,
+        "gate_excellent_health": None,
+        "gate_no_changes": None,
+        "health_score": None,
+        "crisis_mode": False,
+        "effective_reeval_after": reeval_after,
+    }
+    
+    if bot.auto_optimize_enabled and trade_count >= 3:
+        # Calcular análisis para diagnóstico
+        sig_result = await db.execute(
+            select(SignalLog).where(
+                SignalLog.bot_id == bot_id,
+                SignalLog.signal_action.in_(["long", "short"]),
+            )
+        )
+        signals = sig_result.scalars().all()
+        trade_views = [
+            _TradeView(
+                realized_pnl=t.realized_pnl,
+                entry_price=t.entry_price,
+                quantity=t.quantity,
+                side=t.side or "long",
+                opened_at=t.opened_at,
+                closed_at=t.closed_at,
+            )
+            for t in trades
+        ]
+        analysis = _analyze_trades(trade_views, signals)
+        
+        in_cz, cz_details = _is_in_comfort_zone(analysis)
+        diagnostics["gate_comfort_zone"] = in_cz
+        diagnostics["comfort_details"] = cz_details if in_cz else None
+        
+        health = _calculate_health_score(analysis)
+        diagnostics["health_score"] = health
+        diagnostics["gate_excellent_health"] = health["score"] >= 80
+        diagnostics["crisis_mode"] = health["score"] < 40
+        
+        # Modo crisis: bajar umbral de reevaluación
+        if diagnostics["crisis_mode"]:
+            diagnostics["effective_reeval_after"] = max(2, reeval_after // 2)
+    
+    # Bloqueo actual
+    blocked_by = None
+    if diagnostics["gate_disabled"]:
+        blocked_by = "disabled"
+    elif diagnostics["gate_insufficient"]:
+        blocked_by = "insufficient_data"
+    elif diagnostics["gate_waiting"]:
+        blocked_by = "waiting"
+    elif diagnostics["gate_comfort_zone"]:
+        blocked_by = "comfort_zone"
+    elif diagnostics["gate_excellent_health"]:
+        blocked_by = "excellent_health"
+    
     return {
         "enabled": bot.auto_optimize_enabled,
         "trade_count": trade_count,
         "trades_since_eval": trades_since_eval,
-        "trades_needed": max(0, reeval_after - trades_since_eval),
-        "can_run": trades_since_eval >= reeval_after and trade_count >= 3,
+        "trades_needed": max(0, diagnostics["effective_reeval_after"] - trades_since_eval),
+        "can_run": trades_since_eval >= diagnostics["effective_reeval_after"] and trade_count >= 3,
+        "blocked_by": blocked_by,
         "confidence": confidence,
         "last_eval_at": bot.auto_optimize_last_eval_at.isoformat() if bot.auto_optimize_last_eval_at else None,
         "config": config,
         "history": bot.auto_optimize_history or [],
+        "diagnostics": diagnostics,
     }
 
 
@@ -1261,11 +1324,13 @@ async def update_auto_optimize_config(
 @router.post("/{bot_id}/auto-run")
 async def run_auto_optimize(
     bot_id: uuid.UUID,
+    dry_run: bool = False,
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Ejecuta el algoritmo de auto-optimización y aplica cambios si corresponde.
+    Si dry_run=True, solo simula y devuelve qué haría sin aplicar cambios.
     """
     # Obtener bot
     bot_result = await db.execute(
@@ -1300,12 +1365,40 @@ async def run_auto_optimize(
     trades_since_eval = trade_count - (bot.auto_optimize_trades_at_eval or 0)
     reeval_after = config.get("reeval_after_trades", 5)
     
-    if trades_since_eval < reeval_after:
+    # Calcular health score para modo crisis (puede bajar el umbral)
+    sig_result = await db.execute(
+        select(SignalLog).where(
+            SignalLog.bot_id == bot_id,
+            SignalLog.signal_action.in_(["long", "short"]),
+        )
+    )
+    signals = sig_result.scalars().all()
+    trade_views = [
+        _TradeView(
+            realized_pnl=t.realized_pnl,
+            entry_price=t.entry_price,
+            quantity=t.quantity,
+            side=t.side or "long",
+            opened_at=t.opened_at,
+            closed_at=t.closed_at,
+        )
+        for t in trades
+    ]
+    analysis = _analyze_trades(trade_views, signals)
+    health = _calculate_health_score(analysis)
+    
+    # Modo crisis: si salud < 40, bajar a la mitad el umbral de reevaluación (mínimo 2)
+    is_crisis = health["score"] < 40
+    effective_reeval = max(2, reeval_after // 2) if is_crisis else reeval_after
+    
+    if trades_since_eval < effective_reeval:
         return {
             "status": "waiting",
-            "message": f"Esperando {reeval_after - trades_since_eval} trades más para re-evaluar",
+            "message": f"Esperando {effective_reeval - trades_since_eval} trades más para re-evaluar" + (" (modo crisis activo)" if is_crisis else ""),
             "trades_since_eval": trades_since_eval,
-            "trades_needed": reeval_after,
+            "trades_needed": effective_reeval,
+            "crisis_mode": is_crisis,
+            "health_score": health["score"],
         }
     
     # 4. Obtener análisis y sugerencias
@@ -1377,7 +1470,7 @@ async def run_auto_optimize(
             "message": "Todos los indicadores en zona óptima - No se requieren cambios",
             "comfort_details": comfort_details,
             "trade_count": trade_count,
-            "next_eval_after": trade_count + reeval_after,
+            "next_eval_after": trade_count + effective_reeval,
         }
     
     # 6. Evaluar indicadores (con umbrales adaptativos por símbolo)
@@ -1408,7 +1501,7 @@ async def run_auto_optimize(
             "message": f"Bot en excelente estado (Salud: {health['score']}/100) - No se requieren cambios",
             "health_score": health,
             "trade_count": trade_count,
-            "next_eval_after": trade_count + reeval_after,
+            "next_eval_after": trade_count + effective_reeval,
         }
     
     # 8. Calcular cambios seguros según nivel de acción y salud (con límites absolutos)
@@ -1517,7 +1610,22 @@ async def run_auto_optimize(
             "indicators": action_eval["indicators"],
         }
     
-    # 10. Pausar bot si está activo, aplicar cambios, y reactivar
+    # 10. Si es dry_run, devolver qué haría sin aplicar
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "message": f"Simulación: se aplicarían {len(changes)} cambios",
+            "changes": changes,
+            "confidence": confidence,
+            "action_level": action_eval,
+            "trade_count": trade_count,
+            "crisis_mode": is_crisis,
+            "health_score": health["score"],
+            "next_eval_after": trade_count + effective_reeval,
+            "indicators": action_eval["indicators"],
+        }
+    
+    # 11. Pausar bot si está activo, aplicar cambios, y reactivar
     was_active = bot.status == "active"
     
     if was_active:
@@ -1541,7 +1649,7 @@ async def run_auto_optimize(
         if was_active:
             logger.warning(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} permanece pausado por error")
     
-    # 11. Actualizar tracking
+    # 12. Actualizar tracking
     now = datetime.now(timezone.utc)
     bot.auto_optimize_last_eval_at = now
     bot.auto_optimize_trades_at_eval = trade_count
@@ -1599,7 +1707,9 @@ async def run_auto_optimize(
         "confidence": confidence,
         "action_level": action_eval,
         "trade_count": trade_count,
-        "next_eval_after": trade_count + reeval_after,
+        "crisis_mode": is_crisis,
+        "health_score": health["score"],
+        "next_eval_after": trade_count + effective_reeval,
         "indicators": action_eval["indicators"],
     }
 
