@@ -14,7 +14,23 @@ jobs:
           clean: false
 
       - name: Stop containers
-        run: docker compose down
+        run: docker compose down || true
+
+      - name: Prune old images
+        run: docker image prune -f || true
 
       - name: Build and start
         run: docker compose up -d --build
+
+      - name: Health check
+        run: |
+          $max = 30
+          for ($i = 0; $i -lt $max; $i++) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://localhost:8100/docs" -UseBasicParsing
+              if ($r.StatusCode -eq 200) { Write-Host "Backend OK"; exit 0 }
+            } catch {}
+            Start-Sleep -Seconds 2
+          }
+          Write-Host "Backend did not become healthy"
+          exit 1
