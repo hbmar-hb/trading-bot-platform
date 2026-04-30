@@ -1,0 +1,20 @@
+name: Auto Deploy
+
+on:
+  push:
+    branches: [master, main]
+
+jobs:
+  deploy:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Stop containers
+        run: docker compose down
+
+      - name: Build and start
+        run: docker compose up -d --build
