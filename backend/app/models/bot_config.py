@@ -48,6 +48,11 @@ class BotConfig(TimestampMixin, Base):
     )                                   # % del equity o cantidad fija en USDT
     leverage: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
+    # ─── Usar %ROI en lugar de % de movimiento de precio ─────
+    # Cuando está activo, los porcentajes de SL/TP/Trailing/BE/Dynamic
+    # se interpretan como %ROI (afectados por leverage)
+    use_roi_percentage: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # ─── Stop Loss inicial ───────────────────────────────────
     initial_sl_percentage: Mapped[Decimal] = mapped_column(Numeric(8, 4), nullable=False)
 

@@ -51,6 +51,7 @@ class BotCreate(BaseModel):
     position_sizing_type: Literal["percentage", "fixed"] = "percentage"
     position_value: Decimal
     leverage: int = 1
+    use_roi_percentage: bool = False
     initial_sl_percentage: Decimal
     take_profits: list[TakeProfitLevel] = []
     trailing_config: TrailingConfig = TrailingConfig()
@@ -164,6 +165,7 @@ class BotResponse(BaseModel):
     position_sizing_type: str
     position_value: Decimal
     leverage: int
+    use_roi_percentage: bool
     initial_sl_percentage: Decimal
     take_profits: list
     trailing_config: dict

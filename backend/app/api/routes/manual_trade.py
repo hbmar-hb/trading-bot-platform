@@ -20,6 +20,7 @@ from app.models.exchange_account import ExchangeAccount
 from app.models.paper_balance import PaperBalance
 from app.models.position import Position
 from app.models.signal_log import SignalLog
+from app.services.cache import publish_position_update
 from app.services.database import get_db
 from app.tasks.order_tasks import execute_signal
 from app.utils.signal_hasher import generate_signal_hash
@@ -546,6 +547,10 @@ async def adopt_position(
     )
     db.add(position)
     await db.commit()
+    await publish_position_update(
+        str(user_id),
+        {"position_id": str(position.id), "status": "open", "action": "adopted", "symbol": data.symbol, "side": data.side}
+    )
 
     return {
         "status": "adopted",

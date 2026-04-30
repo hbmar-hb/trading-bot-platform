@@ -79,6 +79,18 @@ async def get_exchange_health(exchange: str) -> str | None:
     return await async_redis.get(f"health:{exchange}")
 
 
+# ─── Publish desde FastAPI (async) ───────────────────────────
+
+async def publish_position_update(user_id: str, position_data: dict) -> None:
+    """Usado desde rutas FastAPI (contexto async)."""
+    await async_redis.publish("position_updates", json.dumps({
+        "type":    "position_update",
+        "user_id": user_id,
+        **position_data,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }))
+
+
 # ─── Publish desde Celery (sync) ─────────────────────────────
 
 def publish_position_update_sync(user_id: str, position_data: dict) -> None:

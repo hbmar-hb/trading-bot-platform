@@ -13,7 +13,7 @@ from app.exchanges.factory import create_exchange
 from app.models.bot_config import BotConfig
 from app.models.position import Position
 from app.schemas.position import PositionResponse
-from app.services.cache import async_redis
+from app.services.cache import async_redis, publish_position_update
 from app.services.database import get_db
 
 router = APIRouter(prefix="/positions", tags=["positions"])
@@ -428,6 +428,10 @@ async def update_stop_loss(
         position.current_sl_price = Decimal(str(data.sl_price))
         await db.commit()
         await db.refresh(position)
+        await publish_position_update(
+            str(user_id),
+            {"position_id": str(position_id), "status": position.status, "current_sl_price": float(position.current_sl_price)}
+        )
         
         logger.info(f"SL actualizado para posición {position_id}: {data.sl_price}")
         return position
@@ -447,6 +451,10 @@ async def update_stop_loss(
             position.extra_config = extra
             position.current_sl_price = Decimal(str(data.sl_price))
             await db.commit()
+            await publish_position_update(
+                str(user_id),
+                {"position_id": str(position_id), "status": position.status, "current_sl_price": float(position.current_sl_price), "sl_pending": True}
+            )
             raise HTTPException(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "BingX ha desactivado temporalmente las órdenes API por alta volatilidad. "
@@ -699,6 +707,10 @@ async def partial_close_position(
         
         await db.commit()
         await db.refresh(position)
+        await publish_position_update(
+            str(user_id),
+            {"position_id": str(position_id), "status": position.status, "quantity": float(position.quantity), "action": "partial_close"}
+        )
 
         logger.info(f"Posición {position_id} cerrada parcialmente: {percentage}%")
         return {"status": "success", "closed_percentage": percentage, "remaining_quantity": float(position.quantity)}
@@ -785,6 +797,10 @@ async def close_position(
         position.closed_at = datetime.utcnow()
         await db.commit()
         await db.refresh(position)
+        await publish_position_update(
+            str(user_id),
+            {"position_id": str(position_id), "status": "closed", "action": "close"}
+        )
 
         logger.info(f"Posición {position_id} cerrada completamente")
         return {"status": "success", "message": "Posición cerrada"}
@@ -858,6 +874,10 @@ async def sync_position_status(
                 position.status = "closed"
                 position.closed_at = datetime.utcnow()
                 await db.commit()
+                await publish_position_update(
+                    str(user_id),
+                    {"position_id": str(position_id), "status": "closed", "action": "sync_close"}
+                )
                 logger.info(f"[SYNC] Posición {position_id} marcada como cerrada (no encontrada en exchange)")
                 return {"status": "closed", "message": "Posición sincronizada: marcada como cerrada"}
                 
@@ -991,6 +1011,10 @@ async def cancel_limit_order(
     position.closed_at = datetime.now(timezone.utc)
     position.realized_pnl = 0
     await db.commit()
+    await publish_position_update(
+        str(user_id),
+        {"position_id": str(position_id), "status": "closed", "action": "cancel_limit"}
+    )
 
     logger.info(f"[CANCEL LIMIT] Posición {position_id} ({position.symbol}) cancelada")
     return {"status": "cancelled", "position_id": str(position_id)}

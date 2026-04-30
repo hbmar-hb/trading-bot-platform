@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -47,6 +47,7 @@ class _TradeView:
 @router.get("/{bot_id}")
 async def get_optimizer(
     bot_id: uuid.UUID,
+    trade_limit: int = Query(default=None, ge=1, le=5000, description="Máximo número de trades históricos a analizar"),
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
@@ -63,25 +64,31 @@ async def get_optimizer(
     
     symbol_base = bot.symbol.split('/')[0] if '/' in bot.symbol else bot.symbol
     
-    trades_result = await db.execute(
+    trades_query = (
         select(ExchangeTrade).where(
             ExchangeTrade.user_id == user_id,
             ExchangeTrade.bot_id == bot_id,
             ExchangeTrade.source == "bot",
             ExchangeTrade.closed_at.is_not(None),
             ExchangeTrade.realized_pnl.is_not(None),
-        ).order_by(ExchangeTrade.closed_at)
+        ).order_by(ExchangeTrade.closed_at.desc())
     )
+    if trade_limit:
+        trades_query = trades_query.limit(trade_limit)
+    trades_result = await db.execute(trades_query)
     trades = trades_result.scalars().all()
     
     # También obtener posiciones para enriquecimiento y debug
-    pos_result = await db.execute(
+    pos_query = (
         select(Position).where(
             Position.bot_id == bot_id,
             Position.status == "closed",
             Position.realized_pnl.is_not(None),
-        ).order_by(Position.opened_at)
+        ).order_by(Position.opened_at.desc())
     )
+    if trade_limit:
+        pos_query = pos_query.limit(trade_limit)
+    pos_result = await db.execute(pos_query)
     positions = pos_result.scalars().all()
     
     # Debug info

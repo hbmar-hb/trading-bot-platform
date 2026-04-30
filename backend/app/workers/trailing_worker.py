@@ -25,6 +25,7 @@ from app.core.risk_manager import (
 )
 from app.models.bot_config import BotConfig
 from app.models.position import Position
+from app.services.cache import publish_position_update
 from app.services.database import AsyncSessionLocal
 
 # Umbral mínimo de mejora del SL para evitar spam al exchange (0.1% del precio)
@@ -134,7 +135,8 @@ class TrailingWorker:
             and profit_pct >= Decimal(str(be_cfg.get("activation_profit", 999)))
         ):
             be_price = calculate_breakeven_price(
-                entry, side, Decimal(str(be_cfg.get("lock_profit", 0)))
+                entry, side, Decimal(str(be_cfg.get("lock_profit", 0))),
+                bot.leverage, bot.use_roi_percentage
             )
             if should_move_trailing_sl(current_sl, be_price, side):
                 new_sl = be_price
@@ -146,7 +148,8 @@ class TrailingWorker:
             and profit_pct >= Decimal(str(tr_cfg.get("activation_profit", 999)))
         ):
             trailing_sl = calculate_trailing_sl(
-                current_price, side, Decimal(str(tr_cfg.get("callback_rate", 0)))
+                current_price, side, Decimal(str(tr_cfg.get("callback_rate", 0))),
+                bot.leverage, bot.use_roi_percentage
             )
             if should_move_trailing_sl(current_sl, trailing_sl, side):
                 if new_sl is None:
@@ -161,7 +164,10 @@ class TrailingWorker:
             max_steps = int(dy_cfg.get("max_steps", 0))  # 0 = ilimitado
 
             if step_pct > 0:
-                steps_earned = get_dynamic_sl_step(entry, current_price, side, step_pct)
+                steps_earned = get_dynamic_sl_step(
+                    entry, current_price, side, step_pct,
+                    bot.leverage, bot.use_roi_percentage
+                )
                 if max_steps > 0:
                     steps_earned = min(steps_earned, max_steps)
 
@@ -174,6 +180,7 @@ class TrailingWorker:
                         bot.initial_sl_percentage,
                         step_pct,
                         steps_earned,
+                        bot.leverage, bot.use_roi_percentage
                     )
                     if should_move_trailing_sl(current_sl, dynamic_sl, side):
                         if new_sl is None:
@@ -195,6 +202,10 @@ class TrailingWorker:
                                 .values(extra_config=extra)
                             )
                             await db_write.commit()
+                        await publish_position_update(
+                            str(bot.user_id),
+                            {"position_id": str(position.id), "status": "open", "action": "dynamic_sl_step", "dynamic_sl_steps": steps_earned, "symbol": symbol}
+                        )
                         logger.debug(
                             f"Stop dinámico: {side} {symbol} paso {steps_applied}→{steps_earned} "
                             f"SL {current_sl:.4f}→{dynamic_sl:.4f}"

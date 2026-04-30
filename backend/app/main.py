@@ -9,6 +9,7 @@ from app.api.routes import analytics, auth, bots, charting, exchange_accounts, e
 from app.api.websocket.manager import ws_manager
 from app.services.logger import setup_logging
 from app.workers.balance_monitor import balance_monitor
+from app.workers.paper_balance_monitor import paper_balance_monitor
 from app.workers.price_monitor import price_monitor
 from app.workers.trailing_worker import trailing_worker
 
@@ -30,9 +31,10 @@ async def lifespan(app: FastAPI):
 
     # 3. Arrancar workers como background tasks asyncio
     background_tasks = [
-        asyncio.create_task(price_monitor.run(),         name="price_monitor"),
-        asyncio.create_task(balance_monitor.run(),       name="balance_monitor"),
-        asyncio.create_task(trailing_worker.run(),       name="trailing_worker"),
+        asyncio.create_task(price_monitor.run(),          name="price_monitor"),
+        asyncio.create_task(balance_monitor.run(),        name="balance_monitor"),
+        asyncio.create_task(paper_balance_monitor.run(),  name="paper_balance_monitor"),
+        asyncio.create_task(trailing_worker.run(),        name="trailing_worker"),
         asyncio.create_task(ws_manager.start_redis_listener(), name="ws_redis_listener"),
     ]
 

@@ -1,7 +1,7 @@
 import api from './api'
 
 export const optimizerService = {
-  get: (botId) => api.get(`/optimizer/${botId}`),
+  get: (botId, tradeLimit) => api.get(`/optimizer/${botId}`, { params: tradeLimit ? { trade_limit: tradeLimit } : undefined }),
   apply: (botId, params) => api.post(`/optimizer/${botId}/apply`, { params }),
   getAutoStatus: (botId) => api.get(`/optimizer/${botId}/auto-status`),
   toggleAuto: (botId, enabled) => api.post(`/optimizer/${botId}/auto-toggle`, { enabled }),

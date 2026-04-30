@@ -284,6 +284,7 @@ const DEFAULT = {
   account_type: 'real', // 'real' o 'paper'
   timeframe: '1h',
   leverage: 1,
+  use_roi_percentage: false,
   position_sizing_type: 'percentage',
   position_value: '',
   initial_sl_percentage: '',
@@ -313,6 +314,7 @@ function flattenBot(bot) {
     account_type: isPaper ? 'paper' : 'real',
     timeframe: bot.timeframe ?? '1h',
     leverage: bot.leverage ?? 1,
+    use_roi_percentage: bot.use_roi_percentage ?? false,
     position_sizing_type: bot.position_sizing_type ?? 'percentage',
     position_value: bot.position_value ?? '',
     initial_sl_percentage: bot.initial_sl_percentage ?? '',
@@ -339,6 +341,7 @@ function buildPayload(f) {
     symbol: f.symbol.trim(),
     timeframe: f.timeframe,
     leverage: parseInt(f.leverage),
+    use_roi_percentage: f.use_roi_percentage,
     position_sizing_type: f.position_sizing_type,
     position_value: parseFloat(f.position_value),
     initial_sl_percentage: parseFloat(f.initial_sl_percentage),
@@ -613,6 +616,18 @@ export default function BotEditPage() {
               </Field>
             </div>
 
+            <Toggle
+              checked={form.use_roi_percentage}
+              onChange={v => set('use_roi_percentage', v)}
+              label="Usar %ROI (afectado por leverage)"
+            />
+            {form.use_roi_percentage && (
+              <p className="text-xs text-slate-500 dark:text-gray-400">
+                Cuando está activo, los % de SL, TP, Trailing, BE y Stop dinámico se interpretan como %ROI.
+                Ej: con leverage 10x, un SL del 50% ROI = movimiento de precio del 5%.
+              </p>
+            )}
+
           </>
         )}
 
@@ -647,7 +662,7 @@ export default function BotEditPage() {
               />
             </Field>
 
-            <Field label="Stop loss inicial (%)" hint="Distancia desde el precio de entrada">
+            <Field label={`Stop loss inicial (${form.use_roi_percentage ? '%ROI' : '% precio'})`} hint={form.use_roi_percentage ? '% de retorno sobre el margen (afectado por leverage)' : 'Distancia desde el precio de entrada'}>
               <input
                 type="number" min="0.1" max="100" step="0.1"
                 value={form.initial_sl_percentage}

@@ -21,6 +21,7 @@ from app.models.bot_log import BotLog
 from app.models.paper_balance import PaperBalance
 from app.models.position import Position
 from app.models.signal_log import SignalLog
+from app.services.cache import publish_position_update_sync
 from app.services.database import SessionLocal
 from loguru import logger
 
@@ -277,7 +278,10 @@ def _open_position(
                 # Limit order: no position open yet, skip SL placement
                 return order, None, None
             else:
-                sl_price    = risk_manager.calculate_sl_price(order.fill_price, side, bot.initial_sl_percentage)
+                sl_price    = risk_manager.calculate_sl_price(
+                    order.fill_price, side, bot.initial_sl_percentage,
+                    bot.leverage, bot.use_roi_percentage
+                )
                 sl_order_id = await exchange.place_stop_loss(bot.symbol, side, order.quantity, sl_price)
                 return order, sl_price, sl_order_id
         finally:
@@ -294,7 +298,8 @@ def _open_position(
     tp_records = []
     for i, tp_cfg in enumerate(bot.take_profits):
         tp_price = risk_manager.calculate_tp_price(
-            entry_price, side, Decimal(str(tp_cfg["profit_percent"]))
+            entry_price, side, Decimal(str(tp_cfg["profit_percent"])),
+            bot.leverage, bot.use_roi_percentage
         )
         tp_records.append({
             "level": i + 1,
@@ -337,6 +342,10 @@ def _open_position(
         }
     )
     db.commit()
+    publish_position_update_sync(
+        str(bot.user_id),
+        {"position_id": str(position.id), "status": position.status, "action": "open", "symbol": bot.symbol, "side": side}
+    )
     logger.info(f"{mode_str}{'Orden limit' if is_limit_order else 'Posición abierta'}: {side} {bot.symbol} @ {entry_price}")
 
 
@@ -381,6 +390,10 @@ def _close_position(
         metadata={"close_price": float(order.fill_price)}
     )
     db.commit()
+    publish_position_update_sync(
+        str(bot.user_id),
+        {"position_id": str(position.id), "status": "closed", "action": "close", "symbol": bot.symbol, "side": position.side, "realized_pnl": float(position.realized_pnl)}
+    )
 
 
 # ─── Helpers DB (síncronos) ───────────────────────────────────

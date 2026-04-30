@@ -6,6 +6,9 @@
   * {
     @apply border-slate-200 dark:border-gray-700;
   }
+  html, body, #root {
+    @apply min-h-screen;
+  }
   body {
     @apply bg-slate-100 text-slate-900 dark:bg-gray-950 dark:text-gray-100 font-sans antialiased;
   }

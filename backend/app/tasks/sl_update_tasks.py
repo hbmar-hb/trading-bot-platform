@@ -103,6 +103,7 @@ async def _execute_tp(
     from app.models.exchange_account import ExchangeAccount
     from app.models.paper_balance import PaperBalance
     from app.models.position import Position
+    from app.services.cache import publish_position_update_sync
     from app.services.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -191,6 +192,10 @@ async def _execute_tp(
         ))
 
         await db.commit()
+        publish_position_update_sync(
+            str(bot.user_id),
+            {"position_id": str(position_id), "status": position.status, "action": "tp_hit", "tp_level": tp_level, "symbol": position.symbol}
+        )
         logger.info(
             f"TP{tp_level} ejecutado: {position.symbol} {position.side} "
             f"cierre={close_percent}% qty={close_qty} @ {fill_price} pnl={pnl:.2f}"
@@ -208,6 +213,7 @@ async def _execute_sl_update(position_id: uuid.UUID, new_sl_price: Decimal) -> N
     from app.models.exchange_account import ExchangeAccount
     from app.models.paper_balance import PaperBalance
     from app.models.position import Position
+    from app.services.cache import publish_position_update_sync
     from app.services.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -269,6 +275,10 @@ async def _execute_sl_update(position_id: uuid.UUID, new_sl_price: Decimal) -> N
         ))
 
         await db.commit()
+        publish_position_update_sync(
+            str(bot.user_id),
+            {"position_id": str(position_id), "status": position.status, "action": "sl_update", "current_sl_price": float(position.current_sl_price), "symbol": position.symbol}
+        )
         logger.info(
             f"SL actualizado: {position.symbol} {old_sl} → {new_sl_price}"
         )

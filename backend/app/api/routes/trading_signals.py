@@ -33,7 +33,25 @@ async def list_signals(
     )
     
     if symbol:
-        query = query.where(TradingSignal.symbol == symbol)
+        # Accept CCXT format (BTC/USDT:USDT) or native format (BTCUSDT)
+        from sqlalchemy import or_
+        if '/' in symbol:
+            # Extract base/quote from CCXT format
+            clean = symbol.replace(':USDT', '').replace(':USDC', '').replace(':BTC', '').replace(':ETH', '')
+            base_quote = clean.split('/')
+            if len(base_quote) == 2:
+                base, quote = base_quote
+                query = query.where(
+                    or_(
+                        TradingSignal.symbol.ilike(f'{base}{quote}%'),
+                        TradingSignal.symbol.ilike(f'{base}-{quote}%'),
+                        TradingSignal.symbol.ilike(f'{base}_{quote}%'),
+                    )
+                )
+            else:
+                query = query.where(TradingSignal.symbol.ilike(f'{symbol}%'))
+        else:
+            query = query.where(TradingSignal.symbol.ilike(f'{symbol}%'))
     if action:
         query = query.where(TradingSignal.action == action)
     if status:
@@ -45,7 +63,23 @@ async def list_signals(
         TradingSignal.received_at >= datetime.utcnow() - timedelta(days=days)
     )
     if symbol:
-        count_query = count_query.where(TradingSignal.symbol == symbol)
+        from sqlalchemy import or_
+        if '/' in symbol:
+            clean = symbol.replace(':USDT', '').replace(':USDC', '').replace(':BTC', '').replace(':ETH', '')
+            base_quote = clean.split('/')
+            if len(base_quote) == 2:
+                base, quote = base_quote
+                count_query = count_query.where(
+                    or_(
+                        TradingSignal.symbol.ilike(f'{base}{quote}%'),
+                        TradingSignal.symbol.ilike(f'{base}-{quote}%'),
+                        TradingSignal.symbol.ilike(f'{base}_{quote}%'),
+                    )
+                )
+            else:
+                count_query = count_query.where(TradingSignal.symbol.ilike(f'{symbol}%'))
+        else:
+            count_query = count_query.where(TradingSignal.symbol.ilike(f'{symbol}%'))
     if action:
         count_query = count_query.where(TradingSignal.action == action)
     if status:

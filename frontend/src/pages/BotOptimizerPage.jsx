@@ -276,10 +276,11 @@ export default function BotOptimizerPage() {
   const [autoStatus, setAutoStatus] = useState(null)
   const [autoLoading, setAutoLoading] = useState(false)
   const [effectivenessDashboard, setEffectivenessDashboard] = useState(null)
+  const [tradeLimit, setTradeLimit] = useState(500)
 
   const load = () => {
     setLoading(true)
-    optimizerService.get(botId)
+    optimizerService.get(botId, tradeLimit)
       .then(r => {
         console.log('Optimizer response:', r.data)
         setData(r.data)
@@ -390,6 +391,23 @@ export default function BotOptimizerPage() {
           <p className="text-sm text-slate-500 dark:text-gray-400">{data.bot_name} · {data.symbol} · {data.timeframe}</p>
         </div>
         
+        {/* Control de trades históricos */}
+        <div className="flex items-center gap-2 ml-auto">
+          <label className="text-xs text-slate-500 dark:text-gray-400">Trades:</label>
+          <input
+            type="number"
+            min="10"
+            max="5000"
+            step="10"
+            value={tradeLimit}
+            onChange={e => setTradeLimit(parseInt(e.target.value) || 500)}
+            onBlur={load}
+            onKeyDown={e => e.key === 'Enter' && load()}
+            className="w-20 px-2 py-1 text-sm bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded-lg text-center"
+            title="Número máximo de trades históricos a analizar"
+          />
+        </div>
+
         {/* Botón al Dashboard de Efectividad */}
         <button
           onClick={() => navigate(`/bots/${botId}/effectiveness`)}

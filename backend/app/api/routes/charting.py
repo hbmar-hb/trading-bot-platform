@@ -18,6 +18,23 @@ _symbols_cache = {}
 _SYMBOLS_TTL_SECONDS = 300
 
 
+def _to_ccxt_symbol(symbol: str) -> str:
+    """Convierte formatos nativos de exchange a CCXT."""
+    if not symbol:
+        return symbol
+    # Ya está en formato CCXT
+    if "/" in symbol:
+        return symbol
+    # Quitar sufijo .P de perpetual
+    s = symbol.replace(".P", "").replace(".p", "")
+    # Intentar separar base/quote por sufijos comunes
+    for quote in ["USDT", "USDC", "BTC", "ETH", "USD"]:
+        if s.endswith(quote):
+            base = s[: -len(quote)]
+            return f"{base}/{quote}:{quote}"
+    return symbol
+
+
 @router.get("/history")
 async def get_chart_history(
     symbol: str,
@@ -28,16 +45,7 @@ async def get_chart_history(
     db: AsyncSession = Depends(get_db),
 ):
     """Datos históricos de velas para el gráfico."""
-    # Obtener cuenta de exchange por defecto
-    result = await db.execute(
-        select(ExchangeAccount)
-        .where(ExchangeAccount.user_id == user_id, ExchangeAccount.is_active == True)
-        .limit(1)
-    )
-    account = result.scalar_one_or_none()
-    
-    if not account:
-        return {"s": "no_data", "errmsg": "No exchange account"}
+    symbol = _to_ccxt_symbol(symbol)
     
     # Convertir timeframe (soporta tanto '1h' como '60')
     timeframe_map = {
@@ -53,40 +61,92 @@ async def get_chart_history(
     }
     timeframe = timeframe_map.get(resolution, '1h')
     
-    # Obtener datos del exchange
-    exchange = create_exchange(account)
+    # ── Fuente de datos: Binance público (histórico mucho más extenso que BingX) ──
+    # No requiere cuenta de exchange — cliente público
+    binance = ccxt.binance({'options': {'defaultType': 'swap'}})
+    
+    async def fetch_binance_pagination(sym, tf, since_ms, to_ts, max_calls=100):
+        """Paginar velas desde Binance público."""
+        all_candles = []
+        current_since = since_ms
+        for _ in range(max_calls):
+            try:
+                ohlcv = await binance.fetch_ohlcv(sym, tf, since=current_since, limit=1000)
+            except Exception as e:
+                logger = __import__('loguru').logger
+                logger.warning(f"Binance pagination error: {e}")
+                break
+            if not ohlcv:
+                break
+            batch = [{"time": int(c[0] / 1000), "open": c[1], "high": c[2], "low": c[3], "close": c[4], "volume": c[5]} for c in ohlcv]
+            all_candles.extend(batch)
+            current_since = (batch[-1]["time"] + 1) * 1000
+            if batch[-1]["time"] >= to_ts:
+                break
+        return all_candles
+    
+    async def fetch_exchange_pagination(exchange, sym, tf, since_ms, to_ts, max_calls=60):
+        """Paginar velas desde el exchange del usuario."""
+        all_candles = []
+        current_since = since_ms
+        for _ in range(max_calls):
+            batch = await exchange.get_candles(sym, tf, limit=1000, since=current_since)
+            if not batch:
+                break
+            all_candles.extend(batch)
+            current_since = (batch[-1]["time"] + 1) * 1000
+            if batch[-1]["time"] >= to_ts:
+                break
+        return all_candles
     
     try:
-        candles = await exchange.get_candles(
-            symbol=symbol,
-            timeframe=timeframe,
-            limit=1000
+        # Intentar Binance primero (histórico extenso, cliente público)
+        all_candles = await fetch_binance_pagination(
+            symbol, timeframe, from_time * 1000, to_time, max_calls=100
         )
         
-        if not candles:
+        # Fallback al exchange del usuario si Binance no devuelve datos
+        if not all_candles:
+            # Obtener cuenta de exchange por defecto (solo para fallback)
+            result = await db.execute(
+                select(ExchangeAccount)
+                .where(ExchangeAccount.user_id == user_id, ExchangeAccount.is_active == True)
+                .limit(1)
+            )
+            account = result.scalar_one_or_none()
+            
+            if account:
+                exchange = create_exchange(account)
+                all_candles = await fetch_exchange_pagination(
+                    exchange, symbol, timeframe, from_time * 1000, to_time, max_calls=60
+                )
+                await exchange.close()
+            else:
+                await binance.close()
+                return {"s": "no_data", "errmsg": f"Symbol {symbol} not available on Binance and no exchange account configured"}
+        
+        await binance.close()
+        
+        if not all_candles:
             return {"s": "no_data", "errmsg": "No data available"}
         
-        # Filtrar por rango de tiempo
-        filtered_candles = [
-            c for c in candles 
-            if from_time <= c["time"] <= to_time
-        ]
-        
+        # Filtrar por rango de tiempo exacto
+        filtered_candles = [c for c in all_candles if from_time <= c["time"] <= to_time]
         if not filtered_candles:
-            # Si no hay datos en el rango, usar todos los disponibles
-            filtered_candles = candles
+            filtered_candles = all_candles
         
         # Formato UDF (Universal Data Feed) de TradingView
         return {
             "s": "ok",
-            "t": [c["time"] for c in filtered_candles],      # timestamps
-            "o": [c["open"] for c in filtered_candles],      # open
-            "h": [c["high"] for c in filtered_candles],      # high
-            "l": [c["low"] for c in filtered_candles],       # low
-            "c": [c["close"] for c in filtered_candles],     # close
-            "v": [c["volume"] for c in filtered_candles],    # volume
+            "t": [c["time"] for c in filtered_candles],
+            "o": [c["open"] for c in filtered_candles],
+            "h": [c["high"] for c in filtered_candles],
+            "l": [c["low"] for c in filtered_candles],
+            "c": [c["close"] for c in filtered_candles],
+            "v": [c["volume"] for c in filtered_candles],
         }
     except Exception as e:
+        await binance.close()
         return {"s": "error", "errmsg": str(e)}
 
 
