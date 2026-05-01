@@ -63,6 +63,13 @@ export function useWebSocket() {
           available_balance: msg.available_balance,
         })
         break
+      case 'notification':
+        addNotification({
+          type: msg.notification_type || 'info',
+          title: msg.title || 'Notificacion',
+          message: msg.message || '',
+        })
+        break
     }
   }
 }

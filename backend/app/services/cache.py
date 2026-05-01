@@ -101,3 +101,15 @@ def publish_position_update_sync(user_id: str, position_data: dict) -> None:
         **position_data,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }))
+
+
+# �"?�"?�"? Notificaciones in-app �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+
+def publish_notification_sync(user_id: str, notification_data: dict) -> None:
+    """Publica una notificación in-app vía Redis para entregar por WebSocket."""
+    sync_redis.publish("notification_updates", json.dumps({
+        "type": "notification",
+        "user_id": user_id,
+        **notification_data,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }))

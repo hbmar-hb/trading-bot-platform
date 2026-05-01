@@ -1,5 +1,6 @@
 import Navbar from './Navbar'
 import BottomNav from './BottomNav'
+import ToastContainer from './ToastContainer'
 import useUiStore from '@/store/uiStore'
 import { cn } from '@/utils/cn'
 
@@ -9,6 +10,7 @@ export default function Layout({ children }) {
   return (
     <div className="min-h-screen bg-slate-100 dark:bg-gray-950 text-slate-900 dark:text-gray-100">
       <Navbar />
+      <ToastContainer />
 
       <main className={cn(
         'transition-all duration-200 min-h-screen',

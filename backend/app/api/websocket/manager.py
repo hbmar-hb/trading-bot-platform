@@ -87,6 +87,7 @@ class WebSocketManager:
                     "price_updates",
                     "position_updates",
                     "balance_updates",
+                    "notification_updates",
                 )
                 async for message in pubsub.listen():
                     if message["type"] != "message":
@@ -107,7 +108,7 @@ class WebSocketManager:
         if msg_type == "price_update":
             await self.broadcast_to_all(data)
 
-        elif msg_type in ("position_update", "balance_update"):
+        elif msg_type in ("position_update", "balance_update", "notification"):
             user_id = data.get("user_id")
             if user_id:
                 await self.broadcast_to_user(user_id, data)

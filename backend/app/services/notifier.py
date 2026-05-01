@@ -77,3 +77,23 @@ def notify_error(bot_name: str, error: str) -> None:
     msg = f"⚠️ <b>ERROR — {bot_name}</b>\n{error[:300]}"
     send_telegram_sync(msg)
     send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+
+
+def notify_auto_optimized(
+    bot_name: str, symbol: str, changes: dict, health_score: int, crisis_mode: bool = False
+) -> None:
+    emoji = "!" if crisis_mode else "*"
+    crisis_str = " (MODO CRISIS)" if crisis_mode else ""
+    changes_lines = "\n".join(
+        f"  - {k.replace('_', ' ').title()}: {v}"
+        for k, v in changes.items()
+    )
+    msg = (
+        f"{emoji} AUTO-OPTIMIZACION APLICADA{crisis_str}\n"
+        f"Bot: {bot_name}\n"
+        f"Par: {symbol}\n"
+        f"Salud: {health_score}/100\n"
+        f"Cambios:\n{changes_lines}"
+    )
+    send_telegram_sync(msg)
+    send_discord_sync(msg)

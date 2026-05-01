@@ -10,6 +10,7 @@ from loguru import logger
 from sqlalchemy import select
 
 from app.models.bot_config import BotConfig
+from app.services.cache import publish_notification_sync
 from app.services.database import AsyncSessionLocal
 
 
@@ -38,6 +39,33 @@ async def _auto_optimize_bot(bot_id: uuid.UUID):
 
             result = await _run_auto_optimize_for_bot(bot, db, dry_run=False)
             logger.info(f"[AUTO-OPTIMIZE TASK] Bot {bot_id}: {result['status']}")
+            
+            # Notificar si se aplicaron cambios
+            if result.get("status") == "applied" and result.get("changes"):
+                try:
+                    from app.tasks.notification_tasks import auto_optimized
+                    auto_optimized.delay(
+                        bot_name=bot.bot_name,
+                        symbol=bot.symbol,
+                        changes=result["changes"],
+                        health_score=result.get("health_score", 0),
+                        crisis_mode=result.get("crisis_mode", False),
+                    )
+                    # Notificación in-app vía WebSocket
+                    changes_str = ", ".join(
+                        f"{k}: {v}" for k, v in result["changes"].items()
+                    )
+                    publish_notification_sync(
+                        str(bot.user_id),
+                        {
+                            "notification_type": "optimizer",
+                            "title": f"Auto-optimizacion: {bot.bot_name}",
+                            "message": f"Cambios: {changes_str}. Salud: {result.get('health_score', 0)}/100",
+                        }
+                    )
+                except Exception as ne:
+                    logger.warning(f"[AUTO-OPTIMIZE TASK] No se pudo enviar notificacion: {ne}")
+            
             return result
         except Exception as e:
             logger.error(f"[AUTO-OPTIMIZE TASK] Error en bot {bot_id}: {e}")
@@ -103,6 +131,32 @@ def auto_optimize_all_bots_task(self):
                     logger.info(
                         f"[AUTO-OPTIMIZE TASK] {bot.bot_name}: {result['status']}"
                     )
+                    
+                    # Notificar si se aplicaron cambios
+                    if result.get("status") == "applied" and result.get("changes"):
+                        try:
+                            from app.tasks.notification_tasks import auto_optimized
+                            auto_optimized.delay(
+                                bot_name=bot.bot_name,
+                                symbol=bot.symbol,
+                                changes=result["changes"],
+                                health_score=result.get("health_score", 0),
+                                crisis_mode=result.get("crisis_mode", False),
+                            )
+                            # Notificación in-app vía WebSocket
+                            changes_str = ", ".join(
+                                f"{k}: {v}" for k, v in result["changes"].items()
+                            )
+                            publish_notification_sync(
+                                str(bot.user_id),
+                                {
+                                    "notification_type": "optimizer",
+                                    "title": f"Auto-optimizacion: {bot.bot_name}",
+                                    "message": f"Cambios: {changes_str}. Salud: {result.get('health_score', 0)}/100",
+                                }
+                            )
+                        except Exception as ne:
+                            logger.warning(f"[AUTO-OPTIMIZE TASK] No se pudo enviar notificacion: {ne}")
                 except Exception as e:
                     logger.error(
                         f"[AUTO-OPTIMIZE TASK] Error en {bot.bot_name}: {e}"
