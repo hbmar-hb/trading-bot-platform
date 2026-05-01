@@ -9,7 +9,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_admin_user, get_current_user_id
 from app.models.user import User
 from app.schemas.auth import UserCreate, UserResponse, UserResetPassword, UserUpdate
 from app.services.database import get_db
@@ -28,7 +28,7 @@ async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> User:
 
 @router.get("", response_model=list[UserResponse])
 async def list_users(
-    _: uuid.UUID = Depends(get_current_user_id),
+    _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).order_by(User.created_at))
@@ -38,7 +38,7 @@ async def list_users(
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     data: UserCreate,
-    _: uuid.UUID = Depends(get_current_user_id),
+    _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     existing = await db.execute(
@@ -53,6 +53,7 @@ async def create_user(
         username=data.username,
         email=data.email,
         hashed_password=pwd_context.hash(data.password),
+        role=data.role if data.role in ("user", "admin") else "user",
     )
     db.add(user)
     await db.commit()
@@ -64,7 +65,7 @@ async def create_user(
 async def update_user(
     user_id: uuid.UUID,
     data: UserUpdate,
-    current_user_id: uuid.UUID = Depends(get_current_user_id),
+    current_admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     user = await _get_user_or_404(user_id, db)
@@ -87,10 +88,14 @@ async def update_user(
         user.email = data.email
 
     if data.is_active is not None:
-        # No permitir desactivarse a uno mismo
-        if user_id == current_user_id and not data.is_active:
+        # No permitir desactivarse a uno mismo (ni al admin principal)
+        if user_id == current_admin.id and not data.is_active:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "No puedes desactivar tu propia cuenta")
         user.is_active = data.is_active
+
+    if data.role is not None:
+        if data.role in ("user", "admin"):
+            user.role = data.role
 
     await db.commit()
     await db.refresh(user)
@@ -101,7 +106,7 @@ async def update_user(
 async def reset_password(
     user_id: uuid.UUID,
     data: UserResetPassword,
-    _: uuid.UUID = Depends(get_current_user_id),
+    _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
     user = await _get_user_or_404(user_id, db)
@@ -112,10 +117,10 @@ async def reset_password(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
     user_id: uuid.UUID,
-    current_user_id: uuid.UUID = Depends(get_current_user_id),
+    current_admin: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
-    if user_id == current_user_id:
+    if user_id == current_admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No puedes eliminar tu propia cuenta")
 
     user = await _get_user_or_404(user_id, db)

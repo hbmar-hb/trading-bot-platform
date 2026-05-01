@@ -18,6 +18,9 @@ class User(TimestampMixin, Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
+    # Rol: user | admin
+    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+
     # 2FA (TOTP)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

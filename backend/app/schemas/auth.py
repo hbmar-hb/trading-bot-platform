@@ -62,6 +62,7 @@ class UserCreate(BaseModel):
     username: str
     email: str
     password: str
+    role: str = "user"
 
     @field_validator("password")
     @classmethod
@@ -79,6 +80,7 @@ class UserUpdate(BaseModel):
     username: str | None = None
     email: str | None = None
     is_active: bool | None = None
+    role: str | None = None
 
 
 class UserResetPassword(BaseModel):
@@ -140,6 +142,7 @@ class UserResponse(BaseModel):
     username: str
     email: str
     is_active: bool
+    role: str = "user"
     totp_enabled: bool = False
 
     model_config = {"from_attributes": True}

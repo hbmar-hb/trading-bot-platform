@@ -27,6 +27,7 @@ from app.schemas.auth import (
     TwoFactorVerifyRequest,
     UserResponse,
 )
+from app.core.rate_limiter import login_limiter, register_limiter
 from app.services.database import get_db
 from config.settings import settings
 
@@ -100,6 +101,7 @@ async def _issue_tokens(db: AsyncSession, user: User) -> TokenResponse:
 
 @router.post("/login", response_model=LoginResponse)
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
+    login_limiter.check(data.username)
     result = await db.execute(select(User).where(User.username == data.username))
     user = result.scalar_one_or_none()
 
@@ -269,6 +271,7 @@ async def disable_2fa(
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
+    register_limiter.check(data.username)
     if not settings.allow_registration:
         existing = await db.execute(select(User).limit(1))
         if existing.scalar_one_or_none() is not None:
