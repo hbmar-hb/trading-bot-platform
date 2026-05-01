@@ -146,6 +146,7 @@ function BotRow({ bot, isSelected, onClick }) {
 export default function OptimizerDBPage() {
   const navigate = useNavigate()
   const [data, setData] = useState(null)
+  const [symbolsData, setSymbolsData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [selectedBot, setSelectedBot] = useState(null)
   const [filter, setFilter] = useState({
@@ -161,11 +162,14 @@ export default function OptimizerDBPage() {
   const loadData = async () => {
     setLoading(true)
     try {
-      const res = await optimizerService.getGlobalDB()
-      setData(res.data)
-      // Seleccionar primer bot crítico o el primero de la lista
-      const critical = res.data.bots?.find(b => b.health_level === 'critical')
-      setSelectedBot(critical || res.data.bots?.[0] || null)
+      const [globalRes, symbolsRes] = await Promise.all([
+        optimizerService.getGlobalDB(),
+        optimizerService.getSymbolsDB(),
+      ])
+      setData(globalRes.data)
+      setSymbolsData(symbolsRes.data)
+      const critical = globalRes.data.bots?.find(b => b.health_level === 'critical')
+      setSelectedBot(critical || globalRes.data.bots?.[0] || null)
     } catch (e) {
       console.error('Error cargando Optimizer DB:', e)
     } finally {
@@ -253,6 +257,85 @@ export default function OptimizerDBPage() {
           </div>
         </div>
       </div>
+
+      {/* Métricas por Par */}
+      {symbolsData?.symbols?.length > 0 && (
+        <div className="bg-white dark:bg-gray-800 rounded-xl border border-slate-200 overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-100 dark:border-gray-700">
+            <h3 className="text-sm font-semibold flex items-center gap-2">
+              <TrendingUp size={16} className="text-blue-500" />
+              Métricas por Par de Trading
+            </h3>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-slate-50 dark:bg-gray-700/50">
+                <tr className="text-left text-xs font-medium text-slate-500">
+                  <th className="py-2 px-4">Par</th>
+                  <th className="py-2 px-4">Bots</th>
+                  <th className="py-2 px-4">Trades</th>
+                  <th className="py-2 px-4">PnL Total</th>
+                  <th className="py-2 px-4">Win Rate Medio</th>
+                  <th className="py-2 px-4">PF Medio</th>
+                  <th className="py-2 px-4">Salud Media</th>
+                  <th className="py-2 px-4">Tasa Éxito Cambios</th>
+                  <th className="py-2 px-4">Mejora Total</th>
+                  <th className="py-2 px-4">Críticos</th>
+                </tr>
+              </thead>
+              <tbody>
+                {symbolsData.symbols.map(sym => (
+                  <tr key={sym.symbol} className="border-b border-slate-100 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-800/50">
+                    <td className="py-2 px-4 font-medium text-sm">{sym.symbol}</td>
+                    <td className="py-2 px-4 text-sm">{sym.bots_count}</td>
+                    <td className="py-2 px-4 text-sm">{sym.total_trades}</td>
+                    <td className="py-2 px-4 text-sm font-mono">
+                      <span className={sym.total_pnl >= 0 ? 'text-green-600' : 'text-red-500'}>
+                        {sym.total_pnl >= 0 ? '+' : ''}{sym.total_pnl.toFixed(2)}
+                      </span>
+                    </td>
+                    <td className="py-2 px-4 text-sm">
+                      {sym.avg_win_rate !== null ? `${Math.round(sym.avg_win_rate * 100)}%` : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-sm">
+                      {sym.avg_profit_factor !== null ? `${sym.avg_profit_factor.toFixed(1)}x` : '—'}
+                    </td>
+                    <td className="py-2 px-4">
+                      {sym.avg_health_score !== null ? (
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${
+                            sym.avg_health_score >= 80 ? 'bg-green-500' :
+                            sym.avg_health_score >= 60 ? 'bg-green-400' :
+                            sym.avg_health_score >= 40 ? 'bg-yellow-400' : 'bg-red-400'
+                          }`} />
+                          <span className="text-sm">{sym.avg_health_score}</span>
+                        </div>
+                      ) : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-sm">
+                      {sym.total_changes > 0 ? `${sym.success_rate}%` : '—'}
+                    </td>
+                    <td className="py-2 px-4 text-sm font-mono">
+                      <span className={sym.total_improvement >= 0 ? 'text-green-600' : 'text-red-500'}>
+                        {sym.total_improvement >= 0 ? '+' : ''}{sym.total_improvement}
+                      </span>
+                    </td>
+                    <td className="py-2 px-4">
+                      {sym.critical_count > 0 ? (
+                        <span className="text-xs px-2 py-1 bg-red-100 text-red-700 rounded-full">
+                          {sym.critical_count}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       {/* Alertas */}
       {alerts.length > 0 && (

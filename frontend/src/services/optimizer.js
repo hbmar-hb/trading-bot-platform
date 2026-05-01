@@ -10,4 +10,5 @@ export const optimizerService = {
   runAutoDryRun: (botId) => api.post(`/optimizer/${botId}/auto-run?dry_run=true`),
   getEffectivenessDashboard: (botId) => api.get(`/optimizer/${botId}/effectiveness-dashboard`),
   getGlobalDB: () => api.get('/optimizer/db/global'),
+  getSymbolsDB: () => api.get('/optimizer/db/symbols'),
 }

@@ -25,6 +25,16 @@ from app.services.cache import publish_position_update_sync
 from app.services.database import SessionLocal
 from loguru import logger
 
+# Celery task para auto-optimización (import lazy para evitar circular deps)
+_auto_optimize_bot_task = None
+
+def _get_auto_optimize_task():
+    global _auto_optimize_bot_task
+    if _auto_optimize_bot_task is None:
+        from app.tasks.optimizer_tasks import auto_optimize_bot_task
+        _auto_optimize_bot_task = auto_optimize_bot_task
+    return _auto_optimize_bot_task
+
 
 class _BusinessError(Exception):
     """Error de lógica de negocio — no reintentar (bot inactivo, conflicto, etc.)."""
@@ -394,6 +404,15 @@ def _close_position(
         str(bot.user_id),
         {"position_id": str(position.id), "status": "closed", "action": "close", "symbol": bot.symbol, "side": position.side, "realized_pnl": float(position.realized_pnl)}
     )
+    
+    # Disparar auto-optimización si el bot lo tiene habilitado
+    if bot.auto_optimize_enabled:
+        try:
+            task = _get_auto_optimize_task()
+            task.delay(str(bot.id))
+            logger.info(f"[ENGINE] Auto-optimize disparado para bot {bot.bot_name} tras cierre de posición")
+        except Exception as e:
+            logger.warning(f"[ENGINE] No se pudo disparar auto-optimize para {bot.bot_name}: {e}")
 
 
 # ─── Helpers DB (síncronos) ───────────────────────────────────

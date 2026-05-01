@@ -15,6 +15,7 @@ celery_app = Celery(
         "app.tasks.health_check_tasks",
         "app.tasks.sync_tasks",
         "app.tasks.sl_retry_tasks",
+        "app.tasks.optimizer_tasks",
     ],
 )
 
@@ -68,6 +69,11 @@ celery_app.conf.update(
         "retry-pending-sl-orders": {
             "task": "app.tasks.sl_retry_tasks.retry_pending_sl_orders",
             "schedule": 30.0,  # cada 30 segundos
+        },
+        # Auto-optimización periódica de bots habilitados: cada 5 minutos
+        "auto-optimize-all-bots": {
+            "task": "app.tasks.optimizer_tasks.auto_optimize_all_bots_task",
+            "schedule": 300.0,  # cada 5 minutos
         },
     },
 )
