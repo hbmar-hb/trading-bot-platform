@@ -1834,6 +1834,7 @@ async def get_optimizer_db_global(
     
     bots_data = []
     total_changes = 0
+    evaluated_changes = 0
     positive_changes = 0
     total_effectiveness = 0
     critical_bots = 0
@@ -1885,7 +1886,8 @@ async def get_optimizer_db_global(
         bot_effectiveness = sum(h.get("effectiveness", 0) for h in auto_changes)
         bot_positive = len([h for h in auto_changes if (h.get("effectiveness") or 0) > 0])
         
-        total_changes += len(auto_changes)
+        total_changes += len(history)           # TODOS los cambios aplicados
+        evaluated_changes += len(auto_changes)  # Solo los evaluados (con effectiveness)
         positive_changes += bot_positive
         total_effectiveness += bot_effectiveness
         
@@ -1928,10 +1930,10 @@ async def get_optimizer_db_global(
             "profit_factor": analysis.get("profit_factor") if analysis else None,
             "health_score": health["score"] if health else None,
             "health_level": health["level"] if health else None,
-            "effectiveness": bot_effectiveness,
-            "total_changes": len(auto_changes),
+            "effectiveness": round(bot_effectiveness, 2) if auto_changes else None,
+            "total_changes": len(history),
             "positive_changes": bot_positive,
-            "success_rate": round((bot_positive / len(auto_changes)) * 100, 1) if auto_changes else 0,
+            "success_rate": round((bot_positive / len(auto_changes)) * 100, 1) if auto_changes else None,
             "last_change": last_change.get("timestamp") if last_change else None,
             "last_change_summary": last_change.get("changes") if last_change else None,
             "config": bot.auto_optimize_config,
@@ -1941,7 +1943,7 @@ async def get_optimizer_db_global(
     bots_data.sort(key=lambda b: (b.get("health_score") or 100))
     
     # Calcular KPIs globales
-    global_success_rate = round((positive_changes / total_changes) * 100, 1) if total_changes else 0
+    global_success_rate = round((positive_changes / evaluated_changes) * 100, 1) if evaluated_changes else 0
     
     return {
         "kpis": {
@@ -2031,6 +2033,7 @@ async def get_optimizer_db_symbols(
                 "profit_factors": [],
                 "health_scores": [],
                 "total_changes": 0,
+                "evaluated_changes": 0,
                 "positive_changes": 0,
                 "total_effectiveness": 0.0,
                 "auto_enabled_count": 0,
@@ -2048,7 +2051,8 @@ async def get_optimizer_db_symbols(
             s["health_scores"].append(health["score"])
             if health["score"] < 40:
                 s["critical_count"] += 1
-        s["total_changes"] += len(auto_changes)
+        s["total_changes"] += len(history)
+        s["evaluated_changes"] += len(auto_changes)
         s["positive_changes"] += bot_positive
         s["total_effectiveness"] += bot_effectiveness
         if bot.auto_optimize_enabled:
@@ -2071,7 +2075,7 @@ async def get_optimizer_db_symbols(
             "avg_health_score": health_avg,
             "total_changes": s["total_changes"],
             "positive_changes": s["positive_changes"],
-            "success_rate": round((s["positive_changes"] / s["total_changes"]) * 100, 1) if s["total_changes"] else 0,
+            "success_rate": round((s["positive_changes"] / s["evaluated_changes"]) * 100, 1) if s["evaluated_changes"] else None,
             "total_improvement": round(s["total_effectiveness"], 2),
             "auto_enabled_count": s["auto_enabled_count"],
             "critical_count": s["critical_count"],

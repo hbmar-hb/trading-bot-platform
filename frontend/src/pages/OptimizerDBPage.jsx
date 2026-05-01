@@ -108,19 +108,27 @@ function BotRow({ bot, isSelected, onClick }) {
       </td>
       <td className="py-3 px-4">
         {bot.total_changes > 0 ? (
-          <div>
-            <span className={`text-sm font-mono ${bot.effectiveness >= 0 ? 'text-green-500' : 'text-red-400'}`}>
-              {bot.effectiveness >= 0 ? '+' : ''}{bot.effectiveness}
-            </span>
-            <span className="text-xs text-slate-400 ml-1">pts</span>
-          </div>
+          bot.effectiveness != null ? (
+            <div>
+              <span className={`text-sm font-mono ${bot.effectiveness >= 0 ? 'text-green-500' : 'text-red-400'}`}>
+                {bot.effectiveness >= 0 ? '+' : ''}{bot.effectiveness}
+              </span>
+              <span className="text-xs text-slate-400 ml-1">pts</span>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400">Pendiente</span>
+          )
         ) : (
           <span className="text-xs text-slate-400">Sin datos</span>
         )}
       </td>
       <td className="py-3 px-4">
         {bot.total_changes > 0 ? (
-          <span className="text-sm">{bot.success_rate}%</span>
+          bot.success_rate != null ? (
+            <span className="text-sm">{bot.success_rate}%</span>
+          ) : (
+            <span className="text-xs text-slate-400">Pendiente</span>
+          )
         ) : (
           <span className="text-xs text-slate-400">—</span>
         )}
