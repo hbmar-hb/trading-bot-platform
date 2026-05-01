@@ -19,6 +19,14 @@ jobs:
       - name: Copy .env file
         run: Copy-Item "c:\Apps\trading-bot-platform\trading-bot-platform\.env" -Destination ".env" -Force
 
+      - name: Fix line endings for shell scripts
+        run: |
+          Get-ChildItem -Recurse -Filter "*.sh" | ForEach-Object {
+            $content = [System.IO.File]::ReadAllText($_.FullName)
+            $fixed = $content -replace "`r`n", "`n"
+            [System.IO.File]::WriteAllText($_.FullName, $fixed)
+          }
+
       - name: Stop containers
         run: docker compose down; if (-not $?) { Write-Host "No containers to stop or error ignored" }
 
