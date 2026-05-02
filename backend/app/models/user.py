@@ -21,6 +21,9 @@ class User(TimestampMixin, Base):
     # Rol: user | admin
     role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
 
+    # Email verificado
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # 2FA (TOTP)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

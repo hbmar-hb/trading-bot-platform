@@ -17,19 +17,33 @@ from app.models.user import User
 from app.schemas.auth import (
     AccessTokenResponse,
     ChangePasswordRequest,
+    ForgotPasswordRequest,
     LoginRequest,
     LoginResponse,
     RefreshTokenRequest,
     RegisterRequest,
+    ResendVerificationRequest,
+    ResetPasswordRequest,
     TokenResponse,
     TwoFactorLoginRequest,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
     UserResponse,
+    VerifyEmailRequest,
 )
 from app.core.rate_limiter import login_limiter, register_limiter
+from app.services.cache import (
+    delete_email_verification_token,
+    delete_password_reset_token,
+    get_email_verification_user,
+    get_password_reset_user,
+    set_email_verification_token,
+    set_password_reset_token,
+)
 from app.services.database import get_db
+from app.services.email_service import send_password_reset_email, send_verification_email
 from config.settings import settings
+import asyncio
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -110,6 +124,9 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
 
     if not user.is_active:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Usuario desactivado")
+
+    if settings.require_email_verification and not user.email_verified:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Email no verificado. Revisa tu bandeja de entrada o solicita un nuevo enlace de verificaci��n.")
 
     # Si tiene 2FA activo → devolver temp_token para el segundo paso
     if user.totp_enabled:
@@ -293,4 +310,77 @@ async def register(data: RegisterRequest, db: AsyncSession = Depends(get_db)):
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    # Enviar email de verificaci��n si el servicio de email estǭ configurado
+    if settings.email_from:
+        token = str(uuid.uuid4())
+        set_email_verification_token(str(user.id), token)
+        verify_url = f"{settings.frontend_url}/verify-email?token={token}"
+        await asyncio.to_thread(send_verification_email, user.email, verify_url)
+
     return user
+
+
+
+@router.post("/forgot-password", status_code=status.HTTP_204_NO_CONTENT)
+async def forgot_password(data: ForgotPasswordRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        return None
+
+    token = str(uuid.uuid4())
+    set_password_reset_token(str(user.id), token)
+    reset_url = f"{settings.frontend_url}/reset-password?token={token}"
+    await asyncio.to_thread(send_password_reset_email, user.email, reset_url)
+    return None
+
+
+@router.post("/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(get_db)):
+    user_id = get_password_reset_user(data.token)
+    if not user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Token invalido o expirado")
+
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    user.hashed_password = pwd_context.hash(data.new_password)
+    delete_password_reset_token(data.token)
+    await db.commit()
+    return None
+
+
+@router.post("/verify-email", status_code=status.HTTP_204_NO_CONTENT)
+async def verify_email(data: VerifyEmailRequest, db: AsyncSession = Depends(get_db)):
+    user_id = get_email_verification_user(data.token)
+    if not user_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Token invalido o expirado")
+
+    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    user.email_verified = True
+    delete_email_verification_token(data.token)
+    await db.commit()
+    return None
+
+
+@router.post("/resend-verification", status_code=status.HTTP_204_NO_CONTENT)
+async def resend_verification(data: ResendVerificationRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(User).where(User.email == data.email))
+    user = result.scalar_one_or_none()
+
+    if not user or user.email_verified:
+        return None
+
+    token = str(uuid.uuid4())
+    set_email_verification_token(str(user.id), token)
+    verify_url = f"{settings.frontend_url}/verify-email?token={token}"
+    await asyncio.to_thread(send_verification_email, user.email, verify_url)
+    return None

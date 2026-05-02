@@ -64,4 +64,23 @@ class Settings(BaseSettings):
     }
 
 
+    # URLs
+    frontend_url: str = "http://localhost"
+    api_base_url: str = "http://localhost:8100"
+
+    # Security
+    require_email_verification: bool = False
+
+    # Email (Resend API o SMTP fallback)
+    email_provider: str = "resend"
+    resend_api_key: str = ""
+    email_from: str = ""
+    email_from_name: str = "Trading Bot Platform"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_tls: bool = True
+
+
 settings = Settings()

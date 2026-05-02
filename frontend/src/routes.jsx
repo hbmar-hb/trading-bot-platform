@@ -3,6 +3,9 @@ import ProtectedRoute from '@/components/Common/ProtectedRoute'
 import Layout from '@/components/Common/Layout'
 
 import LoginPage           from '@/pages/LoginPage'
+import ForgotPasswordPage  from '@/pages/ForgotPasswordPage'
+import ResetPasswordPage   from '@/pages/ResetPasswordPage'
+import VerifyEmailPage     from '@/pages/VerifyEmailPage'
 import DashboardPage       from '@/pages/DashboardPage'
 import BotsListPage        from '@/pages/BotsListPage'
 import BotEditPage         from '@/pages/BotEditPage'
@@ -33,6 +36,9 @@ export default function AppRoutes() {
     <BrowserRouter>
       <Routes>
         <Route path="/login"                        element={<LoginPage />} />
+        <Route path="/forgot-password"              element={<ForgotPasswordPage />} />
+        <Route path="/reset-password"               element={<ResetPasswordPage />} />
+        <Route path="/verify-email"                 element={<VerifyEmailPage />} />
         <Route path="/"                             element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard"                    element={guard(DashboardPage)} />
         <Route path="/bots"                         element={guard(BotsListPage)} />

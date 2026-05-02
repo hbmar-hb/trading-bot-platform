@@ -100,6 +100,34 @@ class UserResetPassword(BaseModel):
 
 # ─── 2FA Requests ────────────────────────────────────────────
 
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+
+    @field_validator("new_password")
+    @classmethod
+    def password_strength(cls, v: str) -> str:
+        if len(v) < 8:
+            raise ValueError("La contrase��a debe tener al menos 8 caracteres")
+        if not any(c.isupper() for c in v):
+            raise ValueError("La contrase��a debe contener al menos una mayǧscula")
+        if not any(c.isdigit() for c in v):
+            raise ValueError("La contrase��a debe contener al menos un nǧmero")
+        return v
+
+
+class VerifyEmailRequest(BaseModel):
+    token: str
+
+
+class ResendVerificationRequest(BaseModel):
+    email: EmailStr
+
+
 class TwoFactorVerifyRequest(BaseModel):
     totp_code: str
 
@@ -143,6 +171,7 @@ class UserResponse(BaseModel):
     email: str
     is_active: bool
     role: str = "user"
+    email_verified: bool = False
     totp_enabled: bool = False
 
     model_config = {"from_attributes": True}

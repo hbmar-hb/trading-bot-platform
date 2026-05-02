@@ -1,16 +1,18 @@
 import { useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, Link } from 'react-router-dom'
 import { authService } from '@/services/auth'
 import useAuthStore from '@/store/authStore'
 
 export default function LoginPage() {
-  const [step, setStep]         = useState('credentials') // 'credentials' | '2fa'
+  const [step, setStep]         = useState('credentials')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [code, setCode]         = useState('')
   const [tempToken, setTempToken] = useState('')
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
+  const [resendEmail, setResendEmail] = useState('')
+  const [resendSent, setResendSent] = useState(false)
   const { setTokens, setUser }  = useAuthStore()
   const navigate                = useNavigate()
   const codeRef                 = useRef(null)
@@ -31,7 +33,7 @@ export default function LoginPage() {
         navigate('/dashboard')
       }
     } catch (err) {
-      setError(err.response?.data?.detail || 'Error al iniciar sesión')
+      setError(err.response?.data?.detail || 'Error al iniciar sesion')
     } finally {
       setLoading(false)
     }
@@ -47,9 +49,23 @@ export default function LoginPage() {
       setUser(me.data)
       navigate('/dashboard')
     } catch (err) {
-      setError(err.response?.data?.detail || 'Código incorrecto')
+      setError(err.response?.data?.detail || 'Codigo incorrecto')
       setCode('')
       codeRef.current?.focus()
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleResend = async (e) => {
+    e.preventDefault()
+    if (!resendEmail) return
+    setLoading(true); setError(null)
+    try {
+      await authService.resendVerification({ email: resendEmail })
+      setResendSent(true)
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Error al reenviar')
     } finally {
       setLoading(false)
     }
@@ -61,11 +77,10 @@ export default function LoginPage() {
         <div className="text-center mb-8">
           <h1 className="text-2xl font-bold text-slate-900 dark:text-white">Trading Bot Platform</h1>
           <p className="text-slate-500 dark:text-gray-400 mt-1 text-sm">
-            {step === 'credentials' ? 'Accede a tu cuenta' : 'Verificación en dos pasos'}
+            {step === 'credentials' ? 'Accede a tu cuenta' : 'Verificacion en dos pasos'}
           </p>
         </div>
 
-        {/* ── Paso 1: usuario + contraseña ── */}
         {step === 'credentials' && (
           <form onSubmit={handleCredentials} className="bg-white dark:bg-gray-900 rounded-xl border border-slate-200 dark:border-gray-800 p-6 space-y-4">
             {error && (
@@ -78,7 +93,7 @@ export default function LoginPage() {
               <input
                 type="text" value={username}
                 onChange={e => setUsername(e.target.value)}
-                className="input" placeholder="admin"
+                className="input w-full" placeholder="admin"
                 autoFocus required
               />
             </div>
@@ -87,17 +102,46 @@ export default function LoginPage() {
               <input
                 type="password" value={password}
                 onChange={e => setPassword(e.target.value)}
-                className="input" placeholder="••••••••"
+                className="input w-full" placeholder="********"
                 required
               />
             </div>
             <button type="submit" disabled={loading} className="btn-primary w-full mt-2">
-              {loading ? 'Comprobando…' : 'Iniciar sesión'}
+              {loading ? 'Comprobando...' : 'Iniciar sesion'}
             </button>
+            <div className="flex justify-between text-sm pt-1">
+              <Link to="/forgot-password" className="text-blue-500 hover:text-blue-600">
+                Olvide mi contraseña
+              </Link>
+            </div>
+            {error && error.toLowerCase().includes('email no verificado') && !resendSent && (
+              <div className="border-t border-slate-200 dark:border-gray-800 pt-3 space-y-2">
+                <p className="text-xs text-slate-500 dark:text-gray-400">
+                  Introduce tu email para reenviar el enlace de verificacion:
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="email" value={resendEmail}
+                    onChange={e => setResendEmail(e.target.value)}
+                    className="input flex-1 text-sm"
+                    placeholder="tu@email.com"
+                  />
+                  <button
+                    onClick={handleResend}
+                    disabled={loading || !resendEmail}
+                    className="btn-secondary text-sm px-3"
+                  >
+                    Reenviar
+                  </button>
+                </div>
+              </div>
+            )}
+            {resendSent && (
+              <p className="text-xs text-green-500">Enlace de verificacion reenviado.</p>
+            )}
           </form>
         )}
 
-        {/* ── Paso 2: código TOTP ── */}
         {step === '2fa' && (
           <form onSubmit={handle2fa} className="bg-white dark:bg-gray-900 rounded-xl border border-slate-200 dark:border-gray-800 p-6 space-y-4">
             {error && (
@@ -106,29 +150,29 @@ export default function LoginPage() {
               </div>
             )}
             <p className="text-sm text-slate-500 dark:text-gray-400">
-              Introduce el código de 6 dígitos de tu app de autenticación.
+              Introduce el codigo de 6 digitos de tu app de autenticacion.
             </p>
             <div>
-              <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Código 2FA</label>
+              <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Codigo 2FA</label>
               <input
                 ref={codeRef}
                 type="text" inputMode="numeric" pattern="\d{6}"
                 maxLength={6} value={code}
                 onChange={e => setCode(e.target.value.replace(/\D/g, ''))}
-                className="input text-center font-mono text-2xl tracking-widest"
+                className="input text-center font-mono text-2xl tracking-widest w-full"
                 placeholder="000000"
                 required
               />
             </div>
             <button type="submit" disabled={loading || code.length !== 6} className="btn-primary w-full">
-              {loading ? 'Verificando…' : 'Verificar'}
+              {loading ? 'Verificando...' : 'Verificar'}
             </button>
             <button
               type="button"
               onClick={() => { setStep('credentials'); setError(null); setCode('') }}
               className="w-full text-sm text-slate-500 dark:text-gray-400 hover:text-slate-700 dark:hover:text-gray-300"
             >
-              ← Volver
+              Volver
             </button>
           </form>
         )}

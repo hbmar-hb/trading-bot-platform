@@ -113,3 +113,33 @@ def publish_notification_sync(user_id: str, notification_data: dict) -> None:
         **notification_data,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }))
+
+
+# �"?�"?�"? Tokens temporales (password reset / email verification) �"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?�"?
+
+RESET_TOKEN_TTL = 1800      # 30 minutos
+VERIFY_TOKEN_TTL = 86400    # 24 horas
+
+
+def set_password_reset_token(user_id: str, token: str) -> None:
+    sync_redis.setex(f"pwreset:{token}", RESET_TOKEN_TTL, user_id)
+
+
+def get_password_reset_user(token: str) -> str | None:
+    return sync_redis.get(f"pwreset:{token}")
+
+
+def delete_password_reset_token(token: str) -> None:
+    sync_redis.delete(f"pwreset:{token}")
+
+
+def set_email_verification_token(user_id: str, token: str) -> None:
+    sync_redis.setex(f"emailverify:{token}", VERIFY_TOKEN_TTL, user_id)
+
+
+def get_email_verification_user(token: str) -> str | None:
+    return sync_redis.get(f"emailverify:{token}")
+
+
+def delete_email_verification_token(token: str) -> None:
+    sync_redis.delete(f"emailverify:{token}")
