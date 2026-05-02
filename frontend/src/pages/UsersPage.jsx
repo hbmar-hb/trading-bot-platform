@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Edit2, KeyRound, Plus, Trash2, X, Check } from 'lucide-react'
+import { Copy, Edit2, Eye, EyeOff, KeyRound, Plus, RefreshCw, Trash2, X, Check } from 'lucide-react'
 import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
 
@@ -25,12 +25,38 @@ function Modal({ title, onClose, children }) {
   )
 }
 
+function generatePassword() {
+  const upper  = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const lower  = 'abcdefghjkmnpqrstuvwxyz'
+  const digits = '23456789'
+  const all    = upper + lower + digits
+  let pass = upper[Math.floor(Math.random() * upper.length)]
+           + digits[Math.floor(Math.random() * digits.length)]
+  for (let i = 0; i < 8; i++) pass += all[Math.floor(Math.random() * all.length)]
+  return pass.split('').sort(() => Math.random() - 0.5).join('')
+}
+
 /* ─── Modal crear usuario ─────────────────────────────────── */
 function CreateUserModal({ onClose, onCreated }) {
-  const [form, setForm]     = useState({ username: '', email: '', password: '' })
+  const [form, setForm]       = useState({ username: '', email: '', password: '' })
   const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState(null)
+  const [error, setError]     = useState(null)
+  const [showPass, setShowPass] = useState(false)
+  const [copied, setCopied]   = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  const handleGenerate = () => {
+    const pwd = generatePassword()
+    set('password', pwd)
+    setShowPass(true)
+    setCopied(false)
+  }
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(form.password)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -60,9 +86,39 @@ function CreateUserModal({ onClose, onCreated }) {
             className="input" placeholder="usuario@email.com" required />
         </div>
         <div>
-          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Contraseña</label>
-          <input type="password" value={form.password} onChange={e => set('password', e.target.value)}
-            className="input" placeholder="Mín. 8 chars, 1 mayúscula, 1 número" required />
+          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Contraseña temporal</label>
+          <div className="flex gap-2">
+            <div className="relative flex-1">
+              <input
+                type={showPass ? 'text' : 'password'}
+                value={form.password}
+                onChange={e => set('password', e.target.value)}
+                className="input w-full pr-8"
+                placeholder="Mín. 8 chars, 1 mayúscula, 1 número"
+                required
+              />
+              <button
+                type="button"
+                onClick={() => setShowPass(v => !v)}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-gray-300"
+              >
+                {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </div>
+            <button type="button" onClick={handleGenerate} title="Generar contraseña"
+              className="btn-ghost px-2.5" >
+              <RefreshCw size={15} />
+            </button>
+            <button type="button" onClick={handleCopy} disabled={!form.password} title="Copiar"
+              className="btn-ghost px-2.5">
+              {copied ? <Check size={15} className="text-green-500" /> : <Copy size={15} />}
+            </button>
+          </div>
+          {form.password && showPass && (
+            <p className="mt-1.5 text-xs text-slate-500 dark:text-gray-400">
+              Comparte esta contraseña con el usuario — deberá cambiarla al entrar.
+            </p>
+          )}
         </div>
         <div className="flex gap-2 pt-1">
           <button type="submit" disabled={loading} className="btn-primary">

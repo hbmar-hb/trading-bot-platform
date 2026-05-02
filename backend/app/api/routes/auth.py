@@ -140,6 +140,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)):
     return LoginResponse(
         access_token=tokens.access_token,
         refresh_token=tokens.refresh_token,
+        must_change_password=user.must_change_password,
     )
 
 
@@ -208,6 +209,7 @@ async def change_password(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Contraseña actual incorrecta")
 
     user.hashed_password = pwd_context.hash(data.new_password)
+    user.must_change_password = False
     await db.commit()
 
 

@@ -24,6 +24,9 @@ class User(TimestampMixin, Base):
     # Email verificado
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Forzar cambio de contraseña en el próximo login
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     # 2FA (TOTP)
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

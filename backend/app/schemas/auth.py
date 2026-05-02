@@ -157,6 +157,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     requires_2fa: bool = False
     temp_token: str | None = None
+    must_change_password: bool = False
 
 
 class TwoFactorSetupResponse(BaseModel):
@@ -173,5 +174,6 @@ class UserResponse(BaseModel):
     role: str = "user"
     email_verified: bool = False
     totp_enabled: bool = False
+    must_change_password: bool = False
 
     model_config = {"from_attributes": True}

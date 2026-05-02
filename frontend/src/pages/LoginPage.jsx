@@ -30,7 +30,7 @@ export default function LoginPage() {
         setTokens(data.access_token, data.refresh_token)
         const me = await authService.me()
         setUser(me.data)
-        navigate('/dashboard')
+        navigate(data.must_change_password ? '/change-password' : '/dashboard')
       }
     } catch (err) {
       setError(err.response?.data?.detail || 'Error al iniciar sesion')

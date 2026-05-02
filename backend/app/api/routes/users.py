@@ -54,6 +54,7 @@ async def create_user(
         email=data.email,
         hashed_password=pwd_context.hash(data.password),
         role=data.role if data.role in ("user", "admin") else "user",
+        must_change_password=True,
     )
     db.add(user)
     await db.commit()

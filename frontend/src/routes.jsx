@@ -2,7 +2,8 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from '@/components/Common/ProtectedRoute'
 import Layout from '@/components/Common/Layout'
 
-import LoginPage           from '@/pages/LoginPage'
+import LoginPage                from '@/pages/LoginPage'
+import ChangePasswordForcedPage from '@/pages/ChangePasswordForcedPage'
 import ForgotPasswordPage  from '@/pages/ForgotPasswordPage'
 import ResetPasswordPage   from '@/pages/ResetPasswordPage'
 import VerifyEmailPage     from '@/pages/VerifyEmailPage'
@@ -39,6 +40,9 @@ export default function AppRoutes() {
         <Route path="/forgot-password"              element={<ForgotPasswordPage />} />
         <Route path="/reset-password"               element={<ResetPasswordPage />} />
         <Route path="/verify-email"                 element={<VerifyEmailPage />} />
+        <Route path="/change-password"              element={
+          <ProtectedRoute><ChangePasswordForcedPage /></ProtectedRoute>
+        } />
         <Route path="/"                             element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard"                    element={guard(DashboardPage)} />
         <Route path="/bots"                         element={guard(BotsListPage)} />
