@@ -7,9 +7,6 @@ on:
 jobs:
   deploy:
     runs-on: self-hosted
-    defaults:
-      run:
-        shell: powershell
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -17,34 +14,26 @@ jobs:
           clean: false
 
       - name: Copy .env file
-        run: Copy-Item "c:\Apps\trading-bot-platform\trading-bot-platform\.env" -Destination ".env" -Force
-
-      - name: Fix line endings for shell scripts
-        run: |
-          Get-ChildItem -Recurse -Filter "*.sh" | ForEach-Object {
-            $content = [System.IO.File]::ReadAllText($_.FullName)
-            $fixed = $content -replace "`r`n", "`n"
-            [System.IO.File]::WriteAllText($_.FullName, $fixed)
-          }
+        run: cp /home/deploy/apps/trading-bot-platform/.env .env
 
       - name: Stop containers
-        run: docker compose down; if (-not $?) { Write-Host "No containers to stop or error ignored" }
+        run: docker compose -f docker-compose.prod.yml down || true
 
       - name: Prune old images
         run: docker image prune -f
 
       - name: Build and start
-        run: docker compose up -d --build
+        run: docker compose -f docker-compose.prod.yml up -d --build
 
       - name: Health check
         run: |
-          $max = 30
-          for ($i = 0; $i -lt $max; $i++) {
-            try {
-              $r = Invoke-WebRequest -Uri "http://localhost:8100/docs" -UseBasicParsing
-              if ($r.StatusCode -eq 200) { Write-Host "Backend OK"; exit 0 }
-            } catch { Write-Host "Attempt $($i+1)/$max failed" }
-            Start-Sleep -Seconds 2
-          }
-          Write-Host "Backend did not become healthy"
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8100/docs > /dev/null; then
+              echo "Backend OK"
+              exit 0
+            fi
+            echo "Intento $i/30..."
+            sleep 2
+          done
+          echo "Backend no respondió"
           exit 1
