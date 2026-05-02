@@ -25,6 +25,18 @@ function Modal({ title, onClose, children }) {
   )
 }
 
+function fallbackCopy(text) {
+  const ta = document.createElement('textarea')
+  ta.value = text
+  ta.style.position = 'fixed'
+  ta.style.opacity = '0'
+  document.body.appendChild(ta)
+  ta.focus()
+  ta.select()
+  document.execCommand('copy')
+  document.body.removeChild(ta)
+}
+
 function generatePassword() {
   const upper  = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
   const lower  = 'abcdefghjkmnpqrstuvwxyz'
@@ -53,7 +65,11 @@ function CreateUserModal({ onClose, onCreated }) {
   }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(form.password)
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(form.password).catch(() => fallbackCopy(form.password))
+    } else {
+      fallbackCopy(form.password)
+    }
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
