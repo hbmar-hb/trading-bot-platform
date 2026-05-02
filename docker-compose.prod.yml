@@ -1,0 +1,116 @@
+# Docker Compose para PRODUCCION (Hetzner VPS)
+# Uso: docker compose -f docker-compose.prod.yml up -d --build
+#
+# Diferencias respecto a docker-compose.yml (desarrollo local):
+# - PostgreSQL y Redis NO expuestos al exterior (sin ports)
+# - Frontend en puerto 8080 (para Nginx reverse proxy)
+# - Variables de entorno de produccion
+
+services:
+
+  postgres:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    # SIN ports: solo accesible dentro de Docker
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+      - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    # SIN ports: solo accesible dentro de Docker
+    command: redis-server /usr/local/etc/redis/redis.conf
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ENV=production
+      - DEBUG=false
+      - CORS_ORIGINS=https://${DOMAIN}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "8100:8000"
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ENV=production
+      - DEBUG=false
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: >
+      celery -A app.services.celery_app worker
+      --loglevel=info
+      --concurrency=4
+      --queues=orders,sl_updates,notifications,default
+
+  celery_beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - ENV=production
+      - DEBUG=false
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - celery_beat_data:/app/celerybeat-data
+    command: >
+      celery -A app.services.celery_app beat
+      --loglevel=info
+      --schedule=/app/celerybeat-data/celerybeat-schedule
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api
+        VITE_WS_URL: wss://${DOMAIN}/ws
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"  # Nginx se conecta a localhost:8080
+
+volumes:
+  postgres_data:
+  redis_data:
+  celery_beat_data:
