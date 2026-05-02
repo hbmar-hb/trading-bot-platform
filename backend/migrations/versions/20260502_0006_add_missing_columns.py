@@ -1,4 +1,4 @@
-"""add missing columns to positions and bot_configs
+"""add all missing columns
 
 Revision ID: 006_add_missing_columns
 Revises: 005_add_use_roi_percentage
@@ -16,8 +16,17 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # ── users: columnas faltantes ───────────────────────────────
+    op.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'")
+    op.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified BOOLEAN NOT NULL DEFAULT false")
+
+    # ── positions: columnas faltantes + ampliar symbol ──────────
     op.execute("ALTER TABLE positions ADD COLUMN IF NOT EXISTS extra_config JSONB DEFAULT '{}'")
     op.execute("ALTER TABLE positions ADD COLUMN IF NOT EXISTS exchange_position_id VARCHAR(100)")
+    op.execute("ALTER TABLE positions ALTER COLUMN symbol TYPE VARCHAR(50)")
+
+    # ── bot_configs: columnas faltantes + ampliar symbol ────────
+    op.execute("ALTER TABLE bot_configs ALTER COLUMN symbol TYPE VARCHAR(50)")
     op.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS signal_confirmation_minutes INTEGER NOT NULL DEFAULT 0")
     op.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS optimizer_applied_at TIMESTAMPTZ")
     op.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS optimizer_trades_at_apply INTEGER DEFAULT 0")
@@ -28,16 +37,19 @@ def upgrade() -> None:
     op.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS auto_optimize_trades_at_eval INTEGER DEFAULT 0")
     op.execute("ALTER TABLE bot_configs ADD COLUMN IF NOT EXISTS auto_optimize_history JSONB NOT NULL DEFAULT '[]'")
 
+    # ── trading_signals: tabla faltante ─────────────────────────
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS trading_signals (
+            id UUID PRIMARY KEY,
+            bot_id UUID REFERENCES bot_configs(id) ON DELETE CASCADE,
+            symbol VARCHAR(50),
+            action VARCHAR(20),
+            price NUMERIC(20,8),
+            payload JSONB DEFAULT '{}',
+            received_at TIMESTAMPTZ NOT NULL DEFAULT now()
+        )
+    """)
+
 
 def downgrade() -> None:
-    op.drop_column('bot_configs', 'auto_optimize_history')
-    op.drop_column('bot_configs', 'auto_optimize_trades_at_eval')
-    op.drop_column('bot_configs', 'auto_optimize_last_eval_at')
-    op.drop_column('bot_configs', 'auto_optimize_config')
-    op.drop_column('bot_configs', 'auto_optimize_enabled')
-    op.drop_column('bot_configs', 'optimizer_applied_params')
-    op.drop_column('bot_configs', 'optimizer_trades_at_apply')
-    op.drop_column('bot_configs', 'optimizer_applied_at')
-    op.drop_column('bot_configs', 'signal_confirmation_minutes')
-    op.drop_column('positions', 'exchange_position_id')
-    op.drop_column('positions', 'extra_config')
+    pass
