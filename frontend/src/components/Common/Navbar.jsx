@@ -20,7 +20,7 @@ const links = [
   { to: '/exchange-trades',    icon: History,      label: 'Historial'  },
   { to: '/manual-trading',     icon: MousePointerClick, label: 'Manual'  },
   { to: '/paper-trading',      icon: FileText,     label: 'Paper'      },
-  { to: '/users',              icon: Users,        label: 'Usuarios'   },
+  { to: '/users',              icon: Users,        label: 'Usuarios',  adminOnly: true },
   { to: '/settings',           icon: Settings,     label: 'Ajustes'    },
 ]
 
@@ -77,7 +77,7 @@ export default function Navbar() {
 
       {/* Links */}
       <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
-        {links.map(({ to, icon: Icon, label }) => (
+        {links.filter(l => !l.adminOnly || user?.role === 'admin').map(({ to, icon: Icon, label }) => (
           <NavLink
             key={to}
             to={to}

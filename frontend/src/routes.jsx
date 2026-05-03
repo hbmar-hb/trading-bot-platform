@@ -1,5 +1,6 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from '@/components/Common/ProtectedRoute'
+import AdminRoute from '@/components/Common/AdminRoute'
 import Layout from '@/components/Common/Layout'
 
 import LoginPage                from '@/pages/LoginPage'
@@ -59,7 +60,9 @@ export default function AppRoutes() {
         <Route path="/exchange-trades"              element={guard(ExchangeTradesPage)} />
         <Route path="/manual-trading"               element={guard(ManualTradePage)} />
         <Route path="/paper-trading"                element={guard(PaperTradingPage)} />
-        <Route path="/users"                        element={guard(UsersPage)} />
+        <Route path="/users"                        element={
+          <ProtectedRoute><AdminRoute><Layout><UsersPage /></Layout></AdminRoute></ProtectedRoute>
+        } />
         <Route path="/settings"                     element={guard(SettingsPage)} />
         <Route path="*"                             element={<Navigate to="/dashboard" replace />} />
       </Routes>
