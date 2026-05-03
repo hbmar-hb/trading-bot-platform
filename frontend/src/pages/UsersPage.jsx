@@ -50,7 +50,7 @@ function generatePassword() {
 
 /* ─── Modal crear usuario ─────────────────────────────────── */
 function CreateUserModal({ onClose, onCreated }) {
-  const [form, setForm]       = useState({ username: '', email: '', password: '' })
+  const [form, setForm]       = useState({ username: '', email: '', password: '', role: 'user' })
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState(null)
   const [showPass, setShowPass] = useState(false)
@@ -135,6 +135,13 @@ function CreateUserModal({ onClose, onCreated }) {
               Comparte esta contraseña con el usuario — deberá cambiarla al entrar.
             </p>
           )}
+        </div>
+        <div>
+          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Rol</label>
+          <select value={form.role} onChange={e => set('role', e.target.value)} className="input">
+            <option value="user">Usuario</option>
+            <option value="admin">Administrador</option>
+          </select>
         </div>
         <div className="flex gap-2 pt-1">
           <button type="submit" disabled={loading} className="btn-primary">
