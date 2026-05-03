@@ -8,6 +8,7 @@ from app.models.signal_log import SignalLog
 from app.models.bot_log import BotLog
 from app.models.paper_balance import PaperBalance
 from app.models.exchange_trade import ExchangeTrade
+from app.models.chat import ChatRoom, ChatMessage
 
 __all__ = [
     "User",
@@ -19,4 +20,6 @@ __all__ = [
     "BotLog",
     "PaperBalance",
     "ExchangeTrade",
+    "ChatRoom",
+    "ChatMessage",
 ]

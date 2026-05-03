@@ -24,6 +24,7 @@ import ManualTradePage     from '@/pages/ManualTradePage'
 import PaperTradingPage    from '@/pages/PaperTradingPage'
 import SettingsPage        from '@/pages/SettingsPage'
 import UsersPage           from '@/pages/UsersPage'
+import ChatPage            from '@/pages/ChatPage'
 
 const guard = (Page) => (
   <ProtectedRoute>
@@ -63,6 +64,7 @@ export default function AppRoutes() {
         <Route path="/users"                        element={
           <ProtectedRoute><AdminRoute><Layout><UsersPage /></Layout></AdminRoute></ProtectedRoute>
         } />
+        <Route path="/chat"                         element={guard(ChatPage)} />
         <Route path="/settings"                     element={guard(SettingsPage)} />
         <Route path="*"                             element={<Navigate to="/dashboard" replace />} />
       </Routes>

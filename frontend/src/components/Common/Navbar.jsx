@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   BarChart3, Bot, CandlestickChart, FileText, Gauge, History, KeyRound,
-  LogOut, Menu, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users, Zap,
+  LogOut, Menu, MessageSquare, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users, Zap,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
@@ -20,6 +20,7 @@ const links = [
   { to: '/exchange-trades',    icon: History,      label: 'Historial'  },
   { to: '/manual-trading',     icon: MousePointerClick, label: 'Manual'  },
   { to: '/paper-trading',      icon: FileText,     label: 'Paper'      },
+  { to: '/chat',               icon: MessageSquare, label: 'Chat'      },
   { to: '/users',              icon: Users,        label: 'Usuarios',  adminOnly: true },
   { to: '/settings',           icon: Settings,     label: 'Ajustes'    },
 ]
