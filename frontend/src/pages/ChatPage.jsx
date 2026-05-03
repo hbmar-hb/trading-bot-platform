@@ -173,7 +173,7 @@ export default function ChatPage() {
   useEffect(() => {
     if (!token) return
     const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${window.location.host}/api/ws?token=${token}`)
+    const ws = new WebSocket(`${proto}://${window.location.host}/ws?token=${token}`)
     wsRef.current = ws
 
     ws.onmessage = (e) => {
