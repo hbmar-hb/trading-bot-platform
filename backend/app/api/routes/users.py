@@ -9,10 +9,14 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import asyncio
+
 from app.api.dependencies import get_current_admin_user, get_current_user_id
 from app.models.user import User
 from app.schemas.auth import UserCreate, UserResponse, UserResetPassword, UserUpdate
 from app.services.database import get_db
+from app.services.email_service import send_welcome_email
+from config.settings import settings
 
 router = APIRouter(prefix="/users", tags=["users"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -59,6 +63,16 @@ async def create_user(
     db.add(user)
     await db.commit()
     await db.refresh(user)
+
+    if settings.email_from:
+        await asyncio.to_thread(
+            send_welcome_email,
+            data.email,
+            data.username,
+            data.password,
+            settings.frontend_url,
+        )
+
     return user
 
 
@@ -112,7 +126,17 @@ async def reset_password(
 ):
     user = await _get_user_or_404(user_id, db)
     user.hashed_password = pwd_context.hash(data.new_password)
+    user.must_change_password = True
     await db.commit()
+
+    if settings.email_from:
+        await asyncio.to_thread(
+            send_welcome_email,
+            user.email,
+            user.username,
+            data.new_password,
+            settings.frontend_url,
+        )
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

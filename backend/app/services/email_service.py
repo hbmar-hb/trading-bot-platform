@@ -94,6 +94,32 @@ def send_password_reset_email(to: str, reset_url: str) -> bool:
     return send_email(to, subject, html, text)
 
 
+def send_welcome_email(to: str, username: str, password: str, login_url: str) -> bool:
+    subject = "Bienvenido a Trading Bot Platform — Tus credenciales de acceso"
+    html = f"""
+    <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto">
+      <h2 style="color:#3b82f6">Trading Bot Platform</h2>
+      <p>Hola <strong>{username}</strong>, tu cuenta ha sido creada.</p>
+      <p>Tus credenciales de acceso son:</p>
+      <table style="background:#f8fafc;border-radius:8px;padding:16px;width:100%;border-collapse:collapse">
+        <tr><td style="padding:6px 12px;color:#64748b">Usuario</td><td style="padding:6px 12px;font-weight:bold">{username}</td></tr>
+        <tr><td style="padding:6px 12px;color:#64748b">Contraseña temporal</td><td style="padding:6px 12px;font-weight:bold;font-family:monospace">{password}</td></tr>
+      </table>
+      <p style="margin-top:24px">
+        <a href="{login_url}" style="padding:12px 24px;background:#3b82f6;color:#fff;text-decoration:none;border-radius:6px;font-weight:bold">
+          Acceder a la plataforma
+        </a>
+      </p>
+      <p style="color:#ef4444;font-size:13px;margin-top:16px">
+        ⚠️ Deberás cambiar tu contraseña en el primer inicio de sesión.
+      </p>
+      <p style="color:#94a3b8;font-size:12px">Si no esperabas este email, ignóralo.</p>
+    </div>
+    """
+    text = f"Usuario: {username}\nContraseña temporal: {password}\nAcceso: {login_url}\nDeberás cambiar tu contraseña al entrar."
+    return send_email(to, subject, html, text)
+
+
 def send_verification_email(to: str, verify_url: str) -> bool:
     subject = "Verifica tu email - Trading Bot Platform"
     html = f"""
