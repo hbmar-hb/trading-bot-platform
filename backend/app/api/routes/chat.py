@@ -1,6 +1,7 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -9,6 +10,7 @@ from app.models.chat import ChatMessage, ChatRoom
 from app.models.user import User
 from app.schemas.chat import ChatMessageResponse, ChatRoomCreate, ChatRoomResponse
 from app.services.database import get_db
+from config.settings import settings
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -51,6 +53,37 @@ async def delete_room(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Sala no encontrada")
     await db.delete(room)
     await db.commit()
+
+
+@router.get("/gifs")
+async def search_gifs(
+    q: str = Query(""),
+    _: uuid.UUID = Depends(get_current_user_id),
+):
+    if not settings.giphy_api_key:
+        return {"data": [], "enabled": False}
+
+    endpoint = "https://api.giphy.com/v1/gifs/trending" if not q.strip() else "https://api.giphy.com/v1/gifs/search"
+    params = {"api_key": settings.giphy_api_key, "limit": 24, "rating": "g"}
+    if q.strip():
+        params["q"] = q.strip()
+
+    async with httpx.AsyncClient(timeout=10) as client:
+        resp = await client.get(endpoint, params=params)
+        resp.raise_for_status()
+        raw = resp.json()
+
+    gifs = [
+        {
+            "id": g["id"],
+            "title": g["title"],
+            "preview": g["images"]["fixed_height_small"]["url"],
+            "url": g["images"]["fixed_height"]["url"],
+            "original": g["images"]["original"]["url"],
+        }
+        for g in raw.get("data", [])
+    ]
+    return {"data": gifs, "enabled": True}
 
 
 @router.get("/rooms/{room_id}/messages", response_model=list[ChatMessageResponse])

@@ -71,6 +71,9 @@ class Settings(BaseSettings):
     # Security
     require_email_verification: bool = False
 
+    # GIFs (Giphy)
+    giphy_api_key: str = ""
+
     # Email (Resend API o SMTP fallback)
     email_provider: str = "resend"
     resend_api_key: str = ""
