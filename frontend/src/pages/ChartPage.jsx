@@ -393,7 +393,7 @@ function ictDetectEntries(candles, structure, obs, fvgs) {
 function runICT(candles, options = {}) {
   if (!candles || candles.length < 50) return null
   const opts = {
-    pivotLen: 5, atrLen: 14, atrMult: 1.5,
+    pivotLen: 5, atrLen: 14, atrMult: 0.5,
     useTrendFilter: true, trendLen: 50,
     requireSweep: true, useMomentum: true, minBodySize: 0.6,
     useCooldown: true, cooldownBars: 5,
@@ -900,14 +900,15 @@ export default function ChartPage() {
     // ── FVG zones ─────────────────────────────────────────────────────────────
     if (showIctFvg) {
       for (const fvg of result.fvgs) {
-        const opacity = fvg.mitigated ? '55' : 'CC'
-        const color = fvg.type === 'bull' ? `#22c55e${opacity}` : `#ef4444${opacity}`
+        const color = fvg.type === 'bull' ? (fvg.mitigated ? '#14532d' : '#22c55e') : (fvg.mitigated ? '#7f1d1d' : '#ef4444')
         const lw = fvg.mitigated ? 1 : 2
         const ls = 2
-        ictPriceLinesRef.current.push(
-          cSeries.createPriceLine({ price: fvg.top, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: !fvg.mitigated, title: fvg.type === 'bull' ? 'FVG↑' : 'FVG↓' }),
-          cSeries.createPriceLine({ price: fvg.bottom, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: false, title: '' }),
-        )
+        try {
+          ictPriceLinesRef.current.push(
+            cSeries.createPriceLine({ price: fvg.top, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: !fvg.mitigated, title: fvg.type === 'bull' ? 'FVG↑' : 'FVG↓' }),
+            cSeries.createPriceLine({ price: fvg.bottom, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: false, title: '' }),
+          )
+        } catch {}
         newMarkers.push({
           time: fvg.startTime,
           position: fvg.type === 'bull' ? 'belowBar' : 'aboveBar',
@@ -922,13 +923,14 @@ export default function ChartPage() {
     // ── Order Block zones ─────────────────────────────────────────────────────
     if (showIctOb) {
       for (const ob of result.obs) {
-        const opacity = ob.mitigated ? '77' : 'FF'
-        const color = ob.type === 'bull' ? `#3b82f6${opacity}` : `#f59e0b${opacity}`
+        const color = ob.type === 'bull' ? (ob.mitigated ? '#1e3a8a' : '#3b82f6') : (ob.mitigated ? '#78350f' : '#f59e0b')
         const lw = ob.mitigated ? 1 : 2
-        ictPriceLinesRef.current.push(
-          cSeries.createPriceLine({ price: ob.top, color, lineWidth: lw, lineStyle: 0, axisLabelVisible: !ob.mitigated, title: ob.type === 'bull' ? 'OB↑' : 'OB↓' }),
-          cSeries.createPriceLine({ price: ob.bottom, color, lineWidth: lw, lineStyle: 2, axisLabelVisible: false, title: '' }),
-        )
+        try {
+          ictPriceLinesRef.current.push(
+            cSeries.createPriceLine({ price: ob.top, color, lineWidth: lw, lineStyle: 0, axisLabelVisible: !ob.mitigated, title: ob.type === 'bull' ? 'OB↑' : 'OB↓' }),
+            cSeries.createPriceLine({ price: ob.bottom, color, lineWidth: lw, lineStyle: 2, axisLabelVisible: false, title: '' }),
+          )
+        } catch {}
         newMarkers.push({
           time: ob.time,
           position: ob.type === 'bull' ? 'belowBar' : 'aboveBar',
