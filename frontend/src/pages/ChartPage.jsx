@@ -8,6 +8,9 @@ import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import usePositionStore from '@/store/positionStore'
 import useUiStore from '@/store/uiStore'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
+import IctIndicatorBadge from '@/components/Chart/IctIndicatorBadge'
+import IctConfigPanel from '@/components/Chart/IctConfigPanel'
+import { useIndicatorConfig } from '@/hooks/useIndicatorConfig'
 import {
   TrendingUp, TrendingDown, AlertTriangle, Activity, Clock,
   BarChart3, ChevronDown, Eye, EyeOff, LineChart, X,
@@ -475,19 +478,11 @@ export default function ChartPage() {
   const [showRsi, setShowRsi]       = useState(false)
   const [showVolume, setShowVolume] = useState(true)
 
-  // ICT
-  const [showIctBos, setShowIctBos]         = useState(false)
-  const [showIctOb, setShowIctOb]           = useState(false)
-  const [showIctFvg, setShowIctFvg]         = useState(false)
-  const [showIctPivots, setShowIctPivots]   = useState(false)
-  const [showIctSignals, setShowIctSignals] = useState(false)
-
-  // ICT Pro filters
-  const [ictUsePro, setIctUsePro]           = useState(true)
-  const [ictRequireSweep, setIctRequireSweep] = useState(true)
-  const [ictUseMomentum, setIctUseMomentum]   = useState(true)
-  const [ictUseCooldown, setIctUseCooldown]   = useState(true)
-  const [ictUseTrend, setIctUseTrend]         = useState(true)
+  // ICT unified config
+  const { getConfig, setConfig } = useIndicatorConfig()
+  const [activeIndicators, setActiveIndicators] = useState({ ict: false })
+  const [ictConfig, setIctConfig] = useState(() => getConfig('ict'))
+  const [showIctSettings, setShowIctSettings] = useState(false)
 
   // Chart appearance
   const [chartType, setChartType] = useState('candles')  // 'candles' | 'line' | 'area'
@@ -510,6 +505,11 @@ export default function ChartPage() {
   const selectedSymbolNorm = useMemo(() => normalizeSymbol(selectedSymbol), [selectedSymbol])
   const currentTf = useMemo(() => TIMEFRAMES.find(t => t.value === timeframe) || TIMEFRAMES[5], [timeframe])
   const pal = PALETTES[palette] || PALETTES.classic
+
+  // ─── Persist ICT config changes ───────────────────────────────────────────
+  useEffect(() => {
+    setConfig('ict', ictConfig)
+  }, [ictConfig, setConfig])
 
   // ─── Close dropdowns on outside click ───────────────────────────────────────
   useEffect(() => {
@@ -837,29 +837,34 @@ export default function ChartPage() {
     ictPriceLinesRef.current = []
     ictMarkersRef.current = []
 
-    const anyIct = showIctBos || showIctOb || showIctFvg || showIctPivots || showIctSignals
-    if (!anyIct) { syncMarkers(); return }
+    if (!activeIndicators.ict) { syncMarkers(); return }
 
+    const pf = ictConfig.proFilters
     const result = runICT(candleData, {
-      useTrendFilter: ictUsePro && ictUseTrend,
-      requireSweep: ictUsePro && ictRequireSweep,
-      useMomentum: ictUsePro && ictUseMomentum,
-      useCooldown: ictUsePro && ictUseCooldown,
+      useTrendFilter: pf.enabled && pf.trendFilter,
+      requireSweep: pf.enabled && pf.requireSweep,
+      useMomentum: pf.enabled && pf.momentumFilter,
+      useCooldown: pf.enabled && pf.cooldown,
+      cooldownBars: pf.cooldownBars,
+      pivotLen: pf.pivotLen,
+      atrMult: pf.atrMult,
+      trendLen: pf.trendLen,
     })
     if (!result) return
 
+    const vis = ictConfig.visibility
+    const cols = ictConfig.colors
     const newMarkers = []
-    const lastTime = candleData[candleData.length - 1].time
 
     // ── BOS / CHoCH markers ───────────────────────────────────────────────────
-    if (showIctBos) {
+    if (vis.bosChoch) {
       for (const b of result.structure.slice(-20)) {
         const isUp = b.dir === 'up'
         const isBos = b.type === 'BOS'
         const baseColor = isBos
-          ? (isUp ? '#22c55e' : '#ef4444')
-          : (isUp ? '#06b6d4' : '#f59e0b')
-        const finalColor = b.isContraTrend ? '#fbbf24' : baseColor
+          ? (isUp ? cols.signalLong : cols.signalShort)
+          : (isUp ? cols.overlayBull : cols.overlayBear)
+        const finalColor = b.isContraTrend ? cols.signalContra : baseColor
         const shape = isBos ? 'square' : (isUp ? 'arrowUp' : 'arrowDown')
         const text = isBos ? (isUp ? 'B+' : 'B-') : 'CH'
 
@@ -875,7 +880,7 @@ export default function ChartPage() {
     }
 
     // ── Pivot markers ─────────────────────────────────────────────────────────
-    if (showIctPivots) {
+    if (vis.pivots) {
       for (const p of result.pivots.highs.slice(-6))
         newMarkers.push({ time: p.time, position: 'aboveBar', color: '#94a3b8', shape: 'circle', text: 'H', size: 1 })
       for (const p of result.pivots.lows.slice(-6))
@@ -883,13 +888,13 @@ export default function ChartPage() {
     }
 
     // ── BUY / SELL entry signals ──────────────────────────────────────────────
-    if (showIctSignals) {
+    if (vis.entries) {
       for (const entry of result.entries) {
         const isLong = entry.signal === 'long'
         newMarkers.push({
           time: entry.time,
           position: isLong ? 'belowBar' : 'aboveBar',
-          color: entry.contraTrend ? '#fbbf24' : (isLong ? '#22c55e' : '#ef4444'),
+          color: entry.contraTrend ? cols.signalContra : (isLong ? cols.signalLong : cols.signalShort),
           shape: isLong ? 'arrowUp' : 'arrowDown',
           text: `${isLong ? 'BUY' : 'SELL'}${entry.contraTrend ? '⚠' : ''} (${entry.trigger.toUpperCase()})`,
           size: 2,
@@ -898,9 +903,9 @@ export default function ChartPage() {
     }
 
     // ── FVG zones ─────────────────────────────────────────────────────────────
-    if (showIctFvg) {
+    if (vis.fairValueGaps) {
       for (const fvg of result.fvgs) {
-        const color = fvg.type === 'bull' ? (fvg.mitigated ? '#14532d' : '#22c55e') : (fvg.mitigated ? '#7f1d1d' : '#ef4444')
+        const color = fvg.type === 'bull' ? (fvg.mitigated ? '#14532d' : cols.signalLong) : (fvg.mitigated ? '#7f1d1d' : cols.signalShort)
         const lw = fvg.mitigated ? 1 : 2
         const ls = 2
         try {
@@ -921,9 +926,9 @@ export default function ChartPage() {
     }
 
     // ── Order Block zones ─────────────────────────────────────────────────────
-    if (showIctOb) {
+    if (vis.orderBlocks) {
       for (const ob of result.obs) {
-        const color = ob.type === 'bull' ? (ob.mitigated ? '#1e3a8a' : '#3b82f6') : (ob.mitigated ? '#78350f' : '#f59e0b')
+        const color = ob.type === 'bull' ? (ob.mitigated ? '#1e3a8a' : cols.overlayBull) : (ob.mitigated ? '#78350f' : cols.overlayBear)
         const lw = ob.mitigated ? 1 : 2
         try {
           ictPriceLinesRef.current.push(
@@ -943,7 +948,7 @@ export default function ChartPage() {
     }
 
     // ── Active structure levels ───────────────────────────────────────────────
-    if (showIctBos && result.levels.length > 0) {
+    if (vis.levels && result.levels.length > 0) {
       const recentLevels = result.levels.slice(-4)
       for (const lvl of recentLevels) {
         const color = lvl.dir === 'up' ? '#22c55e44' : '#ef444444'
@@ -955,7 +960,7 @@ export default function ChartPage() {
 
     ictMarkersRef.current = newMarkers
     syncMarkers()
-  }, [showIctBos, showIctOb, showIctFvg, showIctPivots, showIctSignals, ictUsePro, ictRequireSweep, ictUseMomentum, ictUseCooldown, ictUseTrend, candleData, syncMarkers])
+  }, [activeIndicators.ict, ictConfig, candleData, syncMarkers])
 
   // ─── UI helpers ──────────────────────────────────────────────────────────────
   const filteredSymbols = useMemo(() => {
@@ -976,7 +981,7 @@ export default function ChartPage() {
   }
 
   const currentPrice = prices[selectedSymbol]
-  const activeIndicatorCount = [showEma20, showEma50, showSma200, showRsi, showVolume, showIctBos, showIctOb, showIctFvg, showIctPivots, showIctSignals].filter(Boolean).length
+  const activeIndicatorCount = [showEma20, showEma50, showSma200, showRsi, showVolume, activeIndicators.ict].filter(Boolean).length
 
   if (loading) return <div className="flex justify-center items-center h-64"><LoadingSpinner /></div>
 
@@ -1148,24 +1153,15 @@ export default function ChartPage() {
                 <div className="px-3 pt-2.5 pb-1 mt-1 border-t border-slate-100 dark:border-gray-700/60">
                   <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase tracking-widest">ICT / SMC</span>
                 </div>
-                <IndicatorToggle active={showIctSignals} onChange={setShowIctSignals} color="#a855f7" label="BUY / SELL signals" />
-                <IndicatorToggle active={showIctBos}    onChange={setShowIctBos}    color="#22c55e" label="BOS / CHoCH + Levels" />
-                <IndicatorToggle active={showIctOb}     onChange={setShowIctOb}     color="#3b82f6" label="Order Blocks" />
-                <IndicatorToggle active={showIctFvg}    onChange={setShowIctFvg}    color="#f59e0b" label="Fair Value Gaps" />
-                <IndicatorToggle active={showIctPivots} onChange={setShowIctPivots} color="#94a3b8" label="Pivots HH/HL" />
-
-                <div className="px-3 pt-2.5 pb-1 mt-1 border-t border-slate-100 dark:border-gray-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase tracking-widest">ICT Pro Filters</span>
-                </div>
-                <IndicatorToggle active={ictUsePro} onChange={setIctUsePro} color="#ef4444" label="Activar filtros pro" />
-                {ictUsePro && (
-                  <>
-                    <IndicatorToggle active={ictUseTrend} onChange={setIctUseTrend} color="#22c55e" label="Filtro tendencia (EMA50)" />
-                    <IndicatorToggle active={ictRequireSweep} onChange={setIctRequireSweep} color="#f59e0b" label="Requerir sweep previo" />
-                    <IndicatorToggle active={ictUseMomentum} onChange={setIctUseMomentum} color="#06b6d4" label="Filtro momentum" />
-                    <IndicatorToggle active={ictUseCooldown} onChange={setIctUseCooldown} color="#a855f7" label="Cooldown anti-chop" />
-                  </>
-                )}
+                <IndicatorToggle
+                  active={activeIndicators.ict}
+                  onChange={(v) => {
+                    setActiveIndicators(prev => ({ ...prev, ict: v }))
+                    if (v) setShowIctSettings(true)
+                  }}
+                  color="#22c55e"
+                  label="ICT / SMC Concepts"
+                />
                 <div className="pb-1.5" />
               </div>
             )}
@@ -1219,6 +1215,23 @@ export default function ChartPage() {
                   <p className="text-slate-400 dark:text-gray-500 text-xs max-w-xs">{chartError}</p>
                 </div>
               </div>
+            )}
+
+            {/* ICT Badge + Settings Panel */}
+            {activeIndicators.ict && (
+              <>
+                <IctIndicatorBadge
+                  onOpenSettings={() => setShowIctSettings(true)}
+                  onClose={() => setActiveIndicators(prev => ({ ...prev, ict: false }))}
+                />
+                {showIctSettings && (
+                  <IctConfigPanel
+                    config={ictConfig}
+                    onChange={setIctConfig}
+                    onClose={() => setShowIctSettings(false)}
+                  />
+                )}
+              </>
             )}
           </div>
 

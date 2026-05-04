@@ -1,5 +1,6 @@
 import uuid
 from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -14,8 +15,14 @@ class ChatRoomResponse(BaseModel):
     description: str | None = None
     created_by: uuid.UUID
     created_at: datetime
+    updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ChatMessageCreate(BaseModel):
+    room_id: uuid.UUID
+    content: str
 
 
 class ChatMessageResponse(BaseModel):
@@ -25,3 +32,10 @@ class ChatMessageResponse(BaseModel):
     username: str
     content: str
     created_at: datetime
+    updated_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class ChatGifSearch(BaseModel):
+    q: str

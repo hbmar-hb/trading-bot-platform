@@ -28,6 +28,7 @@ from app.schemas.auth import (
     TwoFactorLoginRequest,
     TwoFactorSetupResponse,
     TwoFactorVerifyRequest,
+    UserProfileUpdateRequest,
     UserResponse,
     VerifyEmailRequest,
 )
@@ -192,6 +193,60 @@ async def get_me(
     if not user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
     return user
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_me(
+    data: UserProfileUpdateRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    if data.telegram_chat_id is not None:
+        user.telegram_chat_id = data.telegram_chat_id.strip() if data.telegram_chat_id.strip() else None
+    if data.notify_on_open is not None:
+        user.notify_on_open = data.notify_on_open
+    if data.notify_on_partial is not None:
+        user.notify_on_partial = data.notify_on_partial
+    if data.notify_on_close is not None:
+        user.notify_on_close = data.notify_on_close
+    if data.chat_bg_color is not None:
+        user.chat_bg_color = data.chat_bg_color
+    if data.chat_bg_shape is not None:
+        user.chat_bg_shape = data.chat_bg_shape
+    if data.chat_font_family is not None:
+        user.chat_font_family = data.chat_font_family
+    if data.chat_font_size is not None:
+        user.chat_font_size = data.chat_font_size
+    if data.chat_font_color is not None:
+        user.chat_font_color = data.chat_font_color
+
+    await db.commit()
+    await db.refresh(user)
+    return user
+
+
+@router.post("/test-telegram", status_code=status.HTTP_204_NO_CONTENT)
+async def test_telegram(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Envía un mensaje de prueba al chat de Telegram del usuario."""
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not user.telegram_chat_id:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No tienes configurado un chat ID de Telegram")
+
+    from app.services.notifier import send_telegram_sync
+    send_telegram_sync(
+        f"✅ <b>Test de notificaciones</b>\n"
+        f"Hola {user.username}, las notificaciones de Trading Bot Platform están configuradas correctamente.",
+        chat_id=user.telegram_chat_id,
+    )
 
 
 # ─── Contraseña ──────────────────────────────────────────────

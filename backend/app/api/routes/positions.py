@@ -656,6 +656,7 @@ async def partial_close_position(
     if close_quantity <= 0:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Cantidad a cerrar demasiado pequeña")
 
+    order = None
     try:
         if bot.exchange_account_id:
             # Exchange real
@@ -670,7 +671,7 @@ async def partial_close_position(
             
             try:
                 # Cerrar posición parcial
-                await exchange.close_position(
+                order = await exchange.close_position(
                     symbol=position.symbol,
                     side=position.side,
                     quantity=close_quantity,
@@ -693,17 +694,25 @@ async def partial_close_position(
                 initial_balance=float(paper_balance.initial_balance)
             )
             
-            await exchange.close_position(
+            order = await exchange.close_position(
                 symbol=position.symbol,
                 side=position.side,
                 quantity=close_quantity,
             )
+
+        fill_price = order.fill_price if order else position.entry_price
+        partial_pnl = (
+            (fill_price - position.entry_price) * close_quantity
+            if position.side == "long"
+            else (position.entry_price - fill_price) * close_quantity
+        )
 
         # Actualizar cantidad en DB
         position.quantity -= close_quantity
         if position.quantity <= 0:
             position.status = "closed"
             position.closed_at = datetime.utcnow()
+            position.realized_pnl = partial_pnl
         
         await db.commit()
         await db.refresh(position)
@@ -711,6 +720,23 @@ async def partial_close_position(
             str(user_id),
             {"position_id": str(position_id), "status": position.status, "quantity": float(position.quantity), "action": "partial_close"}
         )
+
+        # Notificación Telegram al usuario si está configurada
+        from app.models.user import User
+        from app.tasks.notification_tasks import trade_partial
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one_or_none()
+        if user and user.telegram_chat_id and user.notify_on_partial:
+            trade_partial.delay(
+                bot_name=bot.bot_name,
+                symbol=position.symbol,
+                side=position.side,
+                tp_level=0,
+                close_percent=float(percentage),
+                fill_price=float(fill_price),
+                partial_pnl=float(partial_pnl),
+                chat_id=user.telegram_chat_id,
+            )
 
         logger.info(f"Posición {position_id} cerrada parcialmente: {percentage}%")
         return {"status": "success", "closed_percentage": percentage, "remaining_quantity": float(position.quantity)}
@@ -742,6 +768,7 @@ async def close_position(
     )
     bot = bot_result.scalar_one()
 
+    order = None
     try:
         if bot.exchange_account_id:
             # Exchange real - cargar cuenta directamente por ID
@@ -760,7 +787,7 @@ async def close_position(
             exchange = create_exchange(account)
             
             try:
-                await exchange.close_position(
+                order = await exchange.close_position(
                     symbol=position.symbol,
                     side=position.side,
                     quantity=position.quantity,
@@ -786,21 +813,42 @@ async def close_position(
                 initial_balance=float(paper_balance.initial_balance)
             )
             
-            await exchange.close_position(
+            order = await exchange.close_position(
                 symbol=position.symbol,
                 side=position.side,
                 quantity=position.quantity,
             )
 
-        # Marcar como cerrada
+        fill_price = order.fill_price if order else position.entry_price
+        realized_pnl = (
+            (fill_price - position.entry_price) * position.quantity
+            if position.side == "long"
+            else (position.entry_price - fill_price) * position.quantity
+        )
+
         position.status = "closed"
         position.closed_at = datetime.utcnow()
+        position.realized_pnl = realized_pnl
         await db.commit()
         await db.refresh(position)
         await publish_position_update(
             str(user_id),
             {"position_id": str(position_id), "status": "closed", "action": "close"}
         )
+
+        # Notificación Telegram al usuario si está configurada
+        from app.models.user import User
+        from app.tasks.notification_tasks import trade_closed
+        user_result = await db.execute(select(User).where(User.id == user_id))
+        user = user_result.scalar_one_or_none()
+        if user and user.telegram_chat_id and user.notify_on_close:
+            trade_closed.delay(
+                bot_name=bot.bot_name,
+                symbol=position.symbol,
+                side=position.side,
+                pnl=float(realized_pnl),
+                chat_id=user.telegram_chat_id,
+            )
 
         logger.info(f"Posición {position_id} cerrada completamente")
         return {"status": "success", "message": "Posición cerrada"}

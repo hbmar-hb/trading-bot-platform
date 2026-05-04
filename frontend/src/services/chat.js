@@ -1,0 +1,10 @@
+import api from './api'
+
+export const chatService = {
+  listRooms:   ()           => api.get('/chat/rooms'),
+  createRoom:  (data)       => api.post('/chat/rooms', data),
+  deleteRoom:  (id)         => api.delete(`/chat/rooms/${id}`),
+  listMessages:(roomId, limit=50) => api.get(`/chat/rooms/${roomId}/messages?limit=${limit}`),
+  sendMessage: (data)       => api.post('/chat/messages', data),
+  searchGifs:  (q)          => api.get(`/chat/gifs?q=${encodeURIComponent(q)}`),
+}

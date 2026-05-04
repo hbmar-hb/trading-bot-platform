@@ -36,6 +36,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     discord_webhook_url: str = ""
+    giphy_api_key: str = ""
 
     # ─── TradingView ────────────────────────────────────────
     # IPs oficiales separadas por coma en .env

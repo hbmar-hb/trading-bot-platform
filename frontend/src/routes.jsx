@@ -24,6 +24,7 @@ import ManualTradePage     from '@/pages/ManualTradePage'
 import PaperTradingPage    from '@/pages/PaperTradingPage'
 import SettingsPage        from '@/pages/SettingsPage'
 import UsersPage           from '@/pages/UsersPage'
+import AIPage              from '@/pages/AIPage'
 import ChatPage            from '@/pages/ChatPage'
 
 const guard = (Page) => (
@@ -64,6 +65,7 @@ export default function AppRoutes() {
         <Route path="/users"                        element={
           <ProtectedRoute><AdminRoute><Layout><UsersPage /></Layout></AdminRoute></ProtectedRoute>
         } />
+        <Route path="/ai"                           element={guard(AIPage)} />
         <Route path="/chat"                         element={guard(ChatPage)} />
         <Route path="/settings"                     element={guard(SettingsPage)} />
         <Route path="*"                             element={<Navigate to="/dashboard" replace />} />

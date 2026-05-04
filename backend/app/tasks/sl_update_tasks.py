@@ -201,6 +201,23 @@ async def _execute_tp(
             f"cierre={close_percent}% qty={close_qty} @ {fill_price} pnl={pnl:.2f}"
         )
 
+        # Notificación Telegram al usuario si está configurada
+        from app.models.user import User
+        from app.tasks.notification_tasks import trade_partial
+        user_result = await db.execute(select(User).where(User.id == bot.user_id))
+        user = user_result.scalar_one_or_none()
+        if user and user.telegram_chat_id and user.notify_on_partial:
+            trade_partial.delay(
+                bot_name=bot.bot_name,
+                symbol=position.symbol,
+                side=position.side,
+                tp_level=tp_level,
+                close_percent=float(close_percent),
+                fill_price=float(fill_price),
+                partial_pnl=float(pnl),
+                chat_id=user.telegram_chat_id,
+            )
+
 
 async def _execute_sl_update(position_id: uuid.UUID, new_sl_price: Decimal) -> None:
     from datetime import datetime, timezone
@@ -279,6 +296,22 @@ async def _execute_sl_update(position_id: uuid.UUID, new_sl_price: Decimal) -> N
             str(bot.user_id),
             {"position_id": str(position_id), "status": position.status, "action": "sl_update", "current_sl_price": float(position.current_sl_price), "symbol": position.symbol}
         )
+
+        # Notificación Telegram al usuario si está configurada
+        from app.models.user import User
+        from app.tasks.notification_tasks import sl_moved
+        user_result = await db.execute(select(User).where(User.id == bot.user_id))
+        user = user_result.scalar_one_or_none()
+        if user and user.telegram_chat_id and user.notify_on_close:
+            sl_moved.delay(
+                bot_name=bot.bot_name,
+                symbol=position.symbol,
+                side=position.side,
+                old_sl=float(old_sl) if old_sl else 0.0,
+                new_sl=float(new_sl_price),
+                chat_id=user.telegram_chat_id,
+            )
+
         logger.info(
             f"SL actualizado: {position.symbol} {old_sl} → {new_sl_price}"
         )

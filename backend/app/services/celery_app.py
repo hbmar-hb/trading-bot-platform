@@ -16,6 +16,8 @@ celery_app = Celery(
         "app.tasks.sync_tasks",
         "app.tasks.sl_retry_tasks",
         "app.tasks.optimizer_tasks",
+        "app.tasks.limit_order_tasks",
+        "app.tasks.ict_scan_tasks",
     ],
 )
 
@@ -74,6 +76,17 @@ celery_app.conf.update(
         "auto-optimize-all-bots": {
             "task": "app.tasks.optimizer_tasks.auto_optimize_all_bots_task",
             "schedule": 300.0,  # cada 5 minutos
+        },
+        # Revisar órdenes límite pendientes: cada 30 segundos
+        "check-limit-orders": {
+            "task": "app.tasks.limit_order_tasks.check_limit_orders",
+            "schedule": 30.0,
+        },
+        # Motor ICT: escanea bots con ict_scan_enabled=True cada 60 segundos
+        # El throttle interno por timeframe evita señales redundantes
+        "ict-scan-all": {
+            "task": "app.tasks.ict_scan_tasks.ict_scan_all",
+            "schedule": 60.0,
         },
     },
 )

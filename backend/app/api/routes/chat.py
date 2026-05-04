@@ -1,14 +1,20 @@
+"""Chat API: salas, mensajes y GIFs."""
 import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_current_admin_user, get_current_user_id
 from app.models.chat import ChatMessage, ChatRoom
 from app.models.user import User
-from app.schemas.chat import ChatMessageResponse, ChatRoomCreate, ChatRoomResponse
+from app.schemas.chat import (
+    ChatMessageCreate,
+    ChatMessageResponse,
+    ChatRoomCreate,
+    ChatRoomResponse,
+)
 from app.services.database import get_db
 from config.settings import settings
 
@@ -55,6 +61,64 @@ async def delete_room(
     await db.commit()
 
 
+@router.get("/rooms/{room_id}/messages", response_model=list[ChatMessageResponse])
+async def get_messages(
+    room_id: uuid.UUID,
+    limit: int = 50,
+    _: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ChatMessage, User.username)
+        .join(User, ChatMessage.user_id == User.id)
+        .where(ChatMessage.room_id == room_id)
+        .order_by(ChatMessage.created_at.desc())
+        .limit(limit)
+    )
+    rows = result.all()
+    return [
+        ChatMessageResponse(
+            id=msg.id,
+            room_id=msg.room_id,
+            user_id=msg.user_id,
+            username=username,
+            content=msg.content,
+            created_at=msg.created_at,
+            updated_at=msg.updated_at,
+        )
+        for msg, username in reversed(rows)
+    ]
+
+
+@router.post("/messages", response_model=ChatMessageResponse, status_code=status.HTTP_201_CREATED)
+async def send_message(
+    data: ChatMessageCreate,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    room = await db.get(ChatRoom, data.room_id)
+    if not room:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Sala no encontrada")
+
+    msg = ChatMessage(room_id=data.room_id, user_id=user_id, content=data.content)
+    db.add(msg)
+    await db.commit()
+    await db.refresh(msg)
+
+    user_result = await db.execute(select(User.username).where(User.id == user_id))
+    username = user_result.scalar_one()
+
+    return ChatMessageResponse(
+        id=msg.id,
+        room_id=msg.room_id,
+        user_id=msg.user_id,
+        username=username,
+        content=msg.content,
+        created_at=msg.created_at,
+        updated_at=msg.updated_at,
+    )
+
+
 @router.get("/gifs")
 async def search_gifs(
     q: str = Query(""),
@@ -84,31 +148,3 @@ async def search_gifs(
         for g in raw.get("data", [])
     ]
     return {"data": gifs, "enabled": True}
-
-
-@router.get("/rooms/{room_id}/messages", response_model=list[ChatMessageResponse])
-async def get_messages(
-    room_id: uuid.UUID,
-    limit: int = 50,
-    _: uuid.UUID = Depends(get_current_user_id),
-    db: AsyncSession = Depends(get_db),
-):
-    result = await db.execute(
-        select(ChatMessage, User.username)
-        .join(User, ChatMessage.user_id == User.id)
-        .where(ChatMessage.room_id == room_id)
-        .order_by(ChatMessage.created_at.desc())
-        .limit(limit)
-    )
-    rows = result.all()
-    return [
-        ChatMessageResponse(
-            id=msg.id,
-            room_id=msg.room_id,
-            user_id=msg.user_id,
-            username=username,
-            content=msg.content,
-            created_at=msg.created_at,
-        )
-        for msg, username in reversed(rows)
-    ]

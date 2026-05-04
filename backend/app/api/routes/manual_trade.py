@@ -552,6 +552,21 @@ async def adopt_position(
         {"position_id": str(position.id), "status": "open", "action": "adopted", "symbol": data.symbol, "side": data.side}
     )
 
+    # Notificación Telegram al usuario si está configurada
+    from app.models.user import User
+    from app.tasks.notification_tasks import trade_opened
+    user_result = await db.execute(select(User).where(User.id == user_id))
+    user = user_result.scalar_one_or_none()
+    if user and user.telegram_chat_id and user.notify_on_open:
+        trade_opened.delay(
+            bot_name=bot.bot_name,
+            symbol=data.symbol,
+            side=data.side,
+            entry=float(entry_price),
+            sl=float(sl_price) if sl_price else 0.0,
+            chat_id=user.telegram_chat_id,
+        )
+
     return {
         "status": "adopted",
         "sl_pending_exchange": sl_pending,

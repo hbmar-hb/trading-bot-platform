@@ -127,6 +127,24 @@ class BotConfig(TimestampMixin, Base):
         JSONB, nullable=False, default=list
     )
 
+    # ─── ICT Scan ────────────────────────────────────────────
+    # Activa el motor Python ICT en lugar de esperar webhooks externos
+    ict_scan_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    # Configuración del motor ICT (ver ict_engine.py para valores por defecto)
+    # {pivot_len, atr_mult, atr_len, entry_mode, candles_limit}
+    ict_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False,
+        default=lambda: {
+            "pivot_len": 5,
+            "atr_mult": 1.5,
+            "atr_len": 14,
+            "entry_mode": "ob_or_fvg",
+            "candles_limit": 200,
+        }
+    )
+
     # ─── Relaciones ──────────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="bots")
     exchange_account: Mapped["ExchangeAccount | None"] = relationship(back_populates="bots")

@@ -31,6 +31,19 @@ class User(TimestampMixin, Base):
     totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
+    # Telegram notifications
+    telegram_chat_id: Mapped[str | None] = mapped_column(String(100), nullable=True, default=None)
+    notify_on_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_on_partial: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    notify_on_close: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Chat personalization
+    chat_bg_color: Mapped[str | None] = mapped_column(String(20), nullable=True, default='#1f2937')
+    chat_bg_shape: Mapped[str | None] = mapped_column(String(20), nullable=True, default='none')
+    chat_font_family: Mapped[str | None] = mapped_column(String(50), nullable=True, default='Inter')
+    chat_font_size: Mapped[int | None] = mapped_column(nullable=True, default=14)
+    chat_font_color: Mapped[str | None] = mapped_column(String(20), nullable=True, default='#e2e8f0')
+
     # Relaciones
     refresh_tokens: Mapped[list["RefreshToken"]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

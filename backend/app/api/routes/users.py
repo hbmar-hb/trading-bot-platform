@@ -59,6 +59,7 @@ async def create_user(
         hashed_password=pwd_context.hash(data.password),
         role=data.role if data.role in ("user", "admin") else "user",
         must_change_password=True,
+        telegram_chat_id=data.telegram_chat_id.strip() if data.telegram_chat_id and data.telegram_chat_id.strip() else None,
     )
     db.add(user)
     await db.commit()
@@ -111,6 +112,9 @@ async def update_user(
     if data.role is not None:
         if data.role in ("user", "admin"):
             user.role = data.role
+
+    if data.telegram_chat_id is not None:
+        user.telegram_chat_id = data.telegram_chat_id.strip() if data.telegram_chat_id.strip() else None
 
     await db.commit()
     await db.refresh(user)

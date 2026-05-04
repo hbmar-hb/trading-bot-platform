@@ -36,6 +36,17 @@ def _get_auto_optimize_task():
     return _auto_optimize_bot_task
 
 
+# Celery tasks para notificaciones (lazy import)
+_notification_tasks = None
+
+def _get_notification_tasks():
+    global _notification_tasks
+    if _notification_tasks is None:
+        from app.tasks import notification_tasks
+        _notification_tasks = notification_tasks
+    return _notification_tasks
+
+
 class _BusinessError(Exception):
     """Error de lógica de negocio — no reintentar (bot inactivo, conflicto, etc.)."""
 
@@ -86,6 +97,7 @@ def execute_signal(
             # Error esperado: guardar y no reintentar
             logger.warning(f"Señal {signal_id} rechazada: {exc}")
             _mark_signal_error(db, uuid.UUID(signal_id), str(exc))
+            _notify_error_if_configured(db, bot_id, str(exc))
         except Exception as exc:
             # Error de exchange u otro inesperado: propagar para que Celery reintente
             logger.exception(f"Error de exchange en señal {signal_id}: {exc}")
@@ -358,6 +370,21 @@ def _open_position(
     )
     logger.info(f"{mode_str}{'Orden limit' if is_limit_order else 'Posición abierta'}: {side} {bot.symbol} @ {entry_price}")
 
+    # Notificación Telegram al usuario si está configurada
+    from app.models.user import User
+    user = db.query(User).filter(User.id == bot.user_id).first()
+    if user and user.telegram_chat_id and user.notify_on_open:
+        notif = _get_notification_tasks()
+        notif.trade_opened.delay(
+            bot_name=bot.bot_name,
+            symbol=bot.symbol,
+            side=side,
+            entry=float(entry_price),
+            sl=float(sl_price) if sl_price else 0.0,
+            chat_id=user.telegram_chat_id,
+            is_limit=is_limit_order,
+        )
+
 
 def _close_position(
     db: Session,
@@ -404,7 +431,20 @@ def _close_position(
         str(bot.user_id),
         {"position_id": str(position.id), "status": "closed", "action": "close", "symbol": bot.symbol, "side": position.side, "realized_pnl": float(position.realized_pnl)}
     )
-    
+
+    # Notificación Telegram al usuario si está configurada
+    from app.models.user import User
+    user = db.query(User).filter(User.id == bot.user_id).first()
+    if user and user.telegram_chat_id and user.notify_on_close:
+        notif = _get_notification_tasks()
+        notif.trade_closed.delay(
+            bot_name=bot.bot_name,
+            symbol=bot.symbol,
+            side=position.side,
+            pnl=float(position.realized_pnl),
+            chat_id=user.telegram_chat_id,
+        )
+
     # Disparar auto-optimización si el bot lo tiene habilitado
     if bot.auto_optimize_enabled:
         try:
@@ -416,6 +456,24 @@ def _close_position(
 
 
 # ─── Helpers DB (síncronos) ───────────────────────────────────
+
+def _notify_error_if_configured(db: Session, bot_id: str, error: str) -> None:
+    """Envía notificación de error al usuario del bot si tiene Telegram configurado."""
+    try:
+        from app.models.user import User
+        bot = db.query(BotConfig).filter(BotConfig.id == uuid.UUID(bot_id)).first()
+        if bot:
+            user = db.query(User).filter(User.id == bot.user_id).first()
+            if user and user.telegram_chat_id:
+                notif = _get_notification_tasks()
+                notif.error_alert.delay(
+                    bot_name=bot.bot_name,
+                    error=error,
+                    chat_id=user.telegram_chat_id,
+                )
+    except Exception:
+        pass
+
 
 def _get_active_bot(db: Session, bot_id: uuid.UUID) -> BotConfig | None:
     return db.query(BotConfig).filter(

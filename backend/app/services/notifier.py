@@ -14,14 +14,18 @@ def _telegram_url() -> str:
     return f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendMessage"
 
 
-def send_telegram_sync(message: str) -> None:
-    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+def send_telegram_sync(message: str, chat_id: str | None = None) -> None:
+    """Envía un mensaje a Telegram. Si chat_id es None, usa el global."""
+    if not settings.telegram_bot_token:
+        return
+    target_chat_id = chat_id or settings.telegram_chat_id
+    if not target_chat_id:
         return
     try:
         resp = httpx.post(
             _telegram_url(),
             json={
-                "chat_id":    settings.telegram_chat_id,
+                "chat_id":    target_chat_id,
                 "text":       message,
                 "parse_mode": "HTML",
             },
@@ -46,21 +50,55 @@ def send_discord_sync(message: str) -> None:
         logger.warning(f"Discord error: {exc}")
 
 
-def notify_trade_opened(bot_name: str, symbol: str, side: str, entry: float, sl: float) -> None:
+def notify_trade_opened(
+    bot_name: str, symbol: str, side: str, entry: float, sl: float,
+    chat_id: str | None = None, is_limit: bool = False
+) -> None:
     emoji = "🟢" if side == "long" else "🔴"
+    if is_limit:
+        msg = (
+            f"{emoji} <b>ORDEN LÍMITE COLOCADA</b>\n"
+            f"Bot: {bot_name}\n"
+            f"Par: {symbol} | {side.upper()}\n"
+            f"Precio límite: {entry:.4f} USDT\n"
+            f"SL: {sl:.4f} USDT\n"
+            f"<i>La posición se abrirá cuando el precio alcance el límite.</i>"
+        )
+    else:
+        msg = (
+            f"{emoji} <b>TRADE ABIERTO</b>\n"
+            f"Bot: {bot_name}\n"
+            f"Par: {symbol} | {side.upper()}\n"
+            f"Entrada: {entry:.4f} USDT\n"
+            f"SL: {sl:.4f} USDT"
+        )
+    send_telegram_sync(msg, chat_id=chat_id)
+    if not chat_id:
+        send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**").replace("<i>", "*").replace("</i>", "*"))
+
+
+def notify_trade_partial(
+    bot_name: str, symbol: str, side: str, tp_level: int,
+    close_percent: float, fill_price: float, partial_pnl: float,
+    chat_id: str | None = None
+) -> None:
+    emoji = "🎯" if partial_pnl >= 0 else "⚠️"
     msg = (
-        f"{emoji} <b>TRADE ABIERTO</b>\n"
+        f"{emoji} <b>TAKE PROFIT PARCIAL</b>\n"
         f"Bot: {bot_name}\n"
         f"Par: {symbol} | {side.upper()}\n"
-        f"Entrada: {entry:.4f} USDT\n"
-        f"SL: {sl:.4f} USDT"
+        f"TP{tp_level} alcanzado\n"
+        f"Cierre: {close_percent:.1f}% @ {fill_price:.4f} USDT\n"
+        f"PnL parcial: {partial_pnl:+.2f} USDT"
     )
-    send_telegram_sync(msg)
-    send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+    send_telegram_sync(msg, chat_id=chat_id)
+    if not chat_id:
+        send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 
 
 def notify_trade_closed(
-    bot_name: str, symbol: str, side: str, pnl: float
+    bot_name: str, symbol: str, side: str, pnl: float,
+    chat_id: str | None = None
 ) -> None:
     emoji = "✅" if pnl >= 0 else "❌"
     msg = (
@@ -69,14 +107,31 @@ def notify_trade_closed(
         f"Par: {symbol} | {side.upper()}\n"
         f"PnL: {pnl:+.2f} USDT"
     )
-    send_telegram_sync(msg)
-    send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+    send_telegram_sync(msg, chat_id=chat_id)
+    if not chat_id:
+        send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 
 
-def notify_error(bot_name: str, error: str) -> None:
+def notify_sl_moved(
+    bot_name: str, symbol: str, side: str, old_sl: float, new_sl: float,
+    chat_id: str | None = None
+) -> None:
+    msg = (
+        f"🛡️ <b>STOP LOSS MOVIDO</b>\n"
+        f"Bot: {bot_name}\n"
+        f"Par: {symbol} | {side.upper()}\n"
+        f"SL: {old_sl:.4f} → {new_sl:.4f} USDT"
+    )
+    send_telegram_sync(msg, chat_id=chat_id)
+    if not chat_id:
+        send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+
+
+def notify_error(bot_name: str, error: str, chat_id: str | None = None) -> None:
     msg = f"⚠️ <b>ERROR — {bot_name}</b>\n{error[:300]}"
-    send_telegram_sync(msg)
-    send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+    send_telegram_sync(msg, chat_id=chat_id)
+    if not chat_id:
+        send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 
 
 def notify_auto_optimized(

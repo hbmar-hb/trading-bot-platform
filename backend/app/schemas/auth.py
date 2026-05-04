@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 from pydantic import BaseModel, EmailStr, field_validator
 
 
@@ -63,6 +64,7 @@ class UserCreate(BaseModel):
     email: str
     password: str
     role: str = "user"
+    telegram_chat_id: str | None = None
 
     @field_validator("password")
     @classmethod
@@ -81,6 +83,7 @@ class UserUpdate(BaseModel):
     email: str | None = None
     is_active: bool | None = None
     role: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class UserResetPassword(BaseModel):
@@ -137,6 +140,18 @@ class TwoFactorLoginRequest(BaseModel):
     totp_code: str
 
 
+class UserProfileUpdateRequest(BaseModel):
+    telegram_chat_id: str | None = None
+    notify_on_open: bool | None = None
+    notify_on_partial: bool | None = None
+    notify_on_close: bool | None = None
+    chat_bg_color: str | None = None
+    chat_bg_shape: str | None = None
+    chat_font_family: str | None = None
+    chat_font_size: int | None = None
+    chat_font_color: str | None = None
+
+
 # ─── Responses ───────────────────────────────────────────────
 
 class TokenResponse(BaseModel):
@@ -175,5 +190,15 @@ class UserResponse(BaseModel):
     email_verified: bool = False
     totp_enabled: bool = False
     must_change_password: bool = False
+    telegram_chat_id: str | None = None
+    notify_on_open: bool = True
+    notify_on_partial: bool = True
+    notify_on_close: bool = True
+    chat_bg_color: str | None = '#1f2937'
+    chat_bg_shape: str | None = 'none'
+    chat_font_family: str | None = 'Inter'
+    chat_font_size: int | None = 14
+    chat_font_color: str | None = '#e2e8f0'
+    created_at: datetime | None = None
 
     model_config = {"from_attributes": True}

@@ -18,9 +18,23 @@ function WebhookUrlDisplay({ botId, secret }) {
   const url = `${effectiveOrigin}/webhook/${botId}`
 
   const copy = (text, key) => {
-    navigator.clipboard.writeText(text)
-    setCopied(key)
-    setTimeout(() => setCopied(null), 1500)
+    const done = () => { setCopied(key); setTimeout(() => setCopied(null), 1500) }
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(done).catch(() => fallbackCopy(text, done))
+    } else {
+      fallbackCopy(text, done)
+    }
+  }
+
+  const fallbackCopy = (text, done) => {
+    const el = document.createElement('textarea')
+    el.value = text
+    el.style.cssText = 'position:fixed;opacity:0;pointer-events:none'
+    document.body.appendChild(el)
+    el.focus()
+    el.select()
+    try { document.execCommand('copy'); done() } catch (_) {}
+    document.body.removeChild(el)
   }
 
   return (

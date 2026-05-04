@@ -50,7 +50,7 @@ function generatePassword() {
 
 /* ─── Modal crear usuario ─────────────────────────────────── */
 function CreateUserModal({ onClose, onCreated }) {
-  const [form, setForm]       = useState({ username: '', email: '', password: '', role: 'user' })
+  const [form, setForm]       = useState({ username: '', email: '', password: '', role: 'user', telegram_chat_id: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError]     = useState(null)
   const [showPass, setShowPass] = useState(false)
@@ -143,6 +143,11 @@ function CreateUserModal({ onClose, onCreated }) {
             <option value="admin">Administrador</option>
           </select>
         </div>
+        <div>
+          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Telegram Chat ID</label>
+          <input type="text" value={form.telegram_chat_id} onChange={e => set('telegram_chat_id', e.target.value)}
+            className="input" placeholder="Ej: 123456789" />
+        </div>
         <div className="flex gap-2 pt-1">
           <button type="submit" disabled={loading} className="btn-primary">
             {loading ? 'Creando…' : 'Crear usuario'}
@@ -156,7 +161,7 @@ function CreateUserModal({ onClose, onCreated }) {
 
 /* ─── Modal editar usuario ────────────────────────────────── */
 function EditUserModal({ user, onClose, onUpdated }) {
-  const [form, setForm]     = useState({ username: user.username, email: user.email })
+  const [form, setForm]     = useState({ username: user.username, email: user.email, telegram_chat_id: user.telegram_chat_id || '' })
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
@@ -187,6 +192,11 @@ function EditUserModal({ user, onClose, onUpdated }) {
           <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Email</label>
           <input type="email" value={form.email} onChange={e => set('email', e.target.value)}
             className="input" required />
+        </div>
+        <div>
+          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Telegram Chat ID</label>
+          <input type="text" value={form.telegram_chat_id} onChange={e => set('telegram_chat_id', e.target.value)}
+            className="input" placeholder="Ej: 123456789" />
         </div>
         <div className="flex gap-2 pt-1">
           <button type="submit" disabled={loading} className="btn-primary">
@@ -302,6 +312,9 @@ export default function UsersPage() {
                   )}
                   {user.totp_enabled && (
                     <span className="text-xs px-1.5 py-0.5 rounded bg-green-500/20 text-green-500 dark:text-green-400">2FA</span>
+                  )}
+                  {user.telegram_chat_id && (
+                    <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500 dark:text-blue-400">TG</span>
                   )}
                   {!user.is_active && (
                     <span className="text-xs px-1.5 py-0.5 rounded bg-red-500/20 text-red-500 dark:text-red-400">inactivo</span>
