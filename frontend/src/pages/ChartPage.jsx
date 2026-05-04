@@ -8,10 +8,8 @@ import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import usePositionStore from '@/store/positionStore'
 import useUiStore from '@/store/uiStore'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
-import IctIndicatorBadge from '@/components/Chart/IctIndicatorBadge'
-import IctConfigPanel from '@/components/Chart/IctConfigPanel'
 import { useIndicatorConfig } from '@/hooks/useIndicatorConfig'
-import { runICT } from '@/core/ictEngine'
+import { indicators, getIndicator } from '@/indicators/registry'
 import {
   TrendingUp, TrendingDown, AlertTriangle, Activity, Clock,
   BarChart3, ChevronDown, Eye, EyeOff, LineChart, X,
@@ -178,10 +176,10 @@ export default function ChartPage() {
   const chartRef           = useRef(null)
   const candleSeriesRef    = useRef(null)
   const indicatorSeriesRef = useRef({ ema20: null, ema50: null, sma200: null, rsi: null, volume: null })
-  const ictPriceLinesRef   = useRef([])
-  const ictSeriesRef       = useRef([])
-  const posMarkersRef      = useRef([])
-  const ictMarkersRef      = useRef([])
+  const overlayPriceLinesRef = useRef([])
+  const overlaySeriesRef     = useRef([])
+  const overlayMarkersRef    = useRef([])
+  const posMarkersRef        = useRef([])
   const positionPriceLinesRef = useRef([])
   const positionLineSeriesRef = useRef(null)
   const indicatorsMenuRef  = useRef(null)
@@ -205,11 +203,10 @@ export default function ChartPage() {
   const [showRsi, setShowRsi]       = useState(false)
   const [showVolume, setShowVolume] = useState(true)
 
-  // ICT unified config
-  const { getConfig, setConfig } = useIndicatorConfig()
-  const [activeIndicators, setActiveIndicators] = useState({ ict: false })
-  const [ictConfig, setIctConfig] = useState(() => getConfig('ict'))
-  const [showIctSettings, setShowIctSettings] = useState(false)
+  // Indicators system
+  const { configs, getConfig, setConfig } = useIndicatorConfig()
+  const [activeIndicators, setActiveIndicators] = useState({})
+  const [openPanels, setOpenPanels] = useState({})
 
   // Chart appearance
   const [chartType, setChartType] = useState('candles')  // 'candles' | 'line' | 'area'
@@ -232,11 +229,6 @@ export default function ChartPage() {
   const selectedSymbolNorm = useMemo(() => normalizeSymbol(selectedSymbol), [selectedSymbol])
   const currentTf = useMemo(() => TIMEFRAMES.find(t => t.value === timeframe) || TIMEFRAMES[5], [timeframe])
   const pal = PALETTES[palette] || PALETTES.classic
-
-  // ─── Persist ICT config changes ───────────────────────────────────────────
-  useEffect(() => {
-    setConfig('ict', ictConfig)
-  }, [ictConfig, setConfig])
 
   // ─── Close dropdowns on outside click ───────────────────────────────────────
   useEffect(() => {
@@ -337,7 +329,7 @@ export default function ChartPage() {
   // ─── Merge markers helper ────────────────────────────────────────────────────
   const syncMarkers = useCallback(() => {
     if (!candleSeriesRef.current) return
-    const combined = [...posMarkersRef.current, ...ictMarkersRef.current]
+    const combined = [...posMarkersRef.current, ...overlayMarkersRef.current]
       .sort((a, b) => a.time - b.time)
     candleSeriesRef.current.setMarkers(combined)
   }, [])
@@ -350,18 +342,18 @@ export default function ChartPage() {
         chartRef.current = null
         candleSeriesRef.current = null
         indicatorSeriesRef.current = { ema20: null, ema50: null, sma200: null, rsi: null, volume: null }
-        ictPriceLinesRef.current = []
-        ictSeriesRef.current = []
+        overlayPriceLinesRef.current = []
+        overlaySeriesRef.current = []
       }
       return
     }
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null }
     candleSeriesRef.current = null
     indicatorSeriesRef.current = { ema20: null, ema50: null, sma200: null, rsi: null, volume: null }
-    ictPriceLinesRef.current = []
-    ictSeriesRef.current = []
+    overlayPriceLinesRef.current = []
+    overlaySeriesRef.current = []
     posMarkersRef.current = []
-    ictMarkersRef.current = []
+    overlayMarkersRef.current = []
 
     const isDark = document.documentElement.classList.contains('dark')
     const bg   = isDark ? '#111827' : '#ffffff'
@@ -551,143 +543,52 @@ export default function ChartPage() {
     }, c => c.rsi14)
   }, [showEma20, showEma50, showSma200, showRsi, showVolume, candleData])
 
-  // ─── EFFECT C: ICT overlay ────────────────────────────────────────────────
+  // ─── EFFECT C: Indicators overlay ─────────────────────────────────────────
   useEffect(() => {
     const chart   = chartRef.current
     const cSeries = candleSeriesRef.current
     if (!chart || !cSeries || candleData.length === 0) return
 
-    // Clean up previous ICT series and price lines
-    ictSeriesRef.current.forEach(s => { try { chart.removeSeries(s) } catch {} })
-    ictSeriesRef.current = []
-    ictPriceLinesRef.current.forEach(l => { try { cSeries.removePriceLine(l) } catch {} })
-    ictPriceLinesRef.current = []
-    ictMarkersRef.current = []
+    // Clean up previous overlays
+    overlaySeriesRef.current.forEach(s => { try { chart.removeSeries(s) } catch {} })
+    overlaySeriesRef.current = []
+    overlayPriceLinesRef.current.forEach(l => { try { cSeries.removePriceLine(l) } catch {} })
+    overlayPriceLinesRef.current = []
+    overlayMarkersRef.current = []
 
-    if (!activeIndicators.ict) { syncMarkers(); return }
+    const anyActive = Object.values(activeIndicators).some(Boolean)
+    if (!anyActive) { syncMarkers(); return }
 
-    const pf = ictConfig.proFilters
-    const result = runICT(candleData, {
-      useTrendFilter: pf.enabled && pf.trendFilter,
-      requireSweep: pf.enabled && pf.requireSweep,
-      useMomentum: pf.enabled && pf.momentumFilter,
-      useCooldown: pf.enabled && pf.cooldown,
-      cooldownBars: pf.cooldownBars,
-      pivotLen: pf.pivotLen,
-      atrMult: pf.atrMult,
-      trendLen: pf.trendLen,
-    })
-    if (!result) return
-
-    const vis = ictConfig.visibility
-    const cols = ictConfig.colors
-    const newMarkers = []
-
-    // ── BOS / CHoCH markers ───────────────────────────────────────────────────
-    if (vis.bosChoch) {
-      for (const b of result.structure.slice(-20)) {
-        const isUp = b.dir === 'up'
-        const isBos = b.type === 'BOS'
-        const baseColor = isBos
-          ? (isUp ? cols.signalLong : cols.signalShort)
-          : (isUp ? cols.overlayBull : cols.overlayBear)
-        const finalColor = b.isContraTrend ? cols.signalContra : baseColor
-        const shape = isBos ? 'square' : (isUp ? 'arrowUp' : 'arrowDown')
-        const text = isBos ? (isUp ? 'B+' : 'B-') : 'CH'
-
-        newMarkers.push({
-          time: b.time,
-          position: isUp ? 'aboveBar' : 'belowBar',
-          color: finalColor,
-          shape,
-          text,
-          size: b.isContraTrend ? 3 : 2,
-        })
-      }
-    }
-
-    // ── Pivot markers ─────────────────────────────────────────────────────────
-    if (vis.pivots) {
-      for (const p of result.pivots.highs.slice(-6))
-        newMarkers.push({ time: p.time, position: 'aboveBar', color: '#94a3b8', shape: 'circle', text: 'H', size: 1 })
-      for (const p of result.pivots.lows.slice(-6))
-        newMarkers.push({ time: p.time, position: 'belowBar', color: '#94a3b8', shape: 'circle', text: 'L', size: 1 })
-    }
-
-    // ── BUY / SELL entry signals ──────────────────────────────────────────────
-    if (vis.entries) {
-      for (const entry of result.entries) {
-        const isLong = entry.signal === 'long'
-        newMarkers.push({
-          time: entry.time,
-          position: isLong ? 'belowBar' : 'aboveBar',
-          color: entry.contraTrend ? cols.signalContra : (isLong ? cols.signalLong : cols.signalShort),
-          shape: isLong ? 'arrowUp' : 'arrowDown',
-          text: `${isLong ? 'BUY' : 'SELL'}${entry.contraTrend ? '⚠' : ''} (${entry.trigger.toUpperCase()})`,
-          size: 2,
-        })
-      }
-    }
-
-    // ── FVG zones ─────────────────────────────────────────────────────────────
-    if (vis.fairValueGaps) {
-      for (const fvg of result.fvgs) {
-        const color = fvg.type === 'bull' ? (fvg.mitigated ? '#14532d' : cols.signalLong) : (fvg.mitigated ? '#7f1d1d' : cols.signalShort)
-        const lw = fvg.mitigated ? 1 : 2
-        const ls = 2
+    // API que recibe cada indicador para dibujar
+    const api = {
+      addMarker(m) { overlayMarkersRef.current.push(m) },
+      addPriceLine(opts) {
         try {
-          ictPriceLinesRef.current.push(
-            cSeries.createPriceLine({ price: fvg.top, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: !fvg.mitigated, title: fvg.type === 'bull' ? 'FVG↑' : 'FVG↓' }),
-            cSeries.createPriceLine({ price: fvg.bottom, color, lineWidth: lw, lineStyle: ls, axisLabelVisible: false, title: '' }),
-          )
+          const pl = cSeries.createPriceLine(opts)
+          overlayPriceLinesRef.current.push(pl)
         } catch {}
-        newMarkers.push({
-          time: fvg.startTime,
-          position: fvg.type === 'bull' ? 'belowBar' : 'aboveBar',
-          color: fvg.type === 'bull' ? '#22c55e' : '#ef4444',
-          shape: 'triangle',
-          text: '',
-          size: 0,
-        })
-      }
-    }
-
-    // ── Order Block zones ─────────────────────────────────────────────────────
-    if (vis.orderBlocks) {
-      for (const ob of result.obs) {
-        const color = ob.type === 'bull' ? (ob.mitigated ? '#1e3a8a' : cols.overlayBull) : (ob.mitigated ? '#78350f' : cols.overlayBear)
-        const lw = ob.mitigated ? 1 : 2
+      },
+      addSeries(createFn) {
         try {
-          ictPriceLinesRef.current.push(
-            cSeries.createPriceLine({ price: ob.top, color, lineWidth: lw, lineStyle: 0, axisLabelVisible: !ob.mitigated, title: ob.type === 'bull' ? 'OB↑' : 'OB↓' }),
-            cSeries.createPriceLine({ price: ob.bottom, color, lineWidth: lw, lineStyle: 2, axisLabelVisible: false, title: '' }),
-          )
-        } catch {}
-        newMarkers.push({
-          time: ob.time,
-          position: ob.type === 'bull' ? 'belowBar' : 'aboveBar',
-          color: ob.type === 'bull' ? '#3b82f6' : '#f59e0b',
-          shape: 'square',
-          text: '',
-          size: 0,
-        })
+          const s = createFn(chart)
+          overlaySeriesRef.current.push(s)
+          return s
+        } catch { return null }
+      },
+    }
+
+    // Ejecutar detect + render para cada indicador activo
+    for (const ind of indicators) {
+      if (!activeIndicators[ind.id]) continue
+      const config = getConfig(ind.id)
+      const result = ind.detect ? ind.detect(candleData, config) : null
+      if (result && ind.render) {
+        ind.render(chart, cSeries, result, config, api)
       }
     }
 
-    // ── Active structure levels ───────────────────────────────────────────────
-    if (vis.levels && result.levels.length > 0) {
-      const recentLevels = result.levels.slice(-4)
-      for (const lvl of recentLevels) {
-        const color = lvl.dir === 'up' ? '#22c55e44' : '#ef444444'
-        ictPriceLinesRef.current.push(
-          cSeries.createPriceLine({ price: lvl.price, color, lineWidth: 1, lineStyle: lvl.dashed ? 2 : 1, axisLabelVisible: false, title: '' }),
-        )
-      }
-    }
-
-    ictMarkersRef.current = newMarkers
     syncMarkers()
-  }, [activeIndicators.ict, ictConfig, candleData, syncMarkers])
+  }, [activeIndicators, configs, candleData, syncMarkers])
 
   // ─── UI helpers ──────────────────────────────────────────────────────────────
   const filteredSymbols = useMemo(() => {
@@ -708,7 +609,7 @@ export default function ChartPage() {
   }
 
   const currentPrice = prices[selectedSymbol]
-  const activeIndicatorCount = [showEma20, showEma50, showSma200, showRsi, showVolume, activeIndicators.ict].filter(Boolean).length
+  const activeIndicatorCount = [showEma20, showEma50, showSma200, showRsi, showVolume, ...Object.values(activeIndicators)].filter(Boolean).length
 
   if (loading) return <div className="flex justify-center items-center h-64"><LoadingSpinner /></div>
 
@@ -878,17 +779,20 @@ export default function ChartPage() {
                 <IndicatorToggle active={showRsi}    onChange={setShowRsi}    color="#a855f7" label="RSI 14" />
 
                 <div className="px-3 pt-2.5 pb-1 mt-1 border-t border-slate-100 dark:border-gray-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase tracking-widest">ICT / SMC</span>
+                  <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase tracking-widest">Indicadores</span>
                 </div>
-                <IndicatorToggle
-                  active={activeIndicators.ict}
-                  onChange={(v) => {
-                    setActiveIndicators(prev => ({ ...prev, ict: v }))
-                    if (v) setShowIctSettings(true)
-                  }}
-                  color="#22c55e"
-                  label="ICT / SMC Concepts"
-                />
+                {indicators.map(ind => (
+                  <IndicatorToggle
+                    key={ind.id}
+                    active={!!activeIndicators[ind.id]}
+                    onChange={(v) => {
+                      setActiveIndicators(prev => ({ ...prev, [ind.id]: v }))
+                      if (v) setOpenPanels(prev => ({ ...prev, [ind.id]: true }))
+                    }}
+                    color="#22c55e"
+                    label={ind.name}
+                  />
+                ))}
                 <div className="pb-1.5" />
               </div>
             )}
@@ -944,22 +848,29 @@ export default function ChartPage() {
               </div>
             )}
 
-            {/* ICT Badge + Settings Panel */}
-            {activeIndicators.ict && (
-              <>
-                <IctIndicatorBadge
-                  onOpenSettings={() => setShowIctSettings(true)}
-                  onClose={() => setActiveIndicators(prev => ({ ...prev, ict: false }))}
-                />
-                {showIctSettings && (
-                  <IctConfigPanel
-                    config={ictConfig}
-                    onChange={setIctConfig}
-                    onClose={() => setShowIctSettings(false)}
-                  />
-                )}
-              </>
-            )}
+            {/* Indicator Badges + Settings Panels */}
+            {indicators.map(ind => {
+              if (!activeIndicators[ind.id]) return null
+              const Badge = ind.BadgeComponent
+              const Panel = ind.PanelComponent
+              return (
+                <div key={ind.id}>
+                  {Badge && (
+                    <Badge
+                      onOpenSettings={() => setOpenPanels(prev => ({ ...prev, [ind.id]: true }))}
+                      onClose={() => setActiveIndicators(prev => ({ ...prev, [ind.id]: false }))}
+                    />
+                  )}
+                  {Panel && openPanels[ind.id] && (
+                    <Panel
+                      config={getConfig(ind.id)}
+                      onChange={(next) => setConfig(ind.id, next)}
+                      onClose={() => setOpenPanels(prev => ({ ...prev, [ind.id]: false }))}
+                    />
+                  )}
+                </div>
+              )
+            })}
           </div>
 
           {/* ── Sidebar ──────────────────────────────────────────────────────── */}
