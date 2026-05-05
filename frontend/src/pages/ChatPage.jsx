@@ -1,378 +1,385 @@
 import { useEffect, useRef, useState } from 'react'
-import EmojiPicker from 'emoji-picker-react'
-import { Hash, Image, Plus, Send, Smile, Trash2, X } from 'lucide-react'
-import { chatService } from '@/services/chatService'
+import { MessageSquare, Plus, Trash2, X, Send, Image, Smile, Lock, Users } from 'lucide-react'
+import { chatService } from '@/services/chat'
+import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
-import useUiStore from '@/store/uiStore'
 
-/* ─── Crear sala modal ───────────────────────────────────── */
-function CreateRoomModal({ onClose, onCreated }) {
-  const [name, setName]       = useState('')
-  const [desc, setDesc]       = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setLoading(true); setError(null)
-    try {
-      const { data } = await chatService.createRoom({ name: name.trim(), description: desc.trim() || null })
-      onCreated(data)
-      onClose()
-    } catch (err) {
-      setError(err.response?.data?.detail || 'Error al crear la sala')
-    } finally { setLoading(false) }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-      <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-xl w-full max-w-sm p-6 space-y-4 mx-4">
-        <div className="flex items-center justify-between">
-          <h3 className="font-semibold text-slate-900 dark:text-white">Nueva sala</h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-900 dark:hover:text-white"><X size={18} /></button>
-        </div>
-        {error && <p className="text-red-400 text-sm">{error}</p>}
-        <form onSubmit={handleSubmit} className="space-y-3">
-          <div>
-            <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1">Nombre</label>
-            <input value={name} onChange={e => setName(e.target.value)}
-              className="input w-full" placeholder="general" required autoFocus />
-          </div>
-          <div>
-            <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1">Descripción (opcional)</label>
-            <input value={desc} onChange={e => setDesc(e.target.value)}
-              className="input w-full" placeholder="Tema de la sala" />
-          </div>
-          <div className="flex gap-2 pt-1">
-            <button type="submit" disabled={loading} className="btn-primary">{loading ? 'Creando…' : 'Crear sala'}</button>
-            <button type="button" onClick={onClose} className="btn-ghost">Cancelar</button>
-          </div>
-        </form>
-      </div>
-    </div>
-  )
+const BG_SHAPES = {
+  none: 'none',
+  bubbles: 'radial-gradient(circle at 20% 30%, rgba(255,255,255,0.06) 0%, transparent 20%), radial-gradient(circle at 80% 70%, rgba(255,255,255,0.04) 0%, transparent 25%)',
+  dots: 'radial-gradient(circle, rgba(255,255,255,0.08) 1px, transparent 1px)',
+  waves: 'repeating-linear-gradient(45deg, rgba(255,255,255,0.03) 0px, rgba(255,255,255,0.03) 2px, transparent 2px, transparent 10px)',
 }
 
-/* ─── GIF picker modal ───────────────────────────────────── */
-function GifPicker({ onSelect, onClose }) {
-  const [query, setQuery]   = useState('')
-  const [gifs, setGifs]     = useState([])
-  const [enabled, setEnabled] = useState(true)
-  const [loading, setLoading] = useState(false)
-  const timerRef = useRef(null)
+const FONTS = [
+  { label: 'Inter',      value: 'Inter, sans-serif' },
+  { label: 'Roboto',     value: 'Roboto, sans-serif' },
+  { label: 'Open Sans',  value: '"Open Sans", sans-serif' },
+  { label: 'Lato',       value: 'Lato, sans-serif' },
+  { label: 'Mono',       value: '"JetBrains Mono", monospace' },
+]
 
-  const load = async (q) => {
-    setLoading(true)
-    try {
-      const { data } = await chatService.searchGifs(q)
-      setEnabled(data.enabled)
-      setGifs(data.data || [])
-    } catch {
-      setGifs([])
-    } finally { setLoading(false) }
-  }
+const EMOJIS = ['😀','😂','🥰','😎','🤔','😭','😡','👍','👎','🎉','🔥','❤️','💯','🚀','👀','🤝','🙏','💪','✅','❌','⚠️','💰','📈','📉','🎯','🏆','🤖','💎','🌙','☀️','🌍','🎁','🎵','🍕','☕','🍺','🏠','🚗','✈️','⌚']
 
-  useEffect(() => { load('') }, [])
-
-  const handleSearch = (e) => {
-    const q = e.target.value
-    setQuery(q)
-    clearTimeout(timerRef.current)
-    timerRef.current = setTimeout(() => load(q), 400)
-  }
-
-  if (!enabled) return (
-    <div className="absolute bottom-full mb-2 right-0 w-80 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-xl p-4 shadow-xl z-50 text-center">
-      <p className="text-sm text-slate-500 dark:text-gray-400">GIFs no configurados.</p>
-      <p className="text-xs text-slate-400 dark:text-gray-500 mt-1">Añade <code className="bg-slate-100 dark:bg-gray-800 px-1 rounded">GIPHY_API_KEY</code> al .env del servidor.</p>
-      <button onClick={onClose} className="mt-3 text-xs text-blue-500 hover:underline">Cerrar</button>
-    </div>
-  )
-
-  return (
-    <div className="absolute bottom-full mb-2 right-0 w-80 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-xl shadow-xl z-50 overflow-hidden">
-      <div className="flex items-center gap-2 p-3 border-b border-slate-200 dark:border-gray-800">
-        <input
-          autoFocus value={query} onChange={handleSearch}
-          placeholder="Buscar GIF…"
-          className="flex-1 bg-slate-100 dark:bg-gray-800 rounded-lg px-3 py-1.5 text-sm outline-none text-slate-900 dark:text-gray-100"
-        />
-        <button onClick={onClose} className="text-slate-400 hover:text-slate-700 dark:hover:text-gray-300"><X size={16} /></button>
-      </div>
-      <div className="h-64 overflow-y-auto p-2">
-        {loading && <p className="text-center text-sm text-slate-400 dark:text-gray-500 py-4">Buscando…</p>}
-        {!loading && gifs.length === 0 && <p className="text-center text-sm text-slate-400 dark:text-gray-500 py-4">Sin resultados</p>}
-        <div className="grid grid-cols-3 gap-1.5">
-          {gifs.map(gif => (
-            <button key={gif.id} onClick={() => { onSelect(gif.url); onClose() }}
-              className="rounded-lg overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all">
-              <img src={gif.preview} alt={gif.title} className="w-full h-20 object-cover" loading="lazy" />
-            </button>
-          ))}
-        </div>
-      </div>
-      <p className="text-center text-[10px] text-slate-300 dark:text-gray-600 py-1">Powered by Giphy</p>
-    </div>
-  )
+function roleColor(role) {
+  if (role === 'admin') return '#60a5fa'
+  if (role === 'moderator') return '#fbbf24'
+  return '#94a3b8'
 }
 
-/* ─── Burbuja de mensaje ─────────────────────────────────── */
-function MessageBubble({ msg, isOwn }) {
-  const time    = new Date(msg.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })
-  const initial = msg.username?.[0]?.toUpperCase() || '?'
-  const isGif   = msg.content?.startsWith('[gif]')
-  const gifUrl  = isGif ? msg.content.slice(5) : null
-
-  return (
-    <div className="flex items-start gap-3 group px-4 py-1.5 hover:bg-slate-50 dark:hover:bg-gray-800/50 rounded-lg">
-      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white font-bold text-sm shrink-0 mt-0.5 ${isOwn ? 'bg-blue-600' : 'bg-slate-500 dark:bg-gray-600'}`}>
-        {initial}
-      </div>
-      <div className="flex-1 min-w-0">
-        <div className="flex items-baseline gap-2">
-          <span className={`font-semibold text-sm ${isOwn ? 'text-blue-600 dark:text-blue-400' : 'text-slate-900 dark:text-gray-100'}`}>
-            {msg.username}
-          </span>
-          <span className="text-xs text-slate-400 dark:text-gray-500">{time}</span>
-        </div>
-        {isGif
-          ? <img src={gifUrl} alt="gif" className="mt-1 rounded-lg max-w-xs max-h-48 object-contain" />
-          : <p className="text-sm text-slate-700 dark:text-gray-300 break-words whitespace-pre-wrap">{msg.content}</p>
-        }
-      </div>
-    </div>
-  )
-}
-
-/* ─── Página principal ───────────────────────────────────── */
 export default function ChatPage() {
-  const user    = useAuthStore(s => s.user)
-  const token   = useAuthStore(s => s.token)
-  const isDark  = useUiStore(s => s.isDark)
-  const isAdmin = user?.role === 'admin'
-
+  const { user } = useAuthStore()
   const [rooms, setRooms]             = useState([])
   const [activeRoom, setActiveRoom]   = useState(null)
   const [messages, setMessages]       = useState([])
   const [input, setInput]             = useState('')
-  const [showModal, setShowModal]     = useState(false)
-  const [showEmoji, setShowEmoji]     = useState(false)
-  const [showGif, setShowGif]         = useState(false)
-  const [loadingMsgs, setLoadingMsgs] = useState(false)
+  const [loading, setLoading]         = useState(false)
+  const [showNewRoom, setShowNewRoom] = useState(false)
+  const [newRoomName, setNewRoomName] = useState('')
+  const [newRoomDesc, setNewRoomDesc] = useState('')
+  const [newRoomPrivate, setNewRoomPrivate] = useState(false)
+  const [allUsers, setAllUsers]       = useState([])
+  const [selectedMembers, setSelectedMembers] = useState([])
+  const [showGifs, setShowGifs]       = useState(false)
+  const [gifQuery, setGifQuery]       = useState('')
+  const [gifs, setGifs]               = useState([])
+  const [gifLoading, setGifLoading]   = useState(false)
+  const [showEmojis, setShowEmojis]   = useState(false)
+  const [showMembers, setShowMembers] = useState(false)
+  const messagesEndRef = useRef(null)
+  const pollRef        = useRef(null)
 
-  const wsRef     = useRef(null)
-  const bottomRef = useRef(null)
-  const inputRef  = useRef(null)
+  const isAdmin = user?.role === 'admin'
+  const isMod   = user?.role === 'moderator'
+  const canManageChannels = isAdmin || isMod
+
+  const prefs = {
+    bgColor:    user?.chat_bg_color    || '#1f2937',
+    bgShape:    user?.chat_bg_shape    || 'none',
+    fontFamily: user?.chat_font_family || 'Inter',
+    fontSize:   user?.chat_font_size   || 14,
+    fontColor:  user?.chat_font_color  || '#e2e8f0',
+  }
 
   useEffect(() => {
-    chatService.getRooms()
-      .then(r => { setRooms(r.data); if (r.data.length > 0) setActiveRoom(r.data[0]) })
-      .catch(() => {})
+    loadRooms()
+    if (isAdmin) {
+      usersService.list().then(r => setAllUsers(r.data || [])).catch(() => {})
+    }
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [])
 
   useEffect(() => {
-    if (!token) return
-    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
-    const ws = new WebSocket(`${proto}://${window.location.host}/ws?token=${token}`)
-    wsRef.current = ws
-
-    ws.onmessage = (e) => {
-      try {
-        const msg = JSON.parse(e.data)
-        if (msg.type === 'chat_message') {
-          setMessages(prev => {
-            if (prev.find(m => m.id === msg.message_id)) return prev
-            return [...prev, { id: msg.message_id, room_id: msg.room_id, user_id: msg.user_id, username: msg.username, content: msg.content, created_at: msg.created_at }]
-          })
-        }
-      } catch {}
+    if (activeRoom) {
+      loadMessages()
+      if (pollRef.current) clearInterval(pollRef.current)
+      pollRef.current = setInterval(loadMessages, 2000)
     }
-    return () => ws.close()
-  }, [token])
-
-  useEffect(() => {
-    if (!activeRoom) return
-    setLoadingMsgs(true)
-    setMessages([])
-    chatService.getMessages(activeRoom.id)
-      .then(r => setMessages(r.data))
-      .catch(() => {})
-      .finally(() => setLoadingMsgs(false))
-    inputRef.current?.focus()
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
   }, [activeRoom])
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages])
 
-  // Cerrar popups al hacer click fuera
-  useEffect(() => {
-    const handler = () => { setShowEmoji(false); setShowGif(false) }
-    if (showEmoji || showGif) document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showEmoji, showGif])
-
-  const sendText = (content) => {
-    if (!content.trim() || !activeRoom || wsRef.current?.readyState !== WebSocket.OPEN) return
-    wsRef.current.send(JSON.stringify({ type: 'chat_message', room_id: activeRoom.id, content }))
-  }
-
-  const sendMessage = () => {
-    sendText(input)
-    setInput('')
-    inputRef.current?.focus()
-  }
-
-  const sendGif = (url) => sendText(`[gif]${url}`)
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage() }
-  }
-
-  const handleDeleteRoom = async (room) => {
-    if (!confirm(`¿Eliminar "${room.name}"? Se borrarán todos los mensajes.`)) return
+  const loadRooms = async () => {
     try {
-      await chatService.deleteRoom(room.id)
-      setRooms(r => r.filter(x => x.id !== room.id))
-      if (activeRoom?.id === room.id) setActiveRoom(null)
+      const { data } = await chatService.listRooms()
+      const list = Array.isArray(data) ? data : []
+      setRooms(list)
+      if (list.length > 0 && !activeRoom) setActiveRoom(list[0])
     } catch {}
   }
 
-  const visibleMessages = messages.filter(m => m.room_id === activeRoom?.id)
+  const loadMessages = async () => {
+    if (!activeRoom) return
+    try {
+      const { data } = await chatService.listMessages(activeRoom.id)
+      setMessages(Array.isArray(data) ? data : [])
+    } catch {}
+  }
+
+  const send = async (content) => {
+    if (!content.trim() || !activeRoom) return
+    setLoading(true)
+    try {
+      await chatService.sendMessage({ room_id: activeRoom.id, content: content.trim() })
+      setInput('')
+      loadMessages()
+    } catch {
+      alert('Error al enviar mensaje')
+    } finally { setLoading(false) }
+  }
+
+  const createRoom = async (e) => {
+    e.preventDefault()
+    if (!newRoomName.trim()) return
+    try {
+      const payload = {
+        name: newRoomName.trim(),
+        description: newRoomDesc.trim() || undefined,
+        is_private: newRoomPrivate,
+        member_ids: newRoomPrivate ? selectedMembers : [],
+      }
+      const { data } = await chatService.createRoom(payload)
+      setRooms(r => [data, ...r])
+      setActiveRoom(data)
+      setShowNewRoom(false)
+      setNewRoomName(''); setNewRoomDesc(''); setNewRoomPrivate(false); setSelectedMembers([])
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Error al crear sala')
+    }
+  }
+
+  const deleteRoom = async (id) => {
+    if (!confirm('¿Eliminar esta sala y todos sus mensajes?')) return
+    try {
+      await chatService.deleteRoom(id)
+      setRooms(r => r.filter(x => x.id !== id))
+      if (activeRoom?.id === id) setActiveRoom(null)
+    } catch (err) {
+      alert(err.response?.data?.detail || 'No puedes eliminar esta sala')
+    }
+  }
+
+  const toggleMember = (uid) =>
+    setSelectedMembers(prev => prev.includes(uid) ? prev.filter(x => x !== uid) : [...prev, uid])
+
+  const searchGifs = async () => {
+    if (!gifQuery.trim()) return
+    setGifLoading(true)
+    try {
+      const { data } = await chatService.searchGifs(gifQuery.trim())
+      setGifs(Array.isArray(data?.gifs) ? data.gifs : [])
+    } catch { setGifs([]) }
+    finally { setGifLoading(false) }
+  }
+
+  const sendGif = (url) => {
+    send(`![GIF](${url})`)
+    setShowGifs(false); setGifs([]); setGifQuery('')
+  }
+
+  const bgStyle = {
+    backgroundColor: prefs.bgColor,
+    backgroundImage: BG_SHAPES[prefs.bgShape] || 'none',
+    backgroundSize: prefs.bgShape === 'dots' ? '20px 20px' : prefs.bgShape === 'waves' ? '100px 20px' : 'auto',
+    fontFamily: FONTS.find(f => f.label === prefs.fontFamily)?.value || prefs.fontFamily,
+    fontSize: `${prefs.fontSize}px`,
+    color: prefs.fontColor,
+  }
+
+  const insertEmoji = (emoji) => { setInput(prev => prev + emoji); setShowEmojis(false) }
+  const isMe = (msg) => msg.user_id === user?.id
 
   return (
-    <div className="flex h-[calc(100vh-7rem)] -mt-2 rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900">
-
-      {/* Sidebar */}
-      <div className="w-52 shrink-0 border-r border-slate-200 dark:border-gray-800 flex flex-col">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-gray-800">
-          <span className="text-sm font-semibold text-slate-900 dark:text-white">Salas</span>
-          {isAdmin && (
-            <button onClick={() => setShowModal(true)} title="Nueva sala"
-              className="text-slate-400 hover:text-blue-500 transition-colors">
+    <div className="flex h-[calc(100vh-4rem)] -mx-6 -my-6" style={bgStyle}>
+      {/* Sidebar salas */}
+      <div className="w-64 border-r border-white/10 flex flex-col" style={{ backgroundColor: prefs.bgColor, opacity: 0.95 }}>
+        <div className="p-4 border-b border-white/10 flex items-center justify-between">
+          <h2 className="font-semibold text-white flex items-center gap-2">
+            <MessageSquare size={18} /> Chat
+          </h2>
+          {canManageChannels && (
+            <button onClick={() => setShowNewRoom(true)} className="p-1.5 rounded hover:bg-white/10 text-white" title="Nuevo canal">
               <Plus size={16} />
             </button>
           )}
         </div>
-        <div className="flex-1 overflow-y-auto py-2">
-          {rooms.length === 0 && (
-            <p className="text-xs text-slate-400 dark:text-gray-500 px-4 py-2">
-              {isAdmin ? 'Crea la primera sala →' : 'Sin salas'}
-            </p>
-          )}
+        <div className="flex-1 overflow-y-auto p-2 space-y-1">
           {rooms.map(room => (
-            <div key={room.id} onClick={() => setActiveRoom(room)}
-              className={`group flex items-center gap-2 px-3 py-2 mx-1 rounded-lg cursor-pointer transition-colors ${
-                activeRoom?.id === room.id
-                  ? 'bg-blue-600/15 text-blue-600 dark:text-blue-400'
-                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800'
-              }`}>
-              <Hash size={15} className="shrink-0" />
-              <span className="text-sm flex-1 truncate">{room.name}</span>
-              {isAdmin && (
-                <button onClick={e => { e.stopPropagation(); handleDeleteRoom(room) }}
-                  className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-400 transition-all">
-                  <Trash2 size={13} />
+            <div
+              key={room.id}
+              onClick={() => setActiveRoom(room)}
+              className={`p-3 rounded-lg cursor-pointer flex items-center justify-between group ${
+                activeRoom?.id === room.id ? 'bg-white/20' : 'hover:bg-white/10'
+              }`}
+            >
+              <div className="min-w-0 flex items-center gap-1.5">
+                {room.is_private && <Lock size={11} className="text-amber-400 shrink-0" />}
+                <div className="min-w-0">
+                  <p className="text-sm font-medium truncate">{room.name}</p>
+                  <p className="text-xs opacity-50 truncate">{room.description || 'Sin descripción'}</p>
+                </div>
+              </div>
+              {canManageChannels && (
+                <button
+                  onClick={(e) => { e.stopPropagation(); deleteRoom(room.id) }}
+                  className="opacity-0 group-hover:opacity-100 p-1 text-white/50 hover:text-red-400 transition-opacity shrink-0"
+                >
+                  <Trash2 size={14} />
                 </button>
               )}
             </div>
           ))}
+          {rooms.length === 0 && (
+            <p className="text-sm opacity-40 text-center py-8">
+              {canManageChannels ? 'No hay canales. Crea uno.' : 'No hay canales disponibles.'}
+            </p>
+          )}
         </div>
       </div>
 
-      {/* Mensajes */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Área de mensajes */}
+      <div className="flex-1 flex flex-col">
         {activeRoom ? (
           <>
-            <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
-              <Hash size={16} className="text-slate-400" />
-              <span className="font-semibold text-slate-900 dark:text-white">{activeRoom.name}</span>
-              {activeRoom.description && (
-                <span className="text-sm text-slate-400 dark:text-gray-500 ml-2 truncate">{activeRoom.description}</span>
+            <div className="p-4 border-b border-white/10 flex items-center justify-between" style={{ backgroundColor: prefs.bgColor, opacity: 0.9 }}>
+              <div className="flex items-center gap-2">
+                {activeRoom.is_private && <Lock size={14} className="text-amber-400" />}
+                <div>
+                  <h3 className="font-semibold">{activeRoom.name}</h3>
+                  <p className="text-xs opacity-50">{activeRoom.description || `${messages.length} mensajes`}</p>
+                </div>
+              </div>
+              {isAdmin && activeRoom.is_private && (
+                <button onClick={() => setShowMembers(!showMembers)} title="Gestionar miembros" className="p-1.5 rounded hover:bg-white/10">
+                  <Users size={16} />
+                </button>
               )}
             </div>
 
-            <div className="flex-1 overflow-y-auto py-3">
-              {loadingMsgs && <p className="text-center text-sm text-slate-400 py-4">Cargando…</p>}
-              {!loadingMsgs && visibleMessages.length === 0 && (
-                <div className="flex flex-col items-center justify-center h-full text-center px-6">
-                  <Hash size={40} className="text-slate-300 dark:text-gray-600 mb-3" />
-                  <p className="font-semibold text-slate-700 dark:text-gray-300">Bienvenido a #{activeRoom.name}</p>
-                  <p className="text-sm text-slate-400 dark:text-gray-500 mt-1">Sé el primero en escribir.</p>
+            <div className="flex-1 overflow-y-auto p-4 space-y-3">
+              {messages.map(msg => (
+                <div key={msg.id} className={`flex ${isMe(msg) ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[70%] rounded-xl px-4 py-2 ${
+                    isMe(msg) ? 'bg-blue-600 rounded-br-none' : 'bg-white/10 rounded-bl-none'
+                  }`}>
+                    {!isMe(msg) && (
+                      <p className="text-xs font-bold mb-0.5" style={{ color: roleColor(msg.role) }}>
+                        {msg.username}
+                      </p>
+                    )}
+                    {msg.content.startsWith('![GIF]') ? (
+                      <img src={msg.content.match(/\((.*)\)/)?.[1]} alt="GIF" className="rounded-lg max-h-40" />
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                    )}
+                    <p className={`text-[10px] mt-1 ${isMe(msg) ? 'text-blue-200' : 'opacity-40'}`}>
+                      {new Date(msg.created_at).toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
                 </div>
-              )}
-              {visibleMessages.map(msg => (
-                <MessageBubble key={msg.id} msg={msg} isOwn={msg.user_id === user?.id} />
               ))}
-              <div ref={bottomRef} />
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Input */}
-            <div className="px-4 py-3 border-t border-slate-200 dark:border-gray-800 shrink-0">
-              <div className="flex items-center gap-2 bg-slate-100 dark:bg-gray-800 rounded-xl px-3 py-2">
-                {/* Emoji */}
-                <div className="relative" onMouseDown={e => e.stopPropagation()}>
-                  <button onClick={() => { setShowEmoji(v => !v); setShowGif(false) }}
-                    className="text-slate-400 hover:text-yellow-500 transition-colors">
-                    <Smile size={18} />
-                  </button>
-                  {showEmoji && (
-                    <div className="absolute bottom-full mb-2 left-0 z-50">
-                      <EmojiPicker
-                        theme={isDark ? 'dark' : 'light'}
-                        skinTonesDisabled
-                        searchDisabled={false}
-                        height={380}
-                        width={320}
-                        onEmojiClick={(e) => {
-                          setInput(prev => prev + e.emoji)
-                          inputRef.current?.focus()
-                        }}
-                      />
-                    </div>
-                  )}
-                </div>
-
-                {/* GIF */}
-                <div className="relative" onMouseDown={e => e.stopPropagation()}>
-                  <button onClick={() => { setShowGif(v => !v); setShowEmoji(false) }}
-                    className="text-slate-400 hover:text-purple-500 transition-colors text-xs font-bold tracking-tight">
-                    GIF
-                  </button>
-                  {showGif && (
-                    <GifPicker onSelect={sendGif} onClose={() => setShowGif(false)} />
-                  )}
-                </div>
-
+            <div className="p-3 border-t border-white/10" style={{ backgroundColor: prefs.bgColor, opacity: 0.95 }}>
+              <div className="flex gap-2">
+                <button onClick={() => setShowGifs(!showGifs)} className="p-2 rounded-lg bg-white/10 text-white hover:bg-white/20"><Image size={18} /></button>
+                <button onClick={() => { setShowEmojis(!showEmojis); setShowGifs(false) }} className="p-2 rounded-lg bg-white/10 text-white hover:bg-white/20"><Smile size={18} /></button>
                 <input
-                  ref={inputRef}
+                  type="text"
                   value={input}
                   onChange={e => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={`Mensaje en #${activeRoom.name}`}
-                  className="flex-1 bg-transparent text-sm text-slate-900 dark:text-gray-100 placeholder-slate-400 dark:placeholder-gray-500 outline-none"
-                  maxLength={2000}
+                  onKeyDown={e => e.key === 'Enter' && send(input)}
+                  placeholder="Escribe un mensaje..."
+                  className="flex-1 px-4 py-2 rounded-lg bg-white/10 placeholder-white/40 border border-white/10 focus:outline-none focus:border-blue-500"
                 />
-                <button onClick={sendMessage} disabled={!input.trim()}
-                  className="text-blue-500 hover:text-blue-600 disabled:text-slate-300 dark:disabled:text-gray-600 transition-colors">
+                <button onClick={() => send(input)} disabled={loading || !input.trim()} className="p-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">
                   <Send size={18} />
                 </button>
               </div>
+
+              {showEmojis && (
+                <div className="mt-3 p-3 rounded-lg bg-black/40 border border-white/10">
+                  <div className="flex flex-wrap gap-2">
+                    {EMOJIS.map(emoji => (
+                      <button key={emoji} type="button" onClick={() => insertEmoji(emoji)} className="text-xl hover:scale-125 transition-transform p-1">{emoji}</button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {showGifs && (
+                <div className="mt-3 p-3 rounded-lg bg-black/40 border border-white/10">
+                  <div className="flex gap-2 mb-2">
+                    <input type="text" value={gifQuery} onChange={e => setGifQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && searchGifs()}
+                      placeholder="Buscar GIFs..." className="flex-1 px-3 py-1.5 rounded bg-white/10 placeholder-white/40 text-sm border border-white/10" />
+                    <button onClick={searchGifs} className="px-3 py-1.5 rounded bg-blue-600 text-white text-sm hover:bg-blue-700">{gifLoading ? '...' : 'Buscar'}</button>
+                    <button onClick={() => setShowGifs(false)} className="p-1.5 text-white/50 hover:text-white"><X size={16} /></button>
+                  </div>
+                  <div className="flex gap-2 overflow-x-auto pb-1">
+                    {gifs.map(g => (
+                      <img key={g.id} src={g.preview} alt={g.title} onClick={() => sendGif(g.url)} className="h-24 rounded cursor-pointer hover:ring-2 ring-blue-500 shrink-0" />
+                    ))}
+                    {gifs.length === 0 && !gifLoading && <p className="text-xs opacity-40">Busca algo para ver GIFs</p>}
+                  </div>
+                </div>
+              )}
             </div>
           </>
         ) : (
-          <div className="flex-1 flex items-center justify-center text-center px-6">
-            <div>
-              <Hash size={48} className="text-slate-300 dark:text-gray-600 mx-auto mb-3" />
-              <p className="text-slate-500 dark:text-gray-400">Selecciona una sala para empezar</p>
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <MessageSquare size={48} className="text-white/20 mx-auto mb-4" />
+              <p className="opacity-50">Selecciona un canal o {canManageChannels ? 'crea uno nuevo' : 'espera a que haya canales disponibles'}</p>
             </div>
           </div>
         )}
       </div>
 
-      {showModal && (
-        <CreateRoomModal onClose={() => setShowModal(false)}
-          onCreated={(room) => { setRooms(r => [...r, room]); setActiveRoom(room) }} />
+      {/* Modal nueva sala */}
+      {showNewRoom && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-gray-900 border border-white/10 rounded-xl w-full max-w-sm p-6 space-y-4 mx-4">
+            <h3 className="font-semibold text-white">Nuevo canal de chat</h3>
+            <form onSubmit={createRoom} className="space-y-3">
+              <div>
+                <label className="block text-sm text-white/50 mb-1">Nombre</label>
+                <input type="text" value={newRoomName} onChange={e => setNewRoomName(e.target.value)}
+                  className="w-full px-3 py-2 rounded bg-white/10 text-white border border-white/10 focus:outline-none focus:border-blue-500"
+                  required autoFocus />
+              </div>
+              <div>
+                <label className="block text-sm text-white/50 mb-1">Descripción (opcional)</label>
+                <input type="text" value={newRoomDesc} onChange={e => setNewRoomDesc(e.target.value)}
+                  className="w-full px-3 py-2 rounded bg-white/10 text-white border border-white/10 focus:outline-none focus:border-blue-500" />
+              </div>
+
+              {isAdmin && (
+                <label className="flex items-center gap-2.5 cursor-pointer py-1">
+                  <div
+                    onClick={() => { setNewRoomPrivate(p => !p); setSelectedMembers([]) }}
+                    className={`w-10 h-5 rounded-full transition-colors relative ${newRoomPrivate ? 'bg-amber-500' : 'bg-white/20'}`}
+                  >
+                    <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${newRoomPrivate ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                  </div>
+                  <span className="text-sm text-white flex items-center gap-1.5">
+                    <Lock size={12} className={newRoomPrivate ? 'text-amber-400' : 'text-white/40'} />
+                    Canal privado
+                  </span>
+                </label>
+              )}
+
+              {isAdmin && newRoomPrivate && allUsers.length > 0 && (
+                <div>
+                  <label className="block text-sm text-white/50 mb-1.5">Añadir miembros</label>
+                  <div className="max-h-36 overflow-y-auto space-y-1 pr-1">
+                    {allUsers.filter(u => u.id !== user?.id).map(u => (
+                      <label key={u.id} className="flex items-center gap-2 p-1.5 rounded hover:bg-white/5 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={selectedMembers.includes(u.id)}
+                          onChange={() => toggleMember(u.id)}
+                          className="w-3.5 h-3.5"
+                        />
+                        <span className="text-sm text-white">{u.username}</span>
+                        <span className="text-xs text-white/40 ml-auto">{u.role}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex gap-2 pt-1">
+                <button type="submit" className="btn-primary text-sm">Crear canal</button>
+                <button type="button" onClick={() => { setShowNewRoom(false); setNewRoomPrivate(false); setSelectedMembers([]) }} className="btn-ghost text-sm">Cancelar</button>
+              </div>
+            </form>
+          </div>
+        </div>
       )}
     </div>
   )

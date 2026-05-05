@@ -13,7 +13,7 @@ import { indicators, getIndicator } from '@/indicators/registry'
 import {
   TrendingUp, TrendingDown, AlertTriangle, Activity, Clock,
   BarChart3, ChevronDown, Eye, EyeOff, LineChart, X,
-  Maximize2, Minimize2, CandlestickChart, AreaChart,
+  Maximize2, Minimize2, CandlestickChart, AreaChart, Layers,
 } from 'lucide-react'
 
 // ─── Timeframes ───────────────────────────────────────────────────────────────
@@ -38,6 +38,18 @@ const PALETTES = {
   blue:    { label: 'Blue/Red',  up: '#3b82f6', down: '#ef4444' },
   mono:    { label: 'Mono',      up: '#94a3b8', down: '#475569' },
   warm:    { label: 'Gold/Violet', up: '#f59e0b', down: '#7c3aed' },
+}
+
+// ─── Fondos de gráfico ────────────────────────────────────────────────────────
+const BACKGROUNDS = {
+  default:  { label: 'Auto' },
+  dark:     { label: 'Oscuro',   bg: '#111827', text: '#94a3b8', grid: '#1f2937',  isDark: true  },
+  navy:     { label: 'Navy',     bg: '#0a1628', text: '#7ec8e3', grid: '#0f2035',  isDark: true  },
+  charcoal: { label: 'Carbón',   bg: '#1c1c2e', text: '#8b8baf', grid: '#252542',  isDark: true  },
+  midnight: { label: 'Midnight', bg: '#020817', text: '#475569', grid: '#0f172a',  isDark: true  },
+  forest:   { label: 'Bosque',   bg: '#0d1f12', text: '#6ee7b7', grid: '#132018',  isDark: true  },
+  light:    { label: 'Claro',    bg: '#ffffff', text: '#64748b', grid: '#f1f5f9',  isDark: false },
+  cream:    { label: 'Crema',    bg: '#fffbf0', text: '#78716c', grid: '#fef3dc',  isDark: false },
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -185,6 +197,10 @@ export default function ChartPage() {
   const indicatorsMenuRef  = useRef(null)
   const tfMenuRef          = useRef(null)
   const paletteMenuRef     = useRef(null)
+  const bgMenuRef          = useRef(null)
+  const appearanceKeyRef   = useRef('')
+  const candleDataRef      = useRef([])
+  const overlayLabelsRawRef = useRef([])
 
   // State
   const [loading, setLoading]               = useState(true)
@@ -211,6 +227,9 @@ export default function ChartPage() {
   // Chart appearance
   const [chartType, setChartType] = useState('candles')  // 'candles' | 'line' | 'area'
   const [palette, setPalette]     = useState('classic')
+  const [chartBg, setChartBg]     = useState('default')
+  const [showBgMenu, setShowBgMenu] = useState(false)
+  const [overlayLabels, setOverlayLabels] = useState([])
 
   // UI toggles
   const [candleData, setCandleData]         = useState([])
@@ -225,6 +244,7 @@ export default function ChartPage() {
 
   const prices      = usePositionStore(s => s.prices)
   const sidebarOpen = useUiStore(s => s.sidebarOpen)
+  const isDark      = useUiStore(s => s.isDark)
 
   const selectedSymbolNorm = useMemo(() => normalizeSymbol(selectedSymbol), [selectedSymbol])
   const currentTf = useMemo(() => TIMEFRAMES.find(t => t.value === timeframe) || TIMEFRAMES[5], [timeframe])
@@ -239,6 +259,8 @@ export default function ChartPage() {
         setShowTfMenu(false)
       if (paletteMenuRef.current && !paletteMenuRef.current.contains(e.target))
         setShowPaletteMenu(false)
+      if (bgMenuRef.current && !bgMenuRef.current.contains(e.target))
+        setShowBgMenu(false)
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
@@ -334,6 +356,25 @@ export default function ChartPage() {
     candleSeriesRef.current.setMarkers(combined)
   }, [])
 
+  useEffect(() => { candleDataRef.current = candleData }, [candleData])
+
+  // ─── Reposition HTML signal labels on scroll / zoom ──────────────────────────
+  const updateLabelPositions = useCallback(() => {
+    if (!chartRef.current || !candleSeriesRef.current || overlayLabelsRawRef.current.length === 0) {
+      setOverlayLabels([])
+      return
+    }
+    const positioned = overlayLabelsRawRef.current.map(l => {
+      const candle = candleDataRef.current.find(c => c.time === l.time)
+      const price  = l.isBull ? (candle?.low ?? l.fallbackPrice) : (candle?.high ?? l.fallbackPrice)
+      const x = chartRef.current.timeScale().timeToCoordinate(l.time)
+      const y = candleSeriesRef.current.priceToCoordinate(price)
+      if (x === null || y === null) return null
+      return { ...l, x, y }
+    }).filter(Boolean)
+    setOverlayLabels(positioned)
+  }, [])
+
   // ─── EFFECT A: Create chart on data / appearance change ───────────────────
   useEffect(() => {
     if (!chartContainerRef.current || loading || candleData.length === 0) {
@@ -347,6 +388,25 @@ export default function ChartPage() {
       }
       return
     }
+
+    // ── Fast path: appearance unchanged → just swap candle data ──────────────
+    const appearanceKey = `${chartType}|${palette}|${chartBg}|${isDark}`
+    if (
+      chartRef.current &&
+      candleSeriesRef.current &&
+      !selectedPosition &&
+      appearanceKeyRef.current === appearanceKey
+    ) {
+      if (chartType === 'line' || chartType === 'area') {
+        candleSeriesRef.current.setData(candleData.map(c => ({ time: c.time, value: c.close })))
+      } else {
+        candleSeriesRef.current.setData(candleData)
+      }
+      chartRef.current.timeScale().fitContent()
+      return
+    }
+    appearanceKeyRef.current = appearanceKey
+
     if (chartRef.current) { chartRef.current.remove(); chartRef.current = null }
     candleSeriesRef.current = null
     indicatorSeriesRef.current = { ema20: null, ema50: null, sma200: null, rsi: null, volume: null }
@@ -355,10 +415,12 @@ export default function ChartPage() {
     posMarkersRef.current = []
     overlayMarkersRef.current = []
 
-    const isDark = document.documentElement.classList.contains('dark')
-    const bg   = isDark ? '#111827' : '#ffffff'
-    const text = isDark ? '#94a3b8' : '#64748b'
-    const grid = isDark ? '#1f2937' : '#f1f5f9'
+    // ── Background preset ─────────────────────────────────────────────────────
+    const bgPreset = BACKGROUNDS[chartBg]
+    const bg       = bgPreset?.bg   ?? (isDark ? '#111827' : '#ffffff')
+    const text     = bgPreset?.text ?? (isDark ? '#94a3b8' : '#64748b')
+    const grid     = bgPreset?.grid ?? (isDark ? '#1f2937' : '#f1f5f9')
+    const bgDark   = bgPreset ? bgPreset.isDark !== false : isDark
 
     const container = chartContainerRef.current
     const chart = createChart(container, {
@@ -366,8 +428,8 @@ export default function ChartPage() {
       grid:    { vertLines: { color: grid, style: 2 }, horzLines: { color: grid, style: 2 } },
       crosshair: {
         mode: 1,
-        vertLine: { color: isDark ? '#475569' : '#94a3b8', labelBackgroundColor: isDark ? '#374151' : '#94a3b8' },
-        horzLine: { color: isDark ? '#475569' : '#94a3b8', labelBackgroundColor: isDark ? '#374151' : '#94a3b8' },
+        vertLine: { color: bgDark ? '#475569' : '#94a3b8', labelBackgroundColor: bgDark ? '#374151' : '#94a3b8' },
+        horzLine: { color: bgDark ? '#475569' : '#94a3b8', labelBackgroundColor: bgDark ? '#374151' : '#94a3b8' },
       },
       timeScale: { borderColor: grid, timeVisible: true, secondsVisible: false, barSpacing: 8, minBarSpacing: 3 },
       rightPriceScale: { borderColor: grid },
@@ -496,7 +558,11 @@ export default function ChartPage() {
     })
     ro.observe(container)
 
+    const onViewChange = () => updateLabelPositions()
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onViewChange)
+
     return () => {
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onViewChange)
       ro.disconnect()
       chart.remove()
       chartRef.current = null
@@ -504,8 +570,10 @@ export default function ChartPage() {
       positionLineSeriesRef.current = null
       if (positionLineSeriesRef._aux) positionLineSeriesRef._aux = []
       indicatorSeriesRef.current = { ema20: null, ema50: null, sma200: null, rsi: null, volume: null }
+      overlayLabelsRawRef.current = []
+      setOverlayLabels([])
     }
-  }, [candleData, selectedPosition, signals, bots, loading, selectedSymbol, selectedSymbolNorm, chartType, palette])
+  }, [candleData, selectedPosition, signals, bots, loading, selectedSymbol, selectedSymbolNorm, chartType, palette, chartBg, isDark, updateLabelPositions])
 
   // ─── EFFECT B: Indicator series ───────────────────────────────────────────
   useEffect(() => {
@@ -541,7 +609,7 @@ export default function ChartPage() {
       chart.priceScale('rsi').applyOptions({ scaleMargins: { top: 0.85, bottom: 0 }, entireTextOnly: true })
       return s
     }, c => c.rsi14)
-  }, [showEma20, showEma50, showSma200, showRsi, showVolume, candleData])
+  }, [showEma20, showEma50, showSma200, showRsi, showVolume, candleData, palette, chartType, chartBg, isDark])
 
   // ─── EFFECT C: Indicators overlay ─────────────────────────────────────────
   useEffect(() => {
@@ -555,13 +623,15 @@ export default function ChartPage() {
     overlayPriceLinesRef.current.forEach(l => { try { cSeries.removePriceLine(l) } catch {} })
     overlayPriceLinesRef.current = []
     overlayMarkersRef.current = []
+    overlayLabelsRawRef.current = []
 
     const anyActive = Object.values(activeIndicators).some(Boolean)
-    if (!anyActive) { syncMarkers(); return }
+    if (!anyActive) { syncMarkers(); updateLabelPositions(); return }
 
     // API que recibe cada indicador para dibujar
     const api = {
       addMarker(m) { overlayMarkersRef.current.push(m) },
+      addLabel(l)  { overlayLabelsRawRef.current.push(l) },
       addPriceLine(opts) {
         try {
           const pl = cSeries.createPriceLine(opts)
@@ -588,7 +658,8 @@ export default function ChartPage() {
     }
 
     syncMarkers()
-  }, [activeIndicators, configs, candleData, syncMarkers])
+    updateLabelPositions()
+  }, [activeIndicators, configs, candleData, syncMarkers, updateLabelPositions, palette, chartType, chartBg, isDark])
 
   // ─── UI helpers ──────────────────────────────────────────────────────────────
   const filteredSymbols = useMemo(() => {
@@ -745,6 +816,39 @@ export default function ChartPage() {
             )}
           </div>
 
+          {/* Background selector */}
+          <div className="relative" ref={bgMenuRef}>
+            {(() => {
+              const bgPreset = BACKGROUNDS[chartBg]
+              const previewBg = bgPreset?.bg ?? (isDark ? '#111827' : '#ffffff')
+              return (
+                <button
+                  onClick={() => setShowBgMenu(!showBgMenu)}
+                  title="Fondo del gráfico"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded-lg hover:bg-slate-50 dark:hover:bg-gray-750"
+                >
+                  <div className="w-4 h-3 rounded-sm border border-slate-200 dark:border-gray-600" style={{ backgroundColor: previewBg }} />
+                  <Layers size={11} className="text-slate-400" />
+                  <ChevronDown size={11} className="text-slate-400" />
+                </button>
+              )
+            })()}
+            {showBgMenu && (
+              <div className="absolute top-full left-0 mt-1 w-36 bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 rounded-xl shadow-xl z-50 overflow-hidden py-1">
+                {Object.entries(BACKGROUNDS).map(([key, b]) => {
+                  const previewBg = b.bg ?? (isDark ? '#111827' : '#ffffff')
+                  return (
+                    <button key={key} onClick={() => { setChartBg(key); setShowBgMenu(false) }}
+                      className={`w-full flex items-center gap-2.5 px-3 py-2 text-left transition-colors hover:bg-slate-50 dark:hover:bg-gray-700 ${chartBg === key ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400' : 'text-slate-700 dark:text-gray-300'}`}>
+                      <div className="w-5 h-3.5 rounded-sm border border-slate-300 dark:border-gray-600 flex-shrink-0" style={{ backgroundColor: previewBg }} />
+                      <span className="text-xs">{b.label}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </div>
+
           {/* Indicators dropdown */}
           <div className="relative" ref={indicatorsMenuRef}>
             <button
@@ -847,6 +951,35 @@ export default function ChartPage() {
                 </div>
               </div>
             )}
+
+            {/* ── HTML signal labels (A+/A/A-) ──────────────────────────────── */}
+            {overlayLabels.map((label, i) => (
+              <div
+                key={i}
+                className="absolute pointer-events-none select-none z-10"
+                style={{
+                  left: label.x,
+                  top:  label.isBull ? label.y + 6 : label.y - 6,
+                  transform: label.isBull ? 'translateX(-50%)' : 'translate(-50%, -100%)',
+                }}
+              >
+                {label.isBull ? (
+                  <div className="flex flex-col items-center" style={{ gap: 0 }}>
+                    <div style={{ width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderBottom: `5px solid ${label.color}` }} />
+                    <div style={{ backgroundColor: label.color }} className="text-white text-[9px] font-bold px-[5px] py-px rounded-[2px] leading-[14px] tracking-wide whitespace-nowrap shadow-sm">
+                      {label.text}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex flex-col items-center" style={{ gap: 0 }}>
+                    <div style={{ backgroundColor: label.color }} className="text-white text-[9px] font-bold px-[5px] py-px rounded-[2px] leading-[14px] tracking-wide whitespace-nowrap shadow-sm">
+                      {label.text}
+                    </div>
+                    <div style={{ width: 0, height: 0, borderLeft: '5px solid transparent', borderRight: '5px solid transparent', borderTop: `5px solid ${label.color}` }} />
+                  </div>
+                )}
+              </div>
+            ))}
 
             {/* Indicator Badges + Settings Panels */}
             {indicators.map(ind => {

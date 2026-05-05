@@ -1,10 +1,10 @@
 import { Settings, X } from 'lucide-react'
 
-export default function IctIndicatorBadge({ onOpenSettings, onClose }) {
+export default function LiquidityBadge({ onOpenSettings, onClose }) {
   return (
     <div className="absolute top-2 left-2 z-10 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-gray-900/80 dark:bg-black/80 backdrop-blur-sm border border-gray-700/50 shadow-lg">
       <span className="text-[11px] font-bold text-white tracking-tight">
-        ICT Concepts <span className="text-gray-400 font-normal">[1.0]</span>
+        Liquidity <span className="text-gray-400 font-normal">[1.0]</span>
       </span>
       <button
         onClick={onOpenSettings}

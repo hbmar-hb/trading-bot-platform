@@ -1,11 +1,27 @@
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.services.database import Base
+
+
+class ChatRoomMember(Base):
+    __tablename__ = "chat_room_members"
+
+    room_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("chat_rooms.id", ondelete="CASCADE"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
+    )
+
+    room: Mapped["ChatRoom"] = relationship(back_populates="members")
 
 
 class ChatRoom(Base):
@@ -19,6 +35,7 @@ class ChatRoom(Base):
     created_by: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
     )
+    is_private: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False
     )
@@ -28,6 +45,9 @@ class ChatRoom(Base):
 
     messages: Mapped[list["ChatMessage"]] = relationship(
         back_populates="room", cascade="all, delete-orphan", order_by="ChatMessage.created_at"
+    )
+    members: Mapped[list["ChatRoomMember"]] = relationship(
+        back_populates="room", cascade="all, delete-orphan"
     )
 
 

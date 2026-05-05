@@ -1,7 +1,10 @@
 """
 Gestión de usuarios (admin).
-Requiere JWT válido — cualquier usuario autenticado puede gestionar usuarios.
+Los admins crean usuarios — el sistema envía el link de establecimiento
+de contraseña por email. Ningún admin puede ver ni definir contraseñas.
 """
+import asyncio
+import secrets
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,17 +12,18 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import asyncio
-
-from app.api.dependencies import get_current_admin_user, get_current_user_id
+from app.api.dependencies import get_current_admin_user
 from app.models.user import User
-from app.schemas.auth import UserCreate, UserResponse, UserResetPassword, UserUpdate
+from app.schemas.auth import UserCreate, UserResponse, UserUpdate
+from app.services.cache import set_password_reset_token
 from app.services.database import get_db
-from app.services.email_service import send_welcome_email
+from app.services.email_service import send_password_reset_email, send_welcome_email
 from config.settings import settings
 
 router = APIRouter(prefix="/users", tags=["users"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+VALID_ROLES = ("user", "moderator", "admin")
 
 
 async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> User:
@@ -53,26 +57,27 @@ async def create_user(
     if existing.scalar_one_or_none():
         raise HTTPException(status.HTTP_409_CONFLICT, "Usuario o email ya existe")
 
+    # Contraseña temporal aleatoria — el usuario la definirá por email
+    temp_password = secrets.token_urlsafe(32)
+
     user = User(
         username=data.username,
         email=data.email,
-        hashed_password=pwd_context.hash(data.password),
-        role=data.role if data.role in ("user", "admin") else "user",
-        must_change_password=True,
+        hashed_password=pwd_context.hash(temp_password),
+        role=data.role if data.role in VALID_ROLES else "user",
         telegram_chat_id=data.telegram_chat_id.strip() if data.telegram_chat_id and data.telegram_chat_id.strip() else None,
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
 
-    if settings.email_from:
-        await asyncio.to_thread(
-            send_welcome_email,
-            data.email,
-            data.username,
-            data.password,
-            settings.frontend_url,
-        )
+    # Generar token de establecimiento de contraseña y enviarlo por email
+    token = str(uuid.uuid4())
+    set_password_reset_token(str(user.id), token)
+    reset_url = f"{settings.frontend_url}/reset-password?token={token}"
+    asyncio.get_event_loop().run_in_executor(
+        None, send_welcome_email, user.email, user.username, reset_url
+    )
 
     return user
 
@@ -87,7 +92,6 @@ async def update_user(
     user = await _get_user_or_404(user_id, db)
 
     if data.username is not None:
-        # Verificar unicidad del nuevo username
         dup = await db.execute(
             select(User).where(User.username == data.username, User.id != user_id)
         )
@@ -104,13 +108,12 @@ async def update_user(
         user.email = data.email
 
     if data.is_active is not None:
-        # No permitir desactivarse a uno mismo (ni al admin principal)
         if user_id == current_admin.id and not data.is_active:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "No puedes desactivar tu propia cuenta")
         user.is_active = data.is_active
 
     if data.role is not None:
-        if data.role in ("user", "admin"):
+        if data.role in VALID_ROLES:
             user.role = data.role
 
     if data.telegram_chat_id is not None:
@@ -121,26 +124,21 @@ async def update_user(
     return user
 
 
-@router.post("/{user_id}/reset-password", status_code=status.HTTP_204_NO_CONTENT)
-async def reset_password(
+@router.post("/{user_id}/send-reset-email", status_code=status.HTTP_204_NO_CONTENT)
+async def send_reset_email(
     user_id: uuid.UUID,
-    data: UserResetPassword,
     _: User = Depends(get_current_admin_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """El admin dispara un email de restablecimiento de contraseña al usuario.
+    Nunca puede ver ni establecer la contraseña directamente."""
     user = await _get_user_or_404(user_id, db)
-    user.hashed_password = pwd_context.hash(data.new_password)
-    user.must_change_password = True
-    await db.commit()
-
-    if settings.email_from:
-        await asyncio.to_thread(
-            send_welcome_email,
-            user.email,
-            user.username,
-            data.new_password,
-            settings.frontend_url,
-        )
+    token = str(uuid.uuid4())
+    set_password_reset_token(str(user.id), token)
+    reset_url = f"{settings.frontend_url}/reset-password?token={token}"
+    asyncio.get_event_loop().run_in_executor(
+        None, send_password_reset_email, user.email, reset_url
+    )
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1,7 +1,24 @@
 import { useEffect, useState } from 'react'
-import { Copy, Edit2, Eye, EyeOff, KeyRound, Plus, RefreshCw, Trash2, X, Check } from 'lucide-react'
+import { Edit2, Mail, Plus, Trash2, X, Check, Shield, ShieldCheck, User } from 'lucide-react'
 import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
+
+const ROLES = [
+  { value: 'user',      label: 'Usuario',    icon: User,        cls: 'bg-slate-500/20 text-slate-400' },
+  { value: 'moderator', label: 'Moderador',  icon: Shield,      cls: 'bg-amber-500/20 text-amber-400' },
+  { value: 'admin',     label: 'Admin',      icon: ShieldCheck, cls: 'bg-blue-500/20 text-blue-400' },
+]
+
+function roleMeta(role) {
+  return ROLES.find(r => r.value === role) || ROLES[0]
+}
+
+function RoleBadge({ role }) {
+  const m = roleMeta(role)
+  return (
+    <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${m.cls}`}>{m.label}</span>
+  )
+}
 
 function Alert({ type, message }) {
   const s = type === 'error'
@@ -10,7 +27,6 @@ function Alert({ type, message }) {
   return <div className={`border rounded-lg px-4 py-3 text-sm ${s}`}>{message}</div>
 }
 
-/* ─── Modal genérico ──────────────────────────────────────── */
 function Modal({ title, onClose, children }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
@@ -25,54 +41,13 @@ function Modal({ title, onClose, children }) {
   )
 }
 
-function fallbackCopy(text) {
-  const ta = document.createElement('textarea')
-  ta.value = text
-  ta.style.position = 'fixed'
-  ta.style.opacity = '0'
-  document.body.appendChild(ta)
-  ta.focus()
-  ta.select()
-  document.execCommand('copy')
-  document.body.removeChild(ta)
-}
-
-function generatePassword() {
-  const upper  = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
-  const lower  = 'abcdefghjkmnpqrstuvwxyz'
-  const digits = '23456789'
-  const all    = upper + lower + digits
-  let pass = upper[Math.floor(Math.random() * upper.length)]
-           + digits[Math.floor(Math.random() * digits.length)]
-  for (let i = 0; i < 8; i++) pass += all[Math.floor(Math.random() * all.length)]
-  return pass.split('').sort(() => Math.random() - 0.5).join('')
-}
-
 /* ─── Modal crear usuario ─────────────────────────────────── */
 function CreateUserModal({ onClose, onCreated }) {
-  const [form, setForm]       = useState({ username: '', email: '', password: '', role: 'user', telegram_chat_id: '' })
+  const [form, setForm]     = useState({ username: '', email: '', role: 'user', telegram_chat_id: '' })
   const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
-  const [showPass, setShowPass] = useState(false)
-  const [copied, setCopied]   = useState(false)
+  const [error, setError]   = useState(null)
+  const [success, setSuccess] = useState(false)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
-
-  const handleGenerate = () => {
-    const pwd = generatePassword()
-    set('password', pwd)
-    setShowPass(true)
-    setCopied(false)
-  }
-
-  const handleCopy = () => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(form.password).catch(() => fallbackCopy(form.password))
-    } else {
-      fallbackCopy(form.password)
-    }
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -80,7 +55,8 @@ function CreateUserModal({ onClose, onCreated }) {
     try {
       const { data } = await usersService.create(form)
       onCreated(data)
-      onClose()
+      setSuccess(true)
+      setTimeout(onClose, 1800)
     } catch (err) {
       const detail = err.response?.data?.detail
       setError(Array.isArray(detail) ? detail.map(d => d.msg).join(' · ') : detail || 'Error al crear usuario')
@@ -91,6 +67,7 @@ function CreateUserModal({ onClose, onCreated }) {
     <Modal title="Nuevo usuario" onClose={onClose}>
       <form onSubmit={handleSubmit} className="space-y-4">
         {error && <Alert type="error" message={error} />}
+        {success && <Alert type="success" message="Usuario creado. Se ha enviado el email para establecer contraseña." />}
         <div>
           <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Usuario</label>
           <input type="text" value={form.username} onChange={e => set('username', e.target.value)}
@@ -102,45 +79,9 @@ function CreateUserModal({ onClose, onCreated }) {
             className="input" placeholder="usuario@email.com" required />
         </div>
         <div>
-          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Contraseña temporal</label>
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <input
-                type={showPass ? 'text' : 'password'}
-                value={form.password}
-                onChange={e => set('password', e.target.value)}
-                className="input w-full pr-8"
-                placeholder="Mín. 8 chars, 1 mayúscula, 1 número"
-                required
-              />
-              <button
-                type="button"
-                onClick={() => setShowPass(v => !v)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-gray-300"
-              >
-                {showPass ? <EyeOff size={15} /> : <Eye size={15} />}
-              </button>
-            </div>
-            <button type="button" onClick={handleGenerate} title="Generar contraseña"
-              className="btn-ghost px-2.5" >
-              <RefreshCw size={15} />
-            </button>
-            <button type="button" onClick={handleCopy} disabled={!form.password} title="Copiar"
-              className="btn-ghost px-2.5">
-              {copied ? <Check size={15} className="text-green-500" /> : <Copy size={15} />}
-            </button>
-          </div>
-          {form.password && showPass && (
-            <p className="mt-1.5 text-xs text-slate-500 dark:text-gray-400">
-              Comparte esta contraseña con el usuario — deberá cambiarla al entrar.
-            </p>
-          )}
-        </div>
-        <div>
           <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Rol</label>
           <select value={form.role} onChange={e => set('role', e.target.value)} className="input">
-            <option value="user">Usuario</option>
-            <option value="admin">Administrador</option>
+            {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
           </select>
         </div>
         <div>
@@ -148,9 +89,12 @@ function CreateUserModal({ onClose, onCreated }) {
           <input type="text" value={form.telegram_chat_id} onChange={e => set('telegram_chat_id', e.target.value)}
             className="input" placeholder="Ej: 123456789" />
         </div>
+        <p className="text-xs text-slate-400 dark:text-gray-500 bg-slate-50 dark:bg-gray-800/50 rounded-lg px-3 py-2">
+          El usuario recibirá un email para establecer su propia contraseña. Ningún administrador puede definirla.
+        </p>
         <div className="flex gap-2 pt-1">
-          <button type="submit" disabled={loading} className="btn-primary">
-            {loading ? 'Creando…' : 'Crear usuario'}
+          <button type="submit" disabled={loading || success} className="btn-primary">
+            {loading ? 'Creando…' : 'Crear y enviar email'}
           </button>
           <button type="button" onClick={onClose} className="btn-ghost">Cancelar</button>
         </div>
@@ -161,9 +105,14 @@ function CreateUserModal({ onClose, onCreated }) {
 
 /* ─── Modal editar usuario ────────────────────────────────── */
 function EditUserModal({ user, onClose, onUpdated }) {
-  const [form, setForm]     = useState({ username: user.username, email: user.email, telegram_chat_id: user.telegram_chat_id || '' })
+  const [form, setForm] = useState({
+    username: user.username,
+    email: user.email,
+    role: user.role || 'user',
+    telegram_chat_id: user.telegram_chat_id || '',
+  })
   const [loading, setLoading] = useState(false)
-  const [error, setError]   = useState(null)
+  const [error, setError]     = useState(null)
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleSubmit = async (e) => {
@@ -194,6 +143,12 @@ function EditUserModal({ user, onClose, onUpdated }) {
             className="input" required />
         </div>
         <div>
+          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Rol</label>
+          <select value={form.role} onChange={e => set('role', e.target.value)} className="input">
+            {ROLES.map(r => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select>
+        </div>
+        <div>
           <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Telegram Chat ID</label>
           <input type="text" value={form.telegram_chat_id} onChange={e => set('telegram_chat_id', e.target.value)}
             className="input" placeholder="Ej: 123456789" />
@@ -209,52 +164,14 @@ function EditUserModal({ user, onClose, onUpdated }) {
   )
 }
 
-/* ─── Modal resetear contraseña ───────────────────────────── */
-function ResetPasswordModal({ user, onClose }) {
-  const [password, setPassword] = useState('')
-  const [loading, setLoading]   = useState(false)
-  const [status, setStatus]     = useState(null)
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setLoading(true); setStatus(null)
-    try {
-      await usersService.resetPassword(user.id, { new_password: password })
-      setStatus({ type: 'success', message: 'Contraseña actualizada' })
-      setPassword('')
-    } catch (err) {
-      const detail = err.response?.data?.detail
-      setStatus({ type: 'error', message: Array.isArray(detail) ? detail.map(d => d.msg).join(' · ') : detail || 'Error' })
-    } finally { setLoading(false) }
-  }
-
-  return (
-    <Modal title={`Resetear contraseña: ${user.username}`} onClose={onClose}>
-      <form onSubmit={handleSubmit} className="space-y-4">
-        {status && <Alert type={status.type} message={status.message} />}
-        <div>
-          <label className="block text-sm text-slate-500 dark:text-gray-400 mb-1.5">Nueva contraseña</label>
-          <input type="password" value={password} onChange={e => setPassword(e.target.value)}
-            className="input" placeholder="Mín. 8 chars, 1 mayúscula, 1 número" required />
-        </div>
-        <div className="flex gap-2 pt-1">
-          <button type="submit" disabled={loading} className="btn-primary">
-            {loading ? 'Guardando…' : 'Establecer contraseña'}
-          </button>
-          <button type="button" onClick={onClose} className="btn-ghost">Cerrar</button>
-        </div>
-      </form>
-    </Modal>
-  )
-}
-
 /* ─── Page ────────────────────────────────────────────────── */
 export default function UsersPage() {
   const currentUser = useAuthStore(s => s.user)
-  const [users, setUsers]       = useState([])
-  const [loading, setLoading]   = useState(true)
-  const [modal, setModal]       = useState(null)   // null | { type, user? }
+  const [users, setUsers]         = useState([])
+  const [loading, setLoading]     = useState(true)
+  const [modal, setModal]         = useState(null)
   const [togglingId, setTogglingId] = useState(null)
+  const [sendingReset, setSendingReset] = useState(null)
 
   useEffect(() => {
     usersService.list()
@@ -285,6 +202,17 @@ export default function UsersPage() {
     } finally { setTogglingId(null) }
   }
 
+  const handleSendReset = async (user) => {
+    if (!confirm(`Enviar email de restablecimiento de contraseña a "${user.username}" (${user.email})?`)) return
+    setSendingReset(user.id)
+    try {
+      await usersService.sendResetEmail(user.id)
+      alert(`Email de restablecimiento enviado a ${user.email}`)
+    } catch (err) {
+      alert(err.response?.data?.detail || 'Error al enviar el email')
+    } finally { setSendingReset(null) }
+  }
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div className="flex items-center justify-between">
@@ -300,13 +228,16 @@ export default function UsersPage() {
         <div className="space-y-2">
           {users.map(user => (
             <div key={user.id} className="card flex items-center gap-4">
-              <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center font-bold text-white shrink-0">
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white shrink-0 ${
+                user.role === 'admin' ? 'bg-blue-600' : user.role === 'moderator' ? 'bg-amber-500' : 'bg-slate-500'
+              }`}>
                 {user.username[0].toUpperCase()}
               </div>
 
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <span className="font-medium text-slate-900 dark:text-gray-100">{user.username}</span>
+                  <RoleBadge role={user.role} />
                   {user.id === currentUser?.id && (
                     <span className="text-xs px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-500 dark:text-blue-400">tú</span>
                   )}
@@ -324,7 +255,6 @@ export default function UsersPage() {
               </div>
 
               <div className="flex items-center gap-1 shrink-0">
-                {/* Activar / desactivar */}
                 {user.id !== currentUser?.id && (
                   <button
                     onClick={() => toggleActive(user)}
@@ -349,11 +279,12 @@ export default function UsersPage() {
                 </button>
 
                 <button
-                  onClick={() => setModal({ type: 'reset', user })}
-                  title="Resetear contraseña"
-                  className="p-1.5 text-slate-500 dark:text-gray-400 hover:text-yellow-400 rounded"
+                  onClick={() => handleSendReset(user)}
+                  disabled={sendingReset === user.id}
+                  title="Enviar email de restablecimiento de contraseña"
+                  className="p-1.5 text-slate-500 dark:text-gray-400 hover:text-amber-400 rounded"
                 >
-                  <KeyRound size={15} />
+                  <Mail size={15} />
                 </button>
 
                 {user.id !== currentUser?.id && (
@@ -376,9 +307,6 @@ export default function UsersPage() {
       )}
       {modal?.type === 'edit' && (
         <EditUserModal user={modal.user} onClose={() => setModal(null)} onUpdated={handleUpdated} />
-      )}
-      {modal?.type === 'reset' && (
-        <ResetPasswordModal user={modal.user} onClose={() => setModal(null)} />
       )}
     </div>
   )

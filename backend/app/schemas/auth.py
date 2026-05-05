@@ -62,20 +62,8 @@ class RegisterRequest(BaseModel):
 class UserCreate(BaseModel):
     username: str
     email: str
-    password: str
     role: str = "user"
     telegram_chat_id: str | None = None
-
-    @field_validator("password")
-    @classmethod
-    def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Mínimo 8 caracteres")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Debe contener al menos una mayúscula")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Debe contener al menos un número")
-        return v
 
 
 class UserUpdate(BaseModel):
@@ -84,21 +72,6 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     role: str | None = None
     telegram_chat_id: str | None = None
-
-
-class UserResetPassword(BaseModel):
-    new_password: str
-
-    @field_validator("new_password")
-    @classmethod
-    def password_strength(cls, v: str) -> str:
-        if len(v) < 8:
-            raise ValueError("Mínimo 8 caracteres")
-        if not any(c.isupper() for c in v):
-            raise ValueError("Debe contener al menos una mayúscula")
-        if not any(c.isdigit() for c in v):
-            raise ValueError("Debe contener al menos un número")
-        return v
 
 
 # ─── 2FA Requests ────────────────────────────────────────────
