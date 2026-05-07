@@ -19,7 +19,7 @@ from app.models.bot_config import BotConfig
 from app.models.paper_balance import PaperBalance
 from app.models.position import Position
 from app.models.user import User
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):

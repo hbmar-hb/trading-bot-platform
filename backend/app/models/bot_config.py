@@ -127,6 +127,21 @@ class BotConfig(TimestampMixin, Base):
         JSONB, nullable=False, default=list
     )
 
+    # ─── AI Signal Mode ──────────────────────────────────────
+    # Cuando True, el bot auto-ejecuta señales del AI Confluence Scanner
+    # (filtro: quality_tier=STRONG + anti_fake_status=CLEAR)
+    ai_signal_mode: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    ai_signal_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False,
+        default=lambda: {
+            "min_score": 60,
+            "require_clear": True,
+            "max_concurrent": 1,
+        }
+    )
+
     # ─── ICT Scan ────────────────────────────────────────────
     # Activa el motor Python ICT en lugar de esperar webhooks externos
     ict_scan_enabled: Mapped[bool] = mapped_column(

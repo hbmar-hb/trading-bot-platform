@@ -104,7 +104,7 @@ async def _execute_tp(
     from app.models.paper_balance import PaperBalance
     from app.models.position import Position
     from app.services.cache import publish_position_update_sync
-    from app.services.database import AsyncSessionLocal
+    from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
         result = await db.execute(
@@ -231,7 +231,7 @@ async def _execute_sl_update(position_id: uuid.UUID, new_sl_price: Decimal) -> N
     from app.models.paper_balance import PaperBalance
     from app.models.position import Position
     from app.services.cache import publish_position_update_sync
-    from app.services.database import AsyncSessionLocal
+    from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
         # Cargar posición con bot y cuenta

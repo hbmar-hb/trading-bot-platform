@@ -72,7 +72,7 @@ class ICTResult:
 def analyze(
     candles: list[dict],
     pivot_len: int = 5,
-    atr_mult: float = 1.5,
+    atr_mult: float = 0.3,
     atr_len: int = 14,
     entry_mode: str = "ob_or_fvg",
 ) -> ICTResult:
@@ -146,6 +146,7 @@ def analyze(
             )
             if bk == "CHoCH":
                 bull_bias = True
+            if ob is not None:          # BOS and CHoCH both set the active OB
                 active_ob = ob
 
         if body_break_d:
@@ -158,6 +159,7 @@ def analyze(
             )
             if bk == "CHoCH":
                 bull_bias = False
+            if ob is not None:          # BOS and CHoCH both set the active OB
                 active_ob = ob
 
     # ─── Evaluar señal de entrada en la vela actual ───────────────────────────
@@ -340,16 +342,22 @@ def _evaluate_entry(
 
     direction = last_break.direction
     cur_high = float(df["high"].iloc[-1])
-    cur_low = float(df["low"].iloc[-1])
+    cur_low  = float(df["low"].iloc[-1])
 
     # ── Order Block ──────────────────────────────────────────────────────────
+    # Signal fires when price is inside the OB *or* has pulled back to within
+    # 2% of the OB top (bull) / OB bottom (bear) — i.e., approaching the zone.
     if active_ob and not active_ob.mitigated and entry_mode in ("ob", "ob_or_fvg"):
         ob = active_ob
-        in_zone = cur_low <= ob.top and cur_high >= ob.bottom
-        if in_zone:
-            if direction == "bull":
+        if direction == "bull":
+            # Price pulled back near / into the OB from above
+            near = cur_low <= ob.top * 1.02 and cur_high >= ob.bottom
+            if near:
                 return "long", (ob.bottom, ob.top), "ob"
-            else:
+        else:
+            # Price bounced near / into the OB from below
+            near = cur_high >= ob.bottom * 0.98 and cur_low <= ob.top
+            if near:
                 return "short", (ob.bottom, ob.top), "ob"
 
     # ── Fair Value Gap ────────────────────────────────────────────────────────
@@ -360,8 +368,11 @@ def _evaluate_entry(
             if not f.filled and f.kind == target_kind and f.bar > len(df) - 80
         ]
         for fvg in reversed(recent_fvgs):
-            in_zone = cur_low <= fvg.top and cur_high >= fvg.bottom
-            if in_zone:
+            if direction == "bull":
+                near = cur_low <= fvg.top * 1.02 and cur_high >= fvg.bottom
+            else:
+                near = cur_high >= fvg.bottom * 0.98 and cur_low <= fvg.top
+            if near:
                 if direction == "bull":
                     return "long", (fvg.bottom, fvg.top), "fvg"
                 else:

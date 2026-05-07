@@ -72,3 +72,9 @@ pandas==2.2.3
 numpy==2.2.0
 openpyxl==3.1.5          # leer archivos XLSX de BingX
 python-multipart==0.0.20  # file upload en FastAPI
+
+# ─────────────────────────────────────────
+# ML — XGBoost Anti-Fake (Fase 2)
+# ─────────────────────────────────────────
+xgboost==2.1.3
+scikit-learn==1.5.2

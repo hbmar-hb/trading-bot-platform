@@ -9,7 +9,7 @@ from decimal import Decimal
 from celery import shared_task
 from loguru import logger
 
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):

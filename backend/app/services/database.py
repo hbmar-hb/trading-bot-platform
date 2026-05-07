@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
+from sqlalchemy.pool import NullPool
 
 from config.settings import settings
 
@@ -38,6 +39,26 @@ async def get_db() -> AsyncSession:
         except Exception:
             await session.rollback()
             raise
+
+
+# ─────────────────────────────────────────────────────────────
+# Async engine (NullPool) — Celery tasks only
+# NullPool creates a fresh connection per session and closes it
+# immediately, so there are no pooled connections that could be
+# attached to a closed event loop when asyncio.run() is called
+# repeatedly in the same forked Celery worker process.
+# ─────────────────────────────────────────────────────────────
+async_engine_task = create_async_engine(
+    settings.database_url,
+    echo=False,
+    poolclass=NullPool,
+)
+
+AsyncSessionLocal_task = async_sessionmaker(
+    async_engine_task,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
 # ─────────────────────────────────────────────────────────────

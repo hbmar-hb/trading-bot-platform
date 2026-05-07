@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from app.models.bot_config import BotConfig
 from app.services.cache import publish_notification_sync
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):

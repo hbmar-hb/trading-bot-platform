@@ -164,6 +164,14 @@ class PaperExchange(BaseExchange):
             logger.debug(f"[PAPER] SL colocado {symbol} {side} @ {sl_price}")
             return order_id
 
+    async def place_take_profit(
+        self, symbol: str, side: str, quantity: Decimal, tp_price: Decimal
+    ) -> str:
+        """Paper trading: registra el TP sin enviar al exchange."""
+        order_id = f"paper_tp_{uuid.uuid4().hex[:12]}"
+        logger.debug(f"[PAPER] TP colocado {symbol} {side} @ {tp_price} id={order_id}")
+        return order_id
+
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Paper trading: siempre devuelve True (no hay órdenes reales)."""
         logger.debug(f"[PAPER] Cancelada orden {order_id}")

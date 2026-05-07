@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.services.cache import sync_redis
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 _TIMEFRAME_SECONDS: dict[str, int] = {
     "1m": 60,   "3m": 180,  "5m": 300,  "15m": 900,

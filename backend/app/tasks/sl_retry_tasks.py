@@ -36,7 +36,7 @@ async def _retry_all() -> dict:
     from app.models.bot_log import BotLog
     from app.models.exchange_account import ExchangeAccount
     from app.models.position import Position
-    from app.services.database import AsyncSessionLocal
+    from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
     MAX_PENDING_MINUTES = 15  # Advertencia si lleva más de 15 min pendiente
 

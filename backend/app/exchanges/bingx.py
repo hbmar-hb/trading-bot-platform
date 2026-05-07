@@ -163,6 +163,18 @@ class BingXExchange(BaseExchange):
         )
         return str(order["id"])
 
+    async def place_take_profit(self, symbol: str, side: str, quantity: Decimal, tp_price: Decimal) -> str:
+        tp_order_side = "sell" if side == "long" else "buy"
+        position_side = "LONG" if side == "long" else "SHORT"
+        if not self._client.markets:
+            await self._client.load_markets()
+        tp_price_str = self._client.price_to_precision(symbol, float(tp_price))
+        order = await self._client.create_order(
+            symbol=symbol, type="TAKE_PROFIT_MARKET", side=tp_order_side, amount=float(quantity),
+            params={"stopPrice": float(tp_price_str), "positionSide": position_side, "reduceOnly": True},
+        )
+        return str(order["id"])
+
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         try:
             await self._client.cancel_order(order_id, symbol)

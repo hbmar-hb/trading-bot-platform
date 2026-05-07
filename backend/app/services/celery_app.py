@@ -18,6 +18,11 @@ celery_app = Celery(
         "app.tasks.optimizer_tasks",
         "app.tasks.limit_order_tasks",
         "app.tasks.ict_scan_tasks",
+        "app.tasks.ai_outcome_tracker",
+        "app.tasks.bot_activator_task",
+        "app.tasks.ai_retrain_task",
+        "app.tasks.ai_scan_task",
+        "app.tasks.circuit_breaker_task",
     ],
 )
 
@@ -87,6 +92,27 @@ celery_app.conf.update(
         "ict-scan-all": {
             "task": "app.tasks.ict_scan_tasks.ict_scan_all",
             "schedule": 60.0,
+        },
+        # AI outcome tracker: etiqueta señales PENDING cada 15 minutos
+        "ai-track-outcomes": {
+            "task": "app.tasks.ai_outcome_tracker.track_outcomes",
+            "schedule": 900.0,
+        },
+        # XGBoost Anti-Fake retrain semanal: domingos 03:00 UTC
+        "ai-retrain-weekly": {
+            "task": "app.tasks.ai_retrain_task.retrain_anti_fake",
+            "schedule": crontab(hour=3, minute=0, day_of_week="sunday"),
+        },
+        # AI watchlist scanner: escanea todos los pares del watchlist cada 5 minutos
+        # Persiste resultados en ai_latest_scans para que el dashboard esté siempre actualizado
+        "ai-scan-watchlists": {
+            "task": "app.tasks.ai_scan_task.scan_all_watchlists",
+            "schedule": 300.0,
+        },
+        # Circuit breaker: pausa bots AI con 3 pérdidas consecutivas
+        "ai-circuit-breakers": {
+            "task": "app.tasks.circuit_breaker_task.check_circuit_breakers",
+            "schedule": 900.0,  # cada 15 minutos
         },
     },
 )

@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, computed_field, field_validator
+from pydantic import BaseModel, Field, computed_field, field_validator
 
 
 # ─── Modelos anidados (config JSON) ──────────────────────────
@@ -58,6 +58,8 @@ class BotCreate(BaseModel):
     breakeven_config: BreakevenConfig = BreakevenConfig()
     dynamic_sl_config: DynamicSLConfig = DynamicSLConfig()
     signal_confirmation_minutes: int = 0
+    ai_signal_mode: bool = False
+    ai_signal_config: dict = Field(default_factory=dict)
 
     @field_validator("exchange_account_id", "paper_balance_id")
     @classmethod
@@ -173,6 +175,8 @@ class BotResponse(BaseModel):
     dynamic_sl_config: dict
     webhook_secret: str
     signal_confirmation_minutes: int
+    ai_signal_mode: bool = False
+    ai_signal_config: dict = Field(default_factory=dict)
     status: str
     created_at: datetime
     updated_at: datetime | None = None

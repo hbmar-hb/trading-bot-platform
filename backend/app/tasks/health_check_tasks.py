@@ -9,7 +9,7 @@ from app.exchanges.factory import create_exchange
 from app.models.bot_config import BotConfig
 from app.models.exchange_account import ExchangeAccount
 from app.services.cache import set_exchange_health
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 @shared_task(name="app.tasks.health_check_tasks.check_exchanges")

@@ -1,6 +1,7 @@
 from celery import shared_task
 
 from app.services.notifier import (
+    notify_ai_signal,
     notify_auto_optimized,
     notify_error,
     notify_sl_moved,
@@ -42,3 +43,19 @@ def error_alert(bot_name: str, error: str, chat_id: str | None = None) -> None:
 @shared_task(queue="notifications", name="app.tasks.notification_tasks.auto_optimized")
 def auto_optimized(bot_name: str, symbol: str, changes: dict, health_score: int, crisis_mode: bool = False) -> None:
     notify_auto_optimized(bot_name, symbol, changes, health_score, crisis_mode)
+
+
+@shared_task(queue="notifications", name="app.tasks.notification_tasks.ai_signal_alert")
+def ai_signal_alert(
+    ticker: str, timeframe: str, direction: str,
+    score: float, quality_score: float, confidence: str,
+    entry: float, sl: float, tp1: float, tp2: float,
+    components: dict, warnings: list,
+    htf_bias: str | None = None,
+) -> None:
+    notify_ai_signal(
+        ticker, timeframe, direction,
+        score, quality_score, confidence,
+        entry, sl, tp1, tp2,
+        components, warnings, htf_bias=htf_bias,
+    )

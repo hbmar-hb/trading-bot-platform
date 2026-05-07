@@ -110,6 +110,16 @@ class BaseExchange(ABC):
         Devuelve el order_id del SL en el exchange.
         """
 
+    async def place_take_profit(
+        self, symbol: str, side: str, quantity: Decimal, tp_price: Decimal
+    ) -> str:
+        """
+        Coloca una orden de take profit (TAKE_PROFIT_MARKET por defecto).
+        Devuelve el order_id en el exchange.
+        Los exchanges que no implementan este método lanzarán NotImplementedError.
+        """
+        raise NotImplementedError(f"place_take_profit no implementado para {type(self).__name__}")
+
     @abstractmethod
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         """Cancela una orden. Devuelve True si se canceló correctamente."""

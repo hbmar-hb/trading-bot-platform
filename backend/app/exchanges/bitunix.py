@@ -223,6 +223,19 @@ class BitunixExchange(BaseExchange):
         result = await self._request("POST", "api/v1/futures/order", body=body)
         return str(result.get("data", {}).get("orderId", ""))
 
+    async def place_take_profit(self, symbol: str, side: str, quantity: Decimal, tp_price: Decimal) -> str:
+        tp_side = "SELL" if side == "long" else "BUY"
+        body = {
+            "symbol": symbol,
+            "side": tp_side.upper(),
+            "type": "TAKE_PROFIT_MARKET",
+            "stopPrice": str(tp_price),
+            "quantity": str(quantity),
+            "reduceOnly": True,
+        }
+        result = await self._request("POST", "api/v1/futures/order", body=body)
+        return str(result.get("data", {}).get("orderId", ""))
+
     async def cancel_order(self, symbol: str, order_id: str) -> bool:
         try:
             await self._request("POST", "api/v1/futures/order/cancel", 

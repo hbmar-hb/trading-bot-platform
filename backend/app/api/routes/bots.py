@@ -181,6 +181,8 @@ async def update_bot(
     bot.leverage = data.leverage
     bot.initial_sl_percentage = data.initial_sl_percentage
     bot.signal_confirmation_minutes = data.signal_confirmation_minutes
+    bot.ai_signal_mode   = data.ai_signal_mode
+    bot.ai_signal_config = data.ai_signal_config
     for field, value in _bot_to_db_fields(data).items():
         setattr(bot, field, value)
 

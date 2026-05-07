@@ -134,6 +134,63 @@ def notify_error(bot_name: str, error: str, chat_id: str | None = None) -> None:
         send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 
 
+def notify_circuit_breaker(bot_name: str, symbol: str, consecutive_losses: int) -> None:
+    msg = (
+        f"🚨 <b>CIRCUIT BREAKER ACTIVADO</b>\n\n"
+        f"Bot: <b>{bot_name}</b>\n"
+        f"Par: {symbol}\n"
+        f"Motivo: {consecutive_losses} pérdidas consecutivas\n\n"
+        f"⚠️ El bot ha sido pausado automáticamente.\n"
+        f"Revisa las condiciones del mercado antes de reactivarlo."
+    )
+    send_telegram_sync(msg)
+    send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
+
+
+def notify_ai_signal(
+    ticker: str, timeframe: str, direction: str,
+    score: float, quality_score: float, confidence: str,
+    entry: float, sl: float, tp1: float, tp2: float,
+    components: dict, warnings: list,
+    htf_bias: str | None = None,
+) -> None:
+    """Alert for every STRONG+CLEAR AI signal, regardless of whether a bot is active."""
+    emoji   = "🟢" if direction == "long" else "🔴"
+    dir_lbl = "LONG" if direction == "long" else "SHORT"
+
+    # R:R computed from prices
+    risk = abs(entry - sl)
+    reward = abs(tp1 - entry)
+    rr = round(reward / risk, 1) if risk > 0 else 0.0
+
+    htf_line   = f"\n🔭 HTF: {htf_bias.upper()}" if htf_bias else ""
+    comp_lines = "\n".join(f"  ✅ {v}" for v in list(components.values())[:5])
+    warn_lines = "\n".join(f"  ⚠️ {w}" for w in warnings[:2])
+
+    msg = (
+        f"🚨 <b>SEÑAL IA — STRONG+CLEAR</b>\n\n"
+        f"{emoji} <b>{ticker}</b> | {dir_lbl} | {timeframe}{htf_line}\n"
+        f"💯 Confluencia: {score:.0f}/100 ({confidence})\n"
+        f"⭐ Calidad: {quality_score:.0f}/100\n\n"
+        f"📍 Entrada:  <code>{entry:,.4f}</code>\n"
+        f"🛡️ SL:       <code>{sl:,.4f}</code>\n"
+        f"🎯 TP1:      <code>{tp1:,.4f}</code>\n"
+        f"🏆 TP2:      <code>{tp2:,.4f}</code>\n"
+        f"📐 R:R: {rr:.1f}×\n"
+    )
+    if comp_lines:
+        msg += f"\n<b>Confluencias:</b>\n{comp_lines}\n"
+    if warn_lines:
+        msg += f"\n<b>Avisos:</b>\n{warn_lines}\n"
+
+    send_telegram_sync(msg)
+    plain = (msg
+             .replace("<b>", "**").replace("</b>", "**")
+             .replace("<i>", "*").replace("</i>", "*")
+             .replace("<code>", "`").replace("</code>", "`"))
+    send_discord_sync(plain)
+
+
 def notify_auto_optimized(
     bot_name: str, symbol: str, changes: dict, health_score: int, crisis_mode: bool = False
 ) -> None:

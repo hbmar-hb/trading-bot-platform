@@ -313,6 +313,10 @@ const DEFAULT = {
   dynamic_step: '',
   dynamic_max_steps: 0,
   signal_confirmation_minutes: 0,
+  ai_signal_mode: false,
+  ai_min_score: 60,
+  ai_require_clear: true,
+  ai_max_concurrent: 1,
 }
 
 function flattenBot(bot) {
@@ -346,6 +350,10 @@ function flattenBot(bot) {
     dynamic_step:         dy.step_percent ?? '',
     dynamic_max_steps:    dy.max_steps ?? 0,
     signal_confirmation_minutes: bot.signal_confirmation_minutes ?? 0,
+    ai_signal_mode:    bot.ai_signal_mode ?? false,
+    ai_min_score:      bot.ai_signal_config?.min_score      ?? 60,
+    ai_require_clear:  bot.ai_signal_config?.require_clear  ?? true,
+    ai_max_concurrent: bot.ai_signal_config?.max_concurrent ?? 1,
   }
 }
 
@@ -381,6 +389,12 @@ function buildPayload(f) {
   }
   
   payload.signal_confirmation_minutes = parseInt(f.signal_confirmation_minutes) || 0
+  payload.ai_signal_mode   = f.ai_signal_mode
+  payload.ai_signal_config = {
+    min_score:      parseInt(f.ai_min_score)      || 60,
+    require_clear:  f.ai_require_clear,
+    max_concurrent: parseInt(f.ai_max_concurrent) || 1,
+  }
 
   // Agregar solo el tipo de cuenta correspondiente
   if (f.account_type === 'paper') {
@@ -808,6 +822,73 @@ export default function BotEditPage() {
                 </ol>
               </div>
             )}
+
+            {/* ── AI Signal Mode ── */}
+            <div className="border-t border-slate-200 dark:border-gray-700 pt-4 mt-2 space-y-4">
+              <div>
+                <p className="text-sm font-semibold text-slate-700 dark:text-gray-200 mb-0.5">Modo señal IA</p>
+                <p className="text-xs text-slate-500 dark:text-gray-400 mb-3">
+                  Cuando está activo, el scanner ICT+SMC puede disparar órdenes reales en este bot
+                  automáticamente. Solo señales con calidad <strong>STRONG + CLEAR</strong> superan el filtro.
+                </p>
+                <Toggle
+                  label="Activar modo señal IA"
+                  checked={form.ai_signal_mode}
+                  onChange={v => set('ai_signal_mode', v)}
+                />
+              </div>
+
+              {form.ai_signal_mode && (
+                <div className="rounded-xl border border-violet-500/30 bg-violet-500/5 px-4 py-4 space-y-4">
+                  <p className="text-xs font-semibold text-violet-400 uppercase tracking-wide">Filtros de activación</p>
+
+                  <Field
+                    label="Score mínimo"
+                    hint="Confluencia mínima requerida (0–100). Por defecto 60."
+                  >
+                    <div className="flex items-center gap-3">
+                      <input
+                        type="number" min="0" max="100" step="5"
+                        value={form.ai_min_score}
+                        onChange={e => set('ai_min_score', e.target.value)}
+                        className="input w-24"
+                        placeholder="60"
+                      />
+                      <span className="text-sm text-slate-500 dark:text-gray-400">/ 100</span>
+                    </div>
+                  </Field>
+
+                  <Field
+                    label="Máximo de posiciones IA simultáneas"
+                    hint="El bot no abre una nueva posición IA si ya tiene este número abierto."
+                  >
+                    <input
+                      type="number" min="1" max="5" step="1"
+                      value={form.ai_max_concurrent}
+                      onChange={e => set('ai_max_concurrent', e.target.value)}
+                      className="input w-24"
+                      placeholder="1"
+                    />
+                  </Field>
+
+                  <Toggle
+                    label="Requerir estado anti-fake CLEAR (recomendado)"
+                    checked={form.ai_require_clear}
+                    onChange={v => set('ai_require_clear', v)}
+                  />
+
+                  <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+                    <p className="font-medium">El bot recibirá órdenes automáticas cuando:</p>
+                    <ul className="list-disc list-inside space-y-0.5 text-amber-600 dark:text-amber-400/80">
+                      <li>Score ≥ {form.ai_min_score}</li>
+                      <li>Calidad heurística: STRONG</li>
+                      {form.ai_require_clear && <li>Anti-fake: CLEAR (sin red flags)</li>}
+                      <li>Posiciones IA abiertas &lt; {form.ai_max_concurrent}</li>
+                    </ul>
+                  </div>
+                </div>
+              )}
+            </div>
           </>
         )}
 
