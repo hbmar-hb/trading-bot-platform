@@ -26,4 +26,10 @@ export const aiService = {
   // Per-ticker stats and live ICT analysis (no DB write)
   statsByTicker: ()                  => api.get('/ai/signals/stats/by-ticker'),
   ictAnalysis:   (symbol, tf)        => api.get('/ai/ict-analysis', { params: { symbol, timeframe: tf } }),
+
+  // Dashboard / engine control / shadow mode
+  dashboard:       ()                => api.get('/ai/dashboard'),
+  circuitBreaker:  ()                => api.get('/ai/circuit-breaker'),
+  shadowMode:      ()                => api.get('/ai/shadow-mode'),
+  engineControl:   (days = 7)        => api.get('/ai/engine-control', { params: { days } }),
 }

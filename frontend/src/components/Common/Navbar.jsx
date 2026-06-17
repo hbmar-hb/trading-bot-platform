@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  Activity, BarChart3, Bot, Brain, CandlestickChart, FileText, Gauge, History, KeyRound,
+  Activity, BarChart3, Bot, Brain, CandlestickChart, Dices, FileText, Gauge, History, KeyRound,
   LogOut, Menu, MessageSquare, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users, Zap,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
@@ -17,6 +17,7 @@ const links = [
   { to: '/chart',              icon: CandlestickChart, label: 'Chart'  },
   { to: '/ai',                 icon: Brain,        label: 'IA Engine'  },
   { to: '/analytics',          icon: BarChart3,    label: 'Analytics'  },
+  { to: '/monte-carlo',        icon: Dices,        label: 'Monte Carlo' },
   { to: '/exchange-accounts',  icon: KeyRound,     label: 'Exchanges'  },
   { to: '/exchange-trades',    icon: History,      label: 'Historial'  },
   { to: '/manual-trading',     icon: MousePointerClick, label: 'Manual'  },

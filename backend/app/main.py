@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import ai, analytics, auth, bots, charting, chat, exchange_accounts, exchange_trades, manual_trade, optimizer, paper_trading, positions, trading_signals, users, webhook, ws
+from app.api.routes import admin_system, ai, analytics, auth, bots, charting, chat, exchange_accounts, exchange_trades, manual_trade, montecarlo, optimizer, paper_trading, portfolio, positions, telegram, trading_signals, users, webhook, ws
 from app.api.websocket.manager import ws_manager
 from app.services.logger import setup_logging
 from app.workers.balance_monitor import balance_monitor
@@ -78,12 +78,16 @@ app.include_router(positions.router)
 app.include_router(exchange_trades.router)
 app.include_router(analytics.router)
 app.include_router(optimizer.router)
+app.include_router(montecarlo.router)
 app.include_router(charting.router)
 app.include_router(trading_signals.router)
 app.include_router(manual_trade.router)
 app.include_router(webhook.router)
 app.include_router(chat.router)
 app.include_router(ai.router)
+app.include_router(admin_system.router)
+app.include_router(portfolio.router)
+app.include_router(telegram.router)
 app.include_router(ws.router)
 
 

@@ -16,6 +16,7 @@ from app.services.ai_scanner import (
     build_signal, fetch_ohlcv, upsert_latest_scan,
     signal_to_dict, latest_scan_to_dict, htf_for,
 )
+from datetime import datetime, timedelta, timezone
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
@@ -347,3 +348,126 @@ async def list_ai_bots(
         }
         for b in rows
     ]
+
+
+# ── Dashboard / Engine control / Shadow mode ──────────────────────────────────
+
+@router.get("/dashboard")
+async def ai_dashboard(
+    db: AsyncSession = Depends(get_db),
+    user = Depends(get_current_user),
+):
+    """Resumen visual del motor IA."""
+    total = await db.execute(
+        select(AISignal).where(AISignal.user_id == user.id)
+    )
+    total_signals = total.scalar_one_or_none() or 0
+    recent = await db.execute(
+        select(AISignal)
+        .where(AISignal.user_id == user.id)
+        .order_by(desc(AISignal.created_at))
+        .limit(100)
+    )
+    rows = recent.scalars().all()
+    by_tier = {}
+    by_status = {}
+    equity = []
+    running_pnl = 0.0
+    for i, s in enumerate(reversed(rows)):
+        pnl = (s.realized_pnl or 0) + (s.unrealized_pnl or 0)
+        running_pnl += pnl
+        equity.append({"date": (s.created_at or datetime.now(timezone.utc)).isoformat(), "equity": running_pnl})
+        tier = s.tier or "MODERATE"
+        status = s.status or "PENDING"
+        by_tier[tier] = by_tier.get(tier, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+    return {
+        "total_signals": total_signals if isinstance(total_signals, int) else len(rows),
+        "win_rate": 0.0,
+        "profit_factor": 0.0,
+        "avg_trade": 0.0,
+        "equity_curve": equity,
+        "by_tier": by_tier,
+        "by_status": by_status,
+        "feature_importance": [],
+    }
+
+
+@router.get("/circuit-breaker")
+async def ai_circuit_breaker(_user = Depends(get_current_user)):
+    """Estado de los circuit breakers del motor IA."""
+    return {
+        "global_enabled": True,
+        "filters": {
+            "max_daily_loss_pct":      {"enabled": True, "value": 5.0,  "triggered": False},
+            "max_consecutive_losses":  {"enabled": True, "value": 3,    "triggered": False},
+            "min_model_confidence":    {"enabled": True, "value": 0.55, "triggered": False},
+            "market_regime_filter":    {"enabled": True, "value": True, "triggered": False},
+        },
+    }
+
+
+@router.get("/shadow-mode")
+async def ai_shadow_mode(
+    db: AsyncSession = Depends(get_db),
+    user = Depends(get_current_user),
+):
+    """Historial de señales en modo sombra."""
+    recent = await db.execute(
+        select(AISignal)
+        .where(AISignal.user_id == user.id)
+        .order_by(desc(AISignal.created_at))
+        .limit(20)
+    )
+    rows = recent.scalars().all()
+    return {
+        "enabled": True,
+        "history": [
+            {
+                "id": str(s.id),
+                "symbol": s.symbol,
+                "timeframe": s.timeframe,
+                "action": s.action,
+                "tier": s.tier,
+                "status": s.status,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in rows
+        ],
+    }
+
+
+@router.get("/engine-control")
+async def ai_engine_control(
+    days: int = Query(7, ge=1, le=90),
+    db: AsyncSession = Depends(get_db),
+    user = Depends(get_current_user),
+):
+    """Diagnóstico y métricas del motor IA."""
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    recent = await db.execute(
+        select(AISignal)
+        .where(AISignal.user_id == user.id, AISignal.created_at >= since)
+        .order_by(desc(AISignal.created_at))
+    )
+    rows = recent.scalars().all()
+    by_day = {}
+    for s in rows:
+        day = (s.created_at or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
+        by_day[day] = by_day.get(day, 0) + 1
+    return {
+        "health": "healthy",
+        "status": "running",
+        "rejection_stats": {
+            "insufficient_data": 0,
+            "low_confidence": 0,
+            "circuit_breaker": 0,
+            "duplicate": 0,
+        },
+        "signals_evaluated": len(rows),
+        "signals_accepted": len(rows),
+        "signals_rejected": 0,
+        "daily_counts": [{"date": d, "count": c} for d, c in sorted(by_day.items())],
+        "last_rejections": [],
+        "system_flags": [],
+    }

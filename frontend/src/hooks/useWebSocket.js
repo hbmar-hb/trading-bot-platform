@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
-import { BASE_URL } from '@/services/api'
+import { authService } from '@/services/auth'
+import useAuthStore  from '@/store/authStore'
 import useBalanceStore  from '@/store/balanceStore'
 import usePositionStore from '@/store/positionStore'
 import useUiStore       from '@/store/uiStore'
@@ -12,7 +13,9 @@ const RECONNECT_DELAY = 3000
 export function useWebSocket() {
   const ws      = useRef(null)
   const timer   = useRef(null)
-  const token   = localStorage.getItem('access_token')
+  const token   = useAuthStore(s => s.token)
+  const setToken = useAuthStore(s => s.setToken)
+  const logout   = useAuthStore(s => s.logout)
 
   const { updatePrice, updatePosition } = usePositionStore()
   const { updateBalance }               = useBalanceStore()
@@ -27,8 +30,33 @@ export function useWebSocket() {
     }
   }, [token])
 
+  async function refreshAndReconnect() {
+    const refreshToken = localStorage.getItem('refresh_token')
+    if (!refreshToken) {
+      logout()
+      return
+    }
+    try {
+      const { data } = await authService.refresh({ refresh_token: refreshToken })
+      if (data.access_token) {
+        setToken(data.access_token)
+        if (data.refresh_token) {
+          localStorage.setItem('refresh_token', data.refresh_token)
+        }
+        connect()
+        return
+      }
+    } catch {
+      // refresh fallido -> logout
+    }
+    logout()
+  }
+
   function connect() {
-    const socket = new WebSocket(`${WS_URL}/ws?token=${token}`)
+    const currentToken = useAuthStore.getState().token
+    if (!currentToken) return
+
+    const socket = new WebSocket(`${WS_URL}/ws?token=${currentToken}`)
     ws.current = socket
 
     socket.onopen = () => {
@@ -42,7 +70,14 @@ export function useWebSocket() {
       } catch { /* ignore malformed */ }
     }
 
-    socket.onclose = () => {
+    socket.onclose = (event) => {
+      // 1008 = policy violation (token inválido/expirado) en el backend.
+      // Algunos proxies reportan 403 antes del handshake; en el navegador
+      // el close code puede ser 1006. Intentamos refresh una sola vez.
+      if (event.code === 1008 || event.code === 1006) {
+        refreshAndReconnect()
+        return
+      }
       timer.current = setTimeout(connect, RECONNECT_DELAY)
     }
 

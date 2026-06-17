@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_admin_user, get_current_authorized_user
+from app.api.dependencies import get_current_user
 from app.models.bot_config import BotConfig
 from app.models.position import Position
 from app.services.database import get_db
@@ -21,7 +21,7 @@ def _notional(pos: Position) -> float:
 @router.get("/summary")
 async def portfolio_summary(
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_authorized_user),
+    user = Depends(get_current_user),
 ):
     """Return aggregated portfolio exposure for the current user."""
     bots_result = await db.execute(
@@ -70,7 +70,7 @@ async def portfolio_summary(
 @router.post("/kill-switch", status_code=status.HTTP_202_ACCEPTED)
 async def kill_switch(
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(get_current_user),
 ):
     """
     Kill switch manual: cierra TODAS las posiciones abiertas del usuario

@@ -16,6 +16,7 @@ import BotOptimizerPage   from '@/pages/BotOptimizerPage'
 import EffectivenessDashboardPage from '@/pages/EffectivenessDashboardPage'
 import OptimizerDBPage from '@/pages/OptimizerDBPage'
 import AdminSystemPage from '@/pages/AdminSystemPage'
+import MonteCarloPage from '@/pages/MonteCarloPage'
 import PositionsPage       from '@/pages/PositionsPage'
 import AnalyticsPage       from '@/pages/AnalyticsPage'
 import ChartPage           from '@/pages/ChartPage'
@@ -57,6 +58,7 @@ export default function AppRoutes() {
         <Route path="/bots/:botId/effectiveness"   element={guard(EffectivenessDashboardPage)} />
         <Route path="/optimizer-db"                 element={guard(OptimizerDBPage)} />
         <Route path="/admin-system"                 element={guard(AdminSystemPage)} />
+        <Route path="/monte-carlo"                  element={guard(MonteCarloPage)} />
         <Route path="/positions"                    element={guard(PositionsPage)} />
         <Route path="/analytics"                    element={guard(AnalyticsPage)} />
         <Route path="/chart"                        element={guard(ChartPage)} />
