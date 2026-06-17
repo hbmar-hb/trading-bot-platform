@@ -14,15 +14,32 @@ class Settings(BaseSettings):
     database_url_sync: str      # sync   (psycopg2)  — Celery / Alembic
 
     # ─── Redis ─────────────────────────────────────────────
-    redis_url: str = "redis://redis:6379/0"             # cache general
-    celery_broker_url: str = "redis://redis:6379/1"     # broker Celery
-    celery_result_backend: str = "redis://redis:6379/2" # resultados Celery
+    redis_host: str = "redis"
+    redis_port: int = 6379
+    redis_password: str | None = None
+
+    @property
+    def redis_url(self) -> str:
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/0"
+
+    @property
+    def celery_broker_url(self) -> str:
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/1"
+
+    @property
+    def celery_result_backend(self) -> str:
+        auth = f":{self.redis_password}@" if self.redis_password else ""
+        return f"redis://{auth}{self.redis_host}:{self.redis_port}/2"
 
     # ─── Auth (JWT) ─────────────────────────────────────────
     jwt_secret_key: str
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+    jwt_issuer: str = "trading-bot-api"
+    jwt_audience: str = "trading-bot-frontend"
 
     # ─── Encriptación API keys en DB ────────────────────────
     # Generar: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
@@ -33,10 +50,30 @@ class Settings(BaseSettings):
     bitunix_base_url: str = "https://fapi.bitunix.com"
 
     # ─── Notificaciones ─────────────────────────────────────
+    # Legacy token: se mantiene como fallback para compatibilidad.
     telegram_bot_token: str = ""
+    # Token del bot que envía notificaciones de IA y trades reales.
+    telegram_trading_bot_token: str = ""
+    # Token del bot que envía notificaciones de bots solo alertas (Telegram-only).
+    telegram_quantum_bot_token: str = ""
     telegram_chat_id: str = ""
+    # Username del bot de Telegram (sin @) usado para generar enlaces de vinculación.
+    telegram_bot_username: str = ""
+    # Grupo/topic de Telegram donde el bot QUANTUM envía las señales recibidas por webhook.
+    telegram_quantum_group_chat_id: str = ""
+    telegram_quantum_thread_id: int = 0
     discord_webhook_url: str = ""
     giphy_api_key: str = ""
+    # "essential" = solo trades, circuit breaker, kill switch  |  "verbose" = todo
+    telegram_notify_level: str = "essential"
+
+    @property
+    def trading_bot_token(self) -> str:
+        return self.telegram_trading_bot_token or self.telegram_bot_token
+
+    @property
+    def quantum_bot_token(self) -> str:
+        return self.telegram_quantum_bot_token or self.telegram_bot_token
 
     # ─── TradingView ────────────────────────────────────────
     # IPs oficiales separadas por coma en .env
@@ -57,6 +94,22 @@ class Settings(BaseSettings):
 
     # ─── Registro de usuarios ───────────────────────────────
     allow_registration: bool = False
+
+    # ─── LLM / Moonshot AI (Kimi) ───────────────────────────
+    # Compatible OpenAI API. Get key: https://platform.moonshot.cn/
+    openrouter_api_key: str = ""
+    openrouter_base_url: str = "https://api.moonshot.ai/v1"
+    llm_default_model: str = "moonshot-v1-8k"
+    llm_fallback_model: str = "moonshot-v1-8k"
+    llm_timeout_seconds: int = 30
+    llm_max_tokens: int = 500
+    llm_enabled: bool = True
+
+    # ─── AI Engine ───────────────────────────────────────────
+    # Master switch for autonomous AI calibration tasks.
+    # Set to false to freeze ai_optimal_config_task, rejection_feedback_task
+    # and activator_calibration_task while keeping signal generation running.
+    ai_auto_calibration_enabled: bool = True
 
     model_config = {
         "env_file": ".env",
