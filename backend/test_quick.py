@@ -1,0 +1,21 @@
+from jose import jwt
+import uuid
+from datetime import datetime, timezone, timedelta
+import requests
+
+payload = {
+    "sub": "f5a80663-7c05-494d-af46-6fd4bb17976a",
+    "exp": datetime.now(timezone.utc) + timedelta(hours=1),
+    "iat": datetime.now(timezone.utc),
+    "type": "access",
+    "iss": "trading-bot-api",
+    "aud": "trading-bot-frontend",
+    "jti": str(uuid.uuid4()),
+}
+token = jwt.encode(payload, "dc381283e6660d90579e2faf58f891bac97f65f78e5d29809cc1f6220a9f15d4", algorithm="HS256")
+resp = requests.get("http://localhost:8000/ai/real-performance", headers={"Authorization": f"Bearer {token}"}, timeout=10)
+print(f"Status: {resp.status_code}")
+if resp.status_code == 200:
+    data = resp.json()
+    print(f"Trades: {data['summary']['total_trades']} | WR: {data['summary']['win_rate']}% | PnL: {data['summary']['total_pnl']}")
+    print(f"Open positions: {len(data['open_positions'])}")

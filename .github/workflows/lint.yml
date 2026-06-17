@@ -1,0 +1,57 @@
+name: Python Lint & Safety Check
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  pylint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pylint
+        run: pip install pylint==3.2.7
+
+      - name: Run pylint (used-before-assignment + undefined-variable)
+        run: |
+          # Only check backend Python files, excluding migrations and tests
+          FILES=$(find backend/app -name "*.py" ! -path "*/migrations/*" ! -path "*/tests/*" | sort)
+          if [ -z "$FILES" ]; then
+            echo "No Python files to lint"
+            exit 0
+          fi
+          # E0601 = used-before-assignment (UnboundLocalError)
+          # E0602 = undefined-variable (NameError)
+          # We fail the build if ANY of these are found
+          pylint \
+            --disable=all \
+            --enable=E0601,E0602 \
+            --output-format=text \
+            --max-line-length=200 \
+            --ignore-patterns=".*test.*,.*migration.*" \
+            $FILES
+        shell: bash
+
+  custom-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Run custom project validators
+        run: python backend/scripts/validate_project.py
+        shell: bash

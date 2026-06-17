@@ -45,3 +45,12 @@ logs/
 # Migration scripts (claves SSH, backups sensibles)
 migration-scripts/*.sql
 migration-scripts/hetzner_deploy_key
+
+# Backups locales y archivos temporales
+backups/
+*.bak
+*.dump
+backup_*.sql
+backup_*.gz
+.git.corrupt/
+*.pkl

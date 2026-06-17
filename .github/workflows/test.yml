@@ -1,0 +1,87 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master, develop]
+  pull_request:
+    branches: [main, master, develop]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: admin
+          POSTGRES_PASSWORD: admin
+          POSTGRES_DB: tradingbot
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('backend/requirements.txt', 'backend/requirements-dev.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run unit tests
+        working-directory: backend
+        env:
+          ENV: test
+          DEBUG: "false"
+          DATABASE_URL: postgresql+asyncpg://admin:admin@localhost:5432/tradingbot
+          DATABASE_URL_SYNC: postgresql+psycopg2://admin:admin@localhost:5432/tradingbot
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          JWT_SECRET_KEY: test-secret-key-not-for-production
+          ENCRYPTION_KEY: test-encryption-key-not-for-production
+        run: |
+          pytest -v -m "not integration"
+
+      - name: Run integration tests
+        working-directory: backend
+        env:
+          ENV: test
+          DEBUG: "false"
+          DATABASE_URL: postgresql+asyncpg://admin:admin@localhost:5432/tradingbot
+          DATABASE_URL_SYNC: postgresql+psycopg2://admin:admin@localhost:5432/tradingbot
+          REDIS_HOST: localhost
+          REDIS_PORT: "6379"
+          JWT_SECRET_KEY: test-secret-key-not-for-production
+          ENCRYPTION_KEY: test-encryption-key-not-for-production
+        run: |
+          pytest -v -m integration

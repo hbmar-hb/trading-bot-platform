@@ -1,0 +1,12 @@
+{
+  "method": "platt",
+  "samples": 4588,
+  "base_rate": 0.13731473408892764,
+  "mean_raw_prob": 0.28392545463466157,
+  "mean_calibrated": 0.13731547589293772,
+  "brier_score_raw": 0.1534,
+  "brier_score_calibrated": 0.1105,
+  "logloss_raw": 0.4766,
+  "logloss_calibrated": 0.3717,
+  "improvement_brier": 0.0429
+}

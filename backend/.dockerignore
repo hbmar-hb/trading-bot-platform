@@ -1,0 +1,38 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Tests y scripts locales (no necesarios en producción)
+test_*.py
+*_test.py
+tests/
+scripts/*
+!scripts/train_candidate_model.py
+!scripts/recalculate_smc_macro_context.py
+!scripts/backfill_candidate_shadow.py
+!scripts/monitor_shadow_mode.py
+
+# Fix scripts locales
+fix_*.py
+
+# Archivos de desarrollo
+*.log
+*.csv
+*.xlsx
+.DS_Store
+
+# Secrets y configuración sensible
+.env*
+*.pem
+*.key
+id_rsa
+.git/

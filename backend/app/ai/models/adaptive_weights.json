@@ -1,0 +1,218 @@
+{
+  "global": {
+    "structure_CHoCH": 19.7,
+    "structure_BOS": 11.7,
+    "trigger_OB": 15.1,
+    "trigger_FVG": 9.7,
+    "fvg_context": 11.9,
+    "sweep": 17.7,
+    "pd_array": 9.7,
+    "killzone": 10.1,
+    "eq_obstacle": 7.7
+  },
+  "by_ticker": {
+    "1000PEPEUSDT": {
+      "15m": {
+        "structure_CHoCH": 20.3,
+        "structure_BOS": 11.7,
+        "trigger_OB": 15.3,
+        "trigger_FVG": 9.7,
+        "fvg_context": 11.8,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.8
+      }
+    },
+    "ETHUSDT": {
+      "15m": {
+        "structure_CHoCH": 20.2,
+        "structure_BOS": 11.8,
+        "trigger_OB": 15.2,
+        "trigger_FVG": 9.8,
+        "fvg_context": 11.8,
+        "sweep": 17.8,
+        "pd_array": 9.8,
+        "killzone": 10.2,
+        "eq_obstacle": 8.2
+      },
+      "2h": {
+        "structure_CHoCH": 20.3,
+        "structure_BOS": 11.7,
+        "trigger_OB": 14.7,
+        "trigger_FVG": 10.3,
+        "fvg_context": 11.7,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 10.1,
+        "eq_obstacle": 7.7
+      },
+      "1h": {
+        "structure_CHoCH": 20.2,
+        "structure_BOS": 11.8,
+        "trigger_OB": 15.1,
+        "trigger_FVG": 9.8,
+        "fvg_context": 11.8,
+        "sweep": 17.8,
+        "pd_array": 9.8,
+        "killzone": 9.8,
+        "eq_obstacle": 7.8
+      }
+    },
+    "BTCUSDT": {
+      "5m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.2,
+        "trigger_OB": 15.1,
+        "trigger_FVG": 9.7,
+        "fvg_context": 12.1,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 10.0,
+        "eq_obstacle": 7.8
+      },
+      "15m": {
+        "structure_CHoCH": 19.8,
+        "structure_BOS": 12.2,
+        "trigger_OB": 15.1,
+        "trigger_FVG": 9.8,
+        "fvg_context": 12.2,
+        "sweep": 17.8,
+        "pd_array": 10.0,
+        "killzone": 10.0,
+        "eq_obstacle": 8.2
+      }
+    },
+    "BCHUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 11.8,
+        "trigger_OB": 15.1,
+        "trigger_FVG": 9.7,
+        "fvg_context": 12.1,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 10.0,
+        "eq_obstacle": 7.7
+      }
+    },
+    "XRPUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.9,
+        "structure_BOS": 11.7,
+        "trigger_OB": 15.1,
+        "trigger_FVG": 9.7,
+        "fvg_context": 12.3,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.7
+      }
+    },
+    "BNBUSDT": {
+      "1h": {
+        "structure_CHoCH": 19.9,
+        "structure_BOS": 12.1,
+        "trigger_OB": 14.9,
+        "trigger_FVG": 9.7,
+        "fvg_context": 12.1,
+        "sweep": 17.7,
+        "pd_array": 9.9,
+        "killzone": 10.1,
+        "eq_obstacle": 7.7
+      }
+    },
+    "SOLUSDT": {
+      "1h": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.3,
+        "trigger_OB": 14.7,
+        "trigger_FVG": 10.3,
+        "fvg_context": 12.3,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 10.3,
+        "eq_obstacle": 8.3
+      }
+    },
+    "PENGUUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.1,
+        "trigger_OB": 15.0,
+        "trigger_FVG": 10.0,
+        "fvg_context": 12.3,
+        "sweep": 18.1,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.7
+      }
+    },
+    "DOGEUSDT": {
+      "15m": {
+        "structure_CHoCH": 20.3,
+        "structure_BOS": 11.7,
+        "trigger_OB": 15.0,
+        "trigger_FVG": 10.3,
+        "fvg_context": 12.1,
+        "sweep": 18.2,
+        "pd_array": 9.7,
+        "killzone": 10.1,
+        "eq_obstacle": 7.8
+      }
+    },
+    "AAVEUSDT": {
+      "1h": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.3,
+        "trigger_OB": 14.7,
+        "trigger_FVG": 10.3,
+        "fvg_context": 12.3,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.9
+      }
+    },
+    "FARTCOINUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.3,
+        "trigger_OB": 14.7,
+        "trigger_FVG": 10.3,
+        "fvg_context": 12.3,
+        "sweep": 18.1,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.8
+      }
+    },
+    "ARBUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.3,
+        "trigger_OB": 14.9,
+        "trigger_FVG": 10.3,
+        "fvg_context": 12.0,
+        "sweep": 17.7,
+        "pd_array": 9.7,
+        "killzone": 9.7,
+        "eq_obstacle": 7.7
+      }
+    },
+    "ONDOUSDT": {
+      "15m": {
+        "structure_CHoCH": 19.7,
+        "structure_BOS": 12.0,
+        "trigger_OB": 15.0,
+        "trigger_FVG": 9.9,
+        "fvg_context": 11.7,
+        "sweep": 18.3,
+        "pd_array": 9.8,
+        "killzone": 10.3,
+        "eq_obstacle": 7.7
+      }
+    }
+  },
+  "generated_at": "2026-05-26T14:04:03.057715+00:00"
+}
