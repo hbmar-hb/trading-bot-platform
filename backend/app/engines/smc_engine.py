@@ -27,6 +27,7 @@ class SMCContext:
     pd_range:        float            # size of the reference range in price units
     fvg_aligned_count: int            # unfilled FVGs aligned with bias
     ob_distance_atr:   Optional[float]  # distance from price to active OB midpoint in ATR
+    trading_range:     tuple[float, float] | None  # (low, high) of last impulse
 
 
 def analyze_smc(candles: list[dict], ict_result: ICTResult) -> SMCContext:
@@ -62,12 +63,34 @@ def analyze_smc(candles: list[dict], ict_result: ICTResult) -> SMCContext:
                 sweep_level = level
                 break
 
-    # ── 2. Premium / Discount ─────────────────────────────────────────────────
-    lookback = min(20, len(df))
-    hi  = df["high"].iloc[-lookback:].max()
-    lo  = df["low"].iloc[-lookback:].min()
-    rng = hi - lo
-    pd_pos = float((last["close"] - lo) / rng) if rng > 0 else 0.5
+    # ── 2. Premium / Discount — Trading Range of last impulse ────────────────
+    # SMC defines Premium/Discount as Fibonacci 0-100% of the LAST VALID IMPULSE.
+    #   Bull impulse: from last swing low (HL) to last swing high (HH)
+    #   Bear impulse: from last swing high (LH) to last swing low (LL)
+    # Fallback to recent 10-candle range if swing points are unavailable.
+    tr_low: float | None = None
+    tr_high: float | None = None
+    tr_source = "swing"
+
+    if ict_result.last_swing_high and ict_result.last_swing_low:
+        tr_high = ict_result.last_swing_high.price
+        tr_low  = ict_result.last_swing_low.price
+        # Ensure low < high regardless of market direction
+        if tr_low > tr_high:
+            tr_low, tr_high = tr_high, tr_low
+    else:
+        lookback = min(10, len(df))
+        tr_high = float(df["high"].iloc[-lookback:].max())
+        tr_low  = float(df["low"].iloc[-lookback:].min())
+        tr_source = "fallback_10candles"
+
+    rng = tr_high - tr_low if tr_high and tr_low else 0.0
+    if rng > 0:
+        pd_pos = float((last["close"] - tr_low) / rng)
+        pd_pos = max(0.0, min(1.0, pd_pos))
+    else:
+        pd_pos = 0.5
+        rng = 0.0
 
     # ── 3. Aligned FVGs (unfilled, same direction as bias) ────────────────────
     direction_kind = "bull" if ict_result.bias == "bull" else "bear"
@@ -87,6 +110,7 @@ def analyze_smc(candles: list[dict], ict_result: ICTResult) -> SMCContext:
         pd_range          = float(rng),
         fvg_aligned_count = len(aligned_fvgs),
         ob_distance_atr   = ob_dist,
+        trading_range     = (tr_low, tr_high) if tr_low is not None and tr_high is not None else None,
     )
 
 

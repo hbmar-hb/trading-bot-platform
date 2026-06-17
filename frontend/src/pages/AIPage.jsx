@@ -1,19 +1,27 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createChart } from 'lightweight-charts'
 import {
-  BarChart2, Bot, Brain, CheckCircle2, Clock, Database, Filter,
-  Gauge, LayoutDashboard, Plus, RefreshCw, ScanLine, TrendingDown, TrendingUp,
+  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip as ReTooltip, ResponsiveContainer, Legend,
+  ComposedChart, Line,
+} from 'recharts'
+import {
+  Ban, BarChart2, Bot, Brain, CheckCircle2, ChevronDown, ChevronUp, Clock, Database, Filter, Globe,
+  Plus, RefreshCw, ScanLine, ShieldAlert, SlidersHorizontal, Sparkles, TrendingDown, TrendingUp, Trophy,
   X, XCircle, Zap,
 } from 'lucide-react'
 import { aiService }             from '@/services/aiService'
+import { botsService }             from '@/services/bots'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { cn } from '@/utils/cn'
-import AIDashboardTab    from '@/pages/AIDashboardTab'
-import AIEngineControlTab from '@/pages/AIEngineControlTab'
+const AIDashboardTab = lazy(() => import('./AIDashboardTab'))
+const AIEngineControlTab = lazy(() => import('./AIEngineControlTab'))
+import SignalDiagnosisModal from '@/components/Analytics/SignalDiagnosisModal'
+import useAuthStore from '@/store/authStore'
+import IAMissionControlTab from '@/components/IAEngine/IAMissionControlTab'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
-const TIMEFRAMES    = ['1m', '5m', '15m', '30m', '1h', '2h', '4h', '1d']
+const TIMEFRAMES    = ['auto', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d', '3d', '1w']
 const WATCHLIST_KEY  = 'ai_watchlist_v2'
 const AUTO_KEY       = 'ai_autorefresh_v1'
 const LAST_SCAN_KEY  = 'ai_last_scan_v1'
@@ -32,6 +40,7 @@ const saveLS = (k, v)  => { try { localStorage.setItem(k, JSON.stringify(v)) } c
 
 const baseOf   = (sym) => sym.replace(/USDT$|USDC$/, '').replace(/^1000/, '')
 const fmtPrice = (n)   => n == null ? '—' : n >= 1 ? n.toFixed(n >= 100 ? 2 : 4) : n.toPrecision(4)
+const fmtQty   = (n)   => n == null ? '—' : n >= 1 ? n.toFixed(2) : n.toFixed(6).replace(/\.?0+$/, '')
 
 // ── Small display components ──────────────────────────────────────────────────
 
@@ -76,12 +85,12 @@ function OutcomeBadge({ outcome }) {
 
 function ScoreMeter({ score }) {
   const pct = Math.min(100, Math.max(0, score ?? 0))
-  const cls = pct >= 75
+  const cls = pct >= 60
     ? 'text-green-600 dark:text-green-400'
-    : pct >= 55
+    : pct >= 40
       ? 'text-yellow-600 dark:text-yellow-400'
       : 'text-orange-600 dark:text-orange-400'
-  const bar = pct >= 75 ? '#16a34a' : pct >= 55 ? '#ca8a04' : '#ea580c'
+  const bar = pct >= 60 ? '#16a34a' : pct >= 40 ? '#ca8a04' : '#ea580c'
   return (
     <div className="flex items-center gap-2">
       <div className="flex-1 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
@@ -94,18 +103,20 @@ function ScoreMeter({ score }) {
   )
 }
 
-function QualityBadge({ tier, status }) {
+function QualityBadge({ tier, status, successProbability, mlStatus }) {
   const tierMap = {
     STRONG:   'bg-emerald-100 text-emerald-700 border-emerald-300 dark:bg-emerald-500/20 dark:text-emerald-400 dark:border-emerald-500/30',
     MODERATE: 'bg-yellow-100 text-yellow-700 border-yellow-300 dark:bg-yellow-500/20 dark:text-yellow-400 dark:border-yellow-500/30',
     WEAK:     'bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-500/20 dark:text-orange-400 dark:border-orange-500/30',
   }
+  const effectiveStatus = mlStatus || status || 'CLEAR'
   const statusMap = {
     CLEAR:   'text-emerald-600 dark:text-emerald-400',
     CAUTION: 'text-amber-600 dark:text-amber-400',
     BLOCK:   'text-red-600 dark:text-red-400',
   }
   const statusLabel = { CLEAR: 'CLEAR', CAUTION: '⚠ CAUTION', BLOCK: '✕ BLOCK' }
+  const hasML = successProbability != null
   return (
     <div className="flex items-center gap-1.5 flex-wrap">
       {tier && (
@@ -113,9 +124,12 @@ function QualityBadge({ tier, status }) {
           {tier}
         </span>
       )}
-      {status && (
-        <span className={cn('text-[9px] font-semibold', statusMap[status])}>
-          {statusLabel[status]}
+      {effectiveStatus && (
+        <span className={cn('text-[9px] font-semibold', statusMap[effectiveStatus])}>
+          {hasML ? 'ML ' : ''}{statusLabel[effectiveStatus]}
+          {hasML && (
+            <span className="ml-1 opacity-70">({(successProbability * 100).toFixed(0)}% success)</span>
+          )}
         </span>
       )}
     </div>
@@ -124,10 +138,13 @@ function QualityBadge({ tier, status }) {
 
 // ── Signal day row (used inside SymbolModal) ──────────────────────────────────
 
-function SignalDayRow({ sig }) {
+function SignalDayRow({ sig, onViewDiagnosis }) {
   const isLong = sig.direction === 'long'
   const time   = new Date(sig.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
   const confs  = sig.components ? Object.values(sig.components) : []
+  const showDiagnosis = sig.anti_fake_status === 'BLOCK' || sig.anti_fake_status === 'CAUTION'
+  const user = useAuthStore(s => s.user)
+  const isAdmin = user?.role === 'admin'
 
   return (
     <div className="flex items-start gap-3 bg-white dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 rounded-lg px-3 py-2 text-xs">
@@ -152,14 +169,17 @@ function SignalDayRow({ sig }) {
               {sig.quality_tier}
             </span>
           )}
-          {sig.anti_fake_status && (
+          {(sig.ml_status || sig.anti_fake_status) && (
             <span className={cn(
               'text-[9px] font-semibold shrink-0',
-              sig.anti_fake_status === 'CLEAR'   ? 'text-emerald-600 dark:text-emerald-400' :
-              sig.anti_fake_status === 'CAUTION' ? 'text-yellow-600 dark:text-yellow-400'  :
+              (sig.ml_status || sig.anti_fake_status) === 'CLEAR'   ? 'text-emerald-600 dark:text-emerald-400' :
+              (sig.ml_status || sig.anti_fake_status) === 'CAUTION' ? 'text-yellow-600 dark:text-yellow-400'  :
                                                    'text-red-600 dark:text-red-400',
             )}>
-              XGB {sig.anti_fake_status}
+              {sig.success_probability != null ? 'ML ' : 'XGB '}{(sig.ml_status || sig.anti_fake_status)}
+              {sig.success_probability != null && (
+                <span className="opacity-70"> ({(sig.success_probability * 100).toFixed(0)}%)</span>
+              )}
             </span>
           )}
         </div>
@@ -173,7 +193,16 @@ function SignalDayRow({ sig }) {
           </div>
         )}
       </div>
-      <div className="shrink-0 mt-0.5">
+      <div className="shrink-0 mt-0.5 flex items-center gap-2">
+        {showDiagnosis && onViewDiagnosis && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onViewDiagnosis(sig) }}
+            className="text-[10px] text-blue-500 hover:text-blue-400 font-medium transition-colors"
+            title={isAdmin ? "Ver diagnóstico IA" : "Ver contexto del par"}
+          >
+            {isAdmin ? 'IA' : 'Ctx'}
+          </button>
+        )}
         {sig.pnl_pct != null ? (
           <span className={cn('font-bold text-xs', sig.pnl_pct >= 0 ? 'text-green-400' : 'text-red-400')}>
             {sig.pnl_pct >= 0 ? '+' : ''}{sig.pnl_pct.toFixed(2)}%
@@ -186,12 +215,1083 @@ function SignalDayRow({ sig }) {
   )
 }
 
+// ── Symbol recommendation (AI config advice + Apply) ──────────────────────────
+
+function SymbolRecommendation({ symbol, timeframe, aiBots }) {
+  const [rec, setRec] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [applying, setApplying] = useState(false)
+  const [toast, setToast] = useState(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    aiService.optimalConfig(symbol, timeframe)
+      .then(r => {
+        if (cancelled) return
+        setRec(r.data ?? null)
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [symbol, timeframe])
+
+  const bot = useMemo(() => {
+    // Normalize symbol "XRPUSDT" → match bot.symbol "XRP/USDT:USDT"
+    const normalized = symbol.replace(/\/([^:]+):[^:]+$/, '$1').replace('/', '')
+    return aiBots.find(b => {
+      const botNorm = b.symbol.replace(/\/([^:]+):[^:]+$/, '$1').replace('/', '')
+      return botNorm === normalized
+    })
+  }, [aiBots, symbol])
+
+  const handleApply = async () => {
+    if (!bot || !rec?.config) return
+    setApplying(true)
+    try {
+      const cfg = rec.config
+      const payload = {
+        ai_signal_config: {
+          min_score: cfg.min_score,
+          max_concurrent: cfg.max_concurrent,
+          allowed_tiers: cfg.allowed_tiers,
+          allowed_statuses: cfg.allowed_statuses,
+          sizing_multipliers: cfg.sizing_multipliers,
+          circuit_breaker_thresholds: cfg.circuit_breaker_thresholds,
+          portfolio_limits: cfg.portfolio_limits,
+        },
+        leverage: rec.recommendations?.recommended_leverage ?? bot.leverage,
+      }
+      await botsService.update(bot.id, payload)
+      setToast({ type: 'success', msg: `Config aplicada a ${bot.bot_name}` })
+    } catch (err) {
+      setToast({ type: 'error', msg: err?.response?.data?.detail || 'Error al aplicar config' })
+    } finally {
+      setApplying(false)
+      setTimeout(() => setToast(null), 4000)
+    }
+  }
+
+  if (loading) {
+    return <div className="py-10 text-center text-sm text-slate-400">Analizando estadísticas…</div>
+  }
+
+  if (!rec) {
+    return <div className="py-10 text-center text-sm text-slate-400">Sin datos suficientes para recomendar</div>
+  }
+
+  const cfg = rec.config
+  const recs = rec.recommendations || {}
+  const sizing = cfg.sizing_multipliers || {}
+
+  return (
+    <div className="space-y-4">
+      {/* Toast */}
+      {toast && (
+        <div className={cn(
+          'px-4 py-2 rounded text-xs font-medium',
+          toast.type === 'success' ? 'bg-emerald-500/10 text-emerald-600 border border-emerald-500/20' : 'bg-red-500/10 text-red-600 border border-red-500/20'
+        )}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Rationale */}
+      <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg px-4 py-3">
+        <p className="text-xs text-blue-700 dark:text-blue-300">
+          <span className="font-semibold">🧠 Análisis:</span> {recs.rationale || 'Configuración basada en estadísticas históricas'}
+        </p>
+      </div>
+
+      {/* Cards grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* Capital suggestion */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">% Capital sugerido</h4>
+          <div className="space-y-1.5 text-xs">
+            {['STRONG','MODERATE','WEAK'].map(tier => {
+              const val = Math.round((sizing[tier] ?? 0) * 100)
+              return (
+                <div key={tier} className="flex justify-between items-center">
+                  <span className="text-slate-600 dark:text-slate-300">{tier}</span>
+                  <span className={cn('font-bold', val >= 80 ? 'text-emerald-500' : val >= 40 ? 'text-yellow-500' : 'text-red-500')}>
+                    {val}%
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Leverage */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">Apalancamiento sugerido</h4>
+          <div className="flex items-center gap-2">
+            <span className="text-2xl font-bold text-slate-800 dark:text-white">{recs.recommended_leverage ?? '—'}x</span>
+            {recs.recommended_leverage && (
+              <span className={cn(
+                'text-[10px] px-1.5 py-0.5 rounded font-bold',
+                recs.recommended_leverage >= 7 ? 'bg-red-500/10 text-red-600' :
+                recs.recommended_leverage >= 5 ? 'bg-yellow-500/10 text-yellow-600' :
+                'bg-emerald-500/10 text-emerald-600'
+              )}>
+                {recs.recommended_leverage >= 7 ? 'ALTO' : recs.recommended_leverage >= 5 ? 'MEDIO' : 'CONSERVADOR'}
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1">Basado en volatilidad (ATR) del par</p>
+        </div>
+
+        {/* Timeframe */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">Timeframe óptimo</h4>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-bold text-slate-800 dark:text-white">{recs.recommended_timeframe ?? timeframe}</span>
+            {recs.recommended_timeframe && recs.recommended_timeframe !== timeframe && (
+              <span className="text-[10px] bg-yellow-500/10 text-yellow-600 px-1.5 py-0.5 rounded font-bold">
+                Cambiar desde {timeframe}
+              </span>
+            )}
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1">Mayor ratio WR × volumen de señales</p>
+        </div>
+
+        {/* HTF */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">HTF sugerido</h4>
+          <div className="flex items-center gap-2">
+            <span className="text-lg font-bold text-slate-800 dark:text-white">{recs.recommended_htf ?? '—'}</span>
+          </div>
+          <p className="text-[10px] text-slate-400 mt-1">Confirmación de sesgo en timeframe superior</p>
+        </div>
+
+        {/* Score */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">Score mínimo sugerido</h4>
+          <span className="text-lg font-bold text-slate-800 dark:text-white">{cfg.min_score}</span>
+          <p className="text-[10px] text-slate-400 mt-1">Umbral que maximiza win rate histórico</p>
+        </div>
+
+        {/* Tiers / Status */}
+        <div className="card p-3">
+          <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wide mb-2">Tiers / Status recomendados</h4>
+          <div className="flex flex-wrap gap-1 mt-1">
+            {(cfg.allowed_tiers || []).map(t => (
+              <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 font-medium">{t}</span>
+            ))}
+            {(cfg.allowed_statuses || []).map(s => (
+              <span key={s} className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-600 font-medium">{s}</span>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Apply section */}
+      <div className="border-t border-slate-200 dark:border-slate-700 pt-3">
+        {bot ? (
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              Bot detectado: <strong className="text-slate-700 dark:text-slate-200">{bot.bot_name}</strong>
+            </div>
+            <button
+              onClick={handleApply}
+              disabled={applying}
+              className={cn(
+                'flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors',
+                applying
+                  ? 'bg-slate-200 text-slate-400 cursor-not-allowed'
+                  : 'bg-violet-600 text-white hover:bg-violet-700'
+              )}
+            >
+              <Sparkles size={14} />
+              {applying ? 'Aplicando…' : 'Apply to Bot'}
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-xs text-slate-500 dark:text-slate-400">
+              No hay bot IA configurado para {symbol}. Crea uno primero para aplicar esta config.
+            </div>
+            <a
+              href="/bots/new"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-200 text-slate-700 hover:bg-slate-300 transition-colors"
+            >
+              <Plus size={14} /> Crear bot
+            </a>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Symbol rejections (detailed list + summary) ───────────────────────────────
+
+function SymbolRejections({ symbol }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [days, setDays] = useState(30)
+  const [timeframeFilter, setTimeframeFilter] = useState('')
+  const [reasonFilter, setReasonFilter] = useState('')
+  const [offset, setOffset] = useState(0)
+  const limit = 25
+
+  const load = useCallback(() => {
+    setLoading(true)
+    const params = { days, limit, offset }
+    if (timeframeFilter) params.timeframe = timeframeFilter
+    if (reasonFilter) params.reason = reasonFilter
+    aiService.symbolRejections(symbol, params)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [symbol, days, timeframeFilter, reasonFilter, offset])
+
+  useEffect(() => {
+    setOffset(0)
+  }, [symbol, days, timeframeFilter, reasonFilter])
+
+  useEffect(() => {
+    load()
+  }, [load])
+
+  if (loading) {
+    return <div className="py-10 text-center text-sm text-slate-400">Cargando rechazos…</div>
+  }
+
+  if (!data || !data.summary || data.summary.total === 0) {
+    return (
+      <div className="py-10 text-center text-sm text-slate-400">
+        No hay señales rechazadas para {baseOf(symbol)} en los últimos {days} días
+      </div>
+    )
+  }
+
+  const summary = data.summary || {}
+  const detail = data.detail || {}
+  const items = detail.items || []
+  const totalItems = detail.total || 0
+  const byReason = summary.by_reason || {}
+
+  const reasonLabels = {
+    stale: 'Señal caducada',
+    tier: 'Tier no permitido',
+    status: 'Status anti-fake',
+    score: 'Score bajo',
+    concurrent: 'Máx. posiciones',
+    stacking: 'No apilar',
+    slippage: 'Slippage alto',
+    macro: 'Contexto macro',
+    regime: 'Régimen de mercado',
+    drift: 'Drift estadístico',
+    kelly: 'Kelly sizing',
+    portfolio: 'Límite portfolio',
+    look_ahead: 'Look-ahead bias',
+    wf_rejected: 'WFV rechazado',
+    optimal_config_missing: 'Sin config óptima',
+    paper_divergence: 'Divergencia paper',
+    oi_cvd: 'OI/CVD contrario',
+    session_funding: 'Funding/sesión',
+    rolling_beta: 'Beta rolling',
+    unknown: 'Desconocido',
+  }
+
+  const maxCount = Math.max(...Object.values(byReason).map(r => r.count), 1)
+
+  return (
+    <div className="space-y-5">
+      {/* Filters */}
+      <div className="flex flex-wrap items-center gap-3">
+        <span className="text-xs text-slate-500 dark:text-slate-400">Período:</span>
+        {[7, 30, 90].map(d => (
+          <button
+            key={d}
+            onClick={() => setDays(d)}
+            className={cn(
+              'text-[11px] px-2 py-1 rounded border font-medium transition-colors',
+              days === d
+                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-700'
+                : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+            )}
+          >
+            {d}d
+          </button>
+        ))}
+        <span className="text-xs text-slate-500 dark:text-slate-400 ml-2">Timeframe:</span>
+        <select
+          value={timeframeFilter}
+          onChange={e => setTimeframeFilter(e.target.value)}
+          className="text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+        >
+          <option value="">Todos</option>
+          {TIMEFRAMES.filter(t => t !== 'auto').map(t => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+        <span className="text-xs text-slate-500 dark:text-slate-400">Razón:</span>
+        <select
+          value={reasonFilter}
+          onChange={e => setReasonFilter(e.target.value)}
+          className="text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+        >
+          <option value="">Todas</option>
+          {Object.entries(reasonLabels).map(([key, label]) => (
+            <option key={key} value={key}>{label}</option>
+          ))}
+        </select>
+        <span className="ml-auto text-xs text-slate-400">
+          {summary.total} rechazos / {items.length} mostrados
+        </span>
+      </div>
+
+      {/* Summary card */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+        <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+          <Ban size={14} className="text-red-500" />
+          Resumen de rechazos ({days}d)
+          {summary.top_filters?.length > 0 && (
+            <span className="ml-auto text-[10px] bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400 px-2 py-0.5 rounded-full">
+              {summary.top_filters.length} filtro(s) agresivo(s)
+            </span>
+          )}
+        </h4>
+        <div className="space-y-2">
+          {Object.entries(byReason).sort((a, b) => b[1].count - a[1].count).map(([reason, info]) => {
+            const pct = Math.round((info.count / maxCount) * 100)
+            const winPct = info.would_win_pct
+            return (
+              <div key={reason} className="flex items-center gap-3">
+                <div className="w-32 text-[11px] text-slate-600 dark:text-slate-400 truncate">
+                  {reasonLabels[reason] || reason}
+                </div>
+                <div className="flex-1 h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                  <div
+                    className={cn(
+                      'h-full rounded-full',
+                      winPct != null && winPct > 60 ? 'bg-amber-500' : 'bg-red-400',
+                    )}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <div className="w-8 text-[11px] font-medium text-slate-700 dark:text-slate-300 text-right">
+                  {info.count}
+                </div>
+                {winPct != null && (
+                  <div className={cn(
+                    'w-14 text-[10px] text-right',
+                    winPct > 60 ? 'text-amber-600 dark:text-amber-400 font-semibold' : 'text-slate-500 dark:text-slate-500',
+                  )}>
+                    {winPct}% gan.
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+
+      {/* Detail table */}
+      {items.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+          <div className="px-4 py-2 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+            <h4 className="text-xs font-semibold text-slate-600 dark:text-slate-300">
+              Detalle de rechazos
+            </h4>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11px]">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400">
+                  <th className="px-3 py-2 text-left font-medium">Fecha</th>
+                  <th className="px-3 py-2 text-left font-medium">TF</th>
+                  <th className="px-3 py-2 text-left font-medium">Dir</th>
+                  <th className="px-3 py-2 text-left font-medium">Score</th>
+                  <th className="px-3 py-2 text-left font-medium">Tier</th>
+                  <th className="px-3 py-2 text-left font-medium">Anti-fake</th>
+                  <th className="px-3 py-2 text-left font-medium">Razón</th>
+                  <th className="px-3 py-2 text-left font-medium">¿Habría ganado?</th>
+                  <th className="px-3 py-2 text-left font-medium">Similar (+24h)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {items.map(item => (
+                  <tr key={item.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400 whitespace-nowrap">
+                      {item.rejected_at ? new Date(item.rejected_at).toLocaleString('es-ES', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400">{item.timeframe}</td>
+                    <td className={cn(
+                      'px-3 py-2 font-medium uppercase',
+                      item.direction === 'long' ? 'text-green-600' : 'text-red-600',
+                    )}>
+                      {item.direction}
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400">{item.score?.toFixed(1) ?? '—'}</td>
+                    <td className="px-3 py-2">
+                      <span className={cn(
+                        'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                        item.quality_tier === 'STRONG' ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400' :
+                        item.quality_tier === 'MODERATE' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400' :
+                        'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400',
+                      )}>
+                        {item.quality_tier || '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <span className={cn(
+                        'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                        item.anti_fake_status === 'CLEAR' ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400' :
+                        item.anti_fake_status === 'CAUTION' ? 'bg-amber-100 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400' :
+                        item.anti_fake_status === 'BLOCK' ? 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400' :
+                        'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400',
+                      )}>
+                        {item.anti_fake_status || '—'}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2 text-slate-600 dark:text-slate-400">
+                      {reasonLabels[item.rejection_reason] || item.rejection_reason}
+                    </td>
+                    <td className="px-3 py-2">
+                      {item.would_have_been_winner === null ? (
+                        <span className="text-slate-400">Pendiente</span>
+                      ) : item.would_have_been_winner ? (
+                        <span className="text-green-600 font-medium">Sí</span>
+                      ) : (
+                        <span className="text-red-500 font-medium">No</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {item.similar_signal_outcome ? (
+                        <span className={cn(
+                          item.similar_signal_outcome === 'SUCCESS' ? 'text-green-600' : 'text-red-500',
+                        )}>
+                          {item.similar_signal_outcome} ({item.similar_signal_pnl_pct?.toFixed(2) ?? '—'}%)
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {totalItems > limit && (
+            <div className="flex items-center justify-between px-4 py-2 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <button
+                onClick={() => setOffset(Math.max(0, offset - limit))}
+                disabled={offset === 0}
+                className="text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 disabled:opacity-40"
+              >
+                ← Anterior
+              </button>
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                {offset + 1} – {Math.min(offset + limit, totalItems)} de {totalItems}
+              </span>
+              <button
+                onClick={() => setOffset(offset + limit)}
+                disabled={offset + limit >= totalItems}
+                className="text-[11px] px-2 py-1 rounded border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 disabled:opacity-40"
+              >
+                Siguiente →
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Symbol real stats (executed IA trades) ────────────────────────────────────
+
+function SymbolRealStats({ symbol }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState('total')
+
+  useEffect(() => {
+    setLoading(true)
+    aiService.symbolRealStats(symbol, mode)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [symbol, mode])
+
+  if (loading) {
+    return <div className="py-10 text-center text-sm text-slate-400">Cargando métricas…</div>
+  }
+
+  if (!data) {
+    return <div className="py-10 text-center text-sm text-slate-400">Sin datos de trades para {baseOf(symbol)}</div>
+  }
+
+  const rt = data.real_trades || {}
+  const sig = data.ai_signals || {}
+  const openPos = data.open_positions || []
+
+  const modeLabels = {
+    real: 'reales',
+    paper: 'paper',
+    total: 'totales',
+  }
+
+  const Stat = ({ label, value, color }) => {
+    const colorCls =
+      color === 'green' ? 'text-green-600 dark:text-green-400' :
+      color === 'red'   ? 'text-red-600 dark:text-red-400' :
+      'text-slate-800 dark:text-white'
+    return (
+      <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+        <div className={cn('text-lg font-bold', colorCls)}>{value}</div>
+        <div className="text-[10px] text-slate-500 uppercase tracking-wide">{label}</div>
+      </div>
+    )
+  }
+
+  const hasData = rt.total > 0 || openPos.length > 0
+
+  return (
+    <div className="space-y-4">
+      {/* Mode selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-slate-400">Modo:</span>
+        {['total', 'real', 'paper'].map(m => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={cn(
+              'text-[11px] px-2 py-1 rounded border font-medium transition-colors',
+              mode === m
+                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-700'
+                : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+            )}
+          >
+            {m === 'total' ? 'Total' : m === 'real' ? 'Real' : 'Paper'}
+          </button>
+        ))}
+      </div>
+
+      {!hasData && (
+        <div className="py-8 text-center">
+          <p className="text-sm text-slate-500 dark:text-slate-400">Aún no hay trades IA {modeLabels[mode]} ejecutados para <strong>{baseOf(symbol)}</strong></p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Las operaciones aparecerán aquí cuando el bot IA ejecute señales en este par.</p>
+        </div>
+      )}
+
+      {/* Open positions */}
+      {openPos.length > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-2">
+            <Zap size={14} className="text-amber-500" />
+            Posiciones IA abiertas ({openPos.length})
+          </h4>
+          <div className="space-y-2">
+            {openPos.map(p => (
+              <div key={p.id} className="flex items-center justify-between bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg px-3 py-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <span className={cn('font-bold uppercase', p.side === 'long' ? 'text-green-600' : 'text-red-600')}>{p.side}</span>
+                  <span className="text-slate-500">@ ${p.entry_price?.toFixed(4) ?? '—'}</span>
+                  <span className="text-slate-400">qty {fmtQty(p.quantity)}</span>
+                  {p.is_paper && (
+                    <span className="text-[9px] bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400 px-1 rounded">PAPER</span>
+                  )}
+                </div>
+                <span className={cn('font-bold', (p.unrealized_pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600')}>
+                  {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl?.toFixed(4) ?? '0.0000'} USDT
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Trades stats */}
+      {rt.total > 0 && (
+        <div>
+          <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-2 flex items-center gap-2">
+            <Trophy size={14} className="text-violet-500" />
+            Trades IA {modeLabels[mode]}
+          </h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            <Stat label="Total trades" value={rt.total ?? 0} />
+            <Stat label="Win Rate" value={`${rt.win_rate ?? 0}%`} color={rt.win_rate >= 50 ? 'green' : 'red'} />
+            <Stat label="Ganados" value={rt.winners ?? 0} color="green" />
+            <Stat label="Perdidos" value={rt.losers ?? 0} color="red" />
+            <Stat label="PnL total" value={`${rt.total_pnl >= 0 ? '+' : ''}${rt.total_pnl?.toFixed(2) ?? '0.00'}`} color={rt.total_pnl >= 0 ? 'green' : 'red'} />
+            <Stat label="Avg PnL" value={`${rt.avg_pnl >= 0 ? '+' : ''}${rt.avg_pnl?.toFixed(2) ?? '0.00'}`} color={rt.avg_pnl >= 0 ? 'green' : 'red'} />
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+            <Stat label="Mejor trade" value={`+${rt.best_trade?.toFixed(4) ?? '0.0000'}`} color="green" />
+            <Stat label="Peor trade" value={`${rt.worst_trade?.toFixed(4) ?? '0.0000'}`} color="red" />
+            <Stat label="Duración media" value={rt.avg_duration_minutes != null ? `${Math.round(rt.avg_duration_minutes)}m` : '—'} />
+          </div>
+        </div>
+      )}
+
+      {/* AI signals — visually separated as backtest/simulated data */}
+      {sig.total > 0 && (
+        <div className="bg-slate-50/60 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-slate-500 dark:text-slate-400 mb-2 flex items-center gap-2">
+            <Brain size={14} className="text-blue-400" />
+            Señales AI (backtest / simulado)
+            <span className="text-[10px] font-normal text-slate-400 dark:text-slate-500 ml-auto">
+              No son trades reales ejecutados
+            </span>
+          </h4>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3">
+            <Stat label="Total señales" value={sig.total ?? 0} />
+            <Stat label="Resueltas" value={sig.resolved ?? 0} />
+            <Stat label="WR señales" value={`${sig.win_rate ?? 0}%`} color={sig.win_rate >= 50 ? 'green' : 'red'} />
+            <Stat label="Score medio" value={sig.avg_score?.toFixed(1) ?? '—'} />
+            <Stat label="Bars medio" value={sig.avg_bars?.toFixed(1) ?? '—'} />
+            <Stat label="Mejor señal" value={`${sig.best_signal_pnl_pct >= 0 ? '+' : ''}${sig.best_signal_pnl_pct?.toFixed(2) ?? '0.00'}%`} color="green" />
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Symbol detail panel (expanded below grid) ─────────────────────────────────
+
+function SymbolDetailPanel({ symbol, timeframe, onClose, aiBots }) {
+  const [tab, setTab] = useState('detail')
+  const [chartData, setChartData] = useState(null)
+  const [signals, setSignals] = useState([])
+  const [loading, setLoading] = useState(true)
+  const chartRef = useRef(null)
+
+  // Load data
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setChartData(null)
+    setSignals([])
+
+    Promise.all([
+      aiService.ictAnalysis(symbol, timeframe),
+      aiService.listSignals(100, symbol),
+    ])
+      .then(([ictRes, sigRes]) => {
+        if (cancelled) return
+        setChartData(ictRes.data ?? null)
+        setSignals(Array.isArray(sigRes.data) ? sigRes.data : [])
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setLoading(false) })
+
+    return () => { cancelled = true }
+  }, [symbol, timeframe])
+
+  // Render chart
+  useEffect(() => {
+    if (!chartData?.candles?.length || !chartRef.current) return
+    let chart
+    let raf
+    const el = chartRef.current
+
+    const init = () => {
+      if (!el.offsetWidth || !el.offsetHeight) {
+        raf = requestAnimationFrame(init)
+        return
+      }
+      try {
+        chart = createChart(el, {
+        width: el.offsetWidth || 600,
+        height: el.offsetHeight || 400,
+        layout: { background: { color: '#0f172a' }, textColor: '#94a3b8' },
+        grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+        crosshair: { mode: 1 },
+        timeScale: { timeVisible: true, secondsVisible: false },
+        rightPriceScale: { borderColor: '#1e293b' },
+      })
+      const series = chart.addCandlestickSeries({
+        upColor: '#22c55e', downColor: '#ef4444', borderVisible: false,
+        wickUpColor: '#22c55e', wickDownColor: '#ef4444',
+      })
+      series.setData(chartData.candles)
+      const ctx = chartData.context ?? {}
+      if (ctx.break_level) {
+        try { series.createPriceLine({ price: ctx.break_level, color: '#3b82f6', lineWidth: 1, lineStyle: 2, title: ctx.last_break ?? 'Break' }) } catch {}
+      }
+      if (ctx.active_ob) {
+        try { series.createPriceLine({ price: ctx.active_ob.top, color: '#a855f7', lineWidth: 1, lineStyle: 0, title: 'OB↑' }) } catch {}
+        try { series.createPriceLine({ price: ctx.active_ob.bottom, color: '#a855f7', lineWidth: 1, lineStyle: 0, title: 'OB↓' }) } catch {}
+      }
+      ;(ctx.fvg_zones ?? []).forEach((fvg) => {
+        const color = fvg.kind === 'bull' ? '#22c55e' : '#ef4444'
+        try { series.createPriceLine({ price: fvg.top, color, lineWidth: 1, lineStyle: 3, title: '' }) } catch {}
+        try { series.createPriceLine({ price: fvg.bottom, color, lineWidth: 1, lineStyle: 3, title: '' }) } catch {}
+      })
+      ;(ctx.eq_highs ?? []).forEach((p) => {
+        try { series.createPriceLine({ price: p, color: '#f59e0b', lineWidth: 1, lineStyle: 3, title: '' }) } catch {}
+      })
+      ;(ctx.eq_lows ?? []).forEach((p) => {
+        try { series.createPriceLine({ price: p, color: '#06b6d4', lineWidth: 1, lineStyle: 3, title: '' }) } catch {}
+      })
+      } catch {}
+    }
+
+    raf = requestAnimationFrame(init)
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      try { chart?.remove() } catch {}
+    }
+  }, [chartData])
+
+  return (
+    <div className="mt-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+        <div className="flex items-center gap-3">
+          <span className="font-bold text-slate-900 dark:text-white">{baseOf(symbol)}</span>
+          <span className="text-xs text-slate-500 dark:text-slate-400">{timeframe}</span>
+        </div>
+        <div className="flex items-center gap-1">
+          {[
+            { id: 'detail', label: 'Detalle', icon: <BarChart2 size={13} /> },
+            { id: 'backtest', label: 'Backtest', icon: <TrendingUp size={13} /> },
+            { id: 'validation', label: 'Validación', icon: <ShieldAlert size={13} /> },
+            { id: 'real', label: 'Real', icon: <Trophy size={13} /> },
+            { id: 'rejections', label: 'Rechazos', icon: <Ban size={13} /> },
+            { id: 'recommendation', label: 'Recomendación', icon: <Sparkles size={13} /> },
+          ].map(t => (
+            <button key={t.id} onClick={() => setTab(t.id)} className={cn(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded transition-colors',
+              tab === t.id
+                ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400'
+                : 'text-slate-500 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800',
+            )}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-red-500 ml-2">
+            <X size={14} />
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="p-4">
+        <div className={tab !== 'detail' ? 'hidden' : ''}>
+          {loading ? (
+            <div className="py-10 text-center text-sm text-slate-400">Cargando análisis…</div>
+          ) : !chartData?.candles?.length ? (
+            <div className="py-10 text-center text-sm text-slate-400">Sin datos de velas</div>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="lg:col-span-2">
+                <div ref={chartRef} className="w-full h-80 bg-slate-950 rounded" />
+              </div>
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200">Contexto ICT</h4>
+                {chartData.context && Object.entries(chartData.context).map(([k, v]) => (
+                  <div key={k} className="text-xs">
+                    <span className="text-slate-500 dark:text-slate-400 capitalize">{k.replace(/_/g, ' ')}:</span>{' '}
+                    <span className="text-slate-700 dark:text-slate-200">{typeof v === 'object' ? JSON.stringify(v) : String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className={tab !== 'backtest' ? 'hidden' : ''}>
+          <SymbolBacktest symbol={symbol} />
+        </div>
+
+        <div className={tab !== 'validation' ? 'hidden' : ''}>
+          <SymbolValidation symbol={symbol} />
+        </div>
+
+        <div className={tab !== 'real' ? 'hidden' : ''}>
+          <SymbolRealStats symbol={symbol} />
+        </div>
+
+        <div className={tab !== 'rejections' ? 'hidden' : ''}>
+          <SymbolRejections symbol={symbol} />
+        </div>
+
+        <div className={tab !== 'recommendation' ? 'hidden' : ''}>
+          <SymbolRecommendation symbol={symbol} timeframe={timeframe} aiBots={aiBots} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ── Symbol backtest (filtered by symbol, collapsible with totals) ─────────────
+
+function SymbolBacktest({ symbol }) {
+  const [signals, setSignals] = useState([])
+  const [comparisonData, setComparisonData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [expanded, setExpanded] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([
+      aiService.listSignals(200, symbol).then(r => Array.isArray(r.data) ? r.data : []),
+      aiService.symbolBacktestComparison(symbol).then(r => r.data).catch(() => null),
+    ])
+      .then(([sigData, compData]) => {
+        setSignals(sigData)
+        setComparisonData(compData)
+      })
+      .catch(() => {
+        setSignals([])
+        setComparisonData(null)
+      })
+      .finally(() => setLoading(false))
+  }, [symbol])
+
+  if (loading) return <div className="py-10 text-center text-sm text-slate-400">Cargando señales…</div>
+  if (!signals.length) return <div className="py-10 text-center text-sm text-slate-400">Sin señales históricas para {baseOf(symbol)}</div>
+
+  const total = signals.length
+  const resolved = signals.filter(s => s.outcome && s.outcome !== 'PENDING')
+  const wins = resolved.filter(s => s.outcome === 'SUCCESS')
+  const losses = resolved.filter(s => s.outcome === 'FAILURE')
+  const winRate = resolved.length ? Math.round((wins.length / resolved.length) * 100) : 0
+  const avgPnL = resolved.length
+    ? (resolved.reduce((sum, s) => sum + (s.pnl_pct || 0), 0) / resolved.length).toFixed(2)
+    : '—'
+
+  const hasComparison = comparisonData?.signal_curve?.length && comparisonData?.trade_curve?.length
+
+  // Merge curves for Recharts
+  // Backtest = realistic equity curve with slippage/fees/gaps modeled
+  // Ideal = ideal equity curve (reference only)
+  // Ejecución = normalized % from $10k reference capital (comparable scale)
+  const chartData = hasComparison
+    ? comparisonData.signal_curve.map((d, i) => ({
+        date: d.date,
+        backtest: d.cumulative_pnl,
+        ideal: comparisonData.ideal_curve?.[i]?.cumulative_pnl ?? d.cumulative_pnl,
+        ejecucion: comparisonData.trade_curve[i]?.cumulative_pnl_pct ?? 0,
+        ejecucion_usdt: comparisonData.trade_curve[i]?.cumulative_pnl ?? 0,
+      }))
+    : []
+
+  const ComparisonTooltip = ({ active, payload, label }) => {
+    if (!active || !payload?.length) return null
+    const tradePoint = chartData.find(d => d.date === label)
+    return (
+      <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs shadow-lg">
+        <p className="font-semibold text-slate-600 dark:text-slate-300 mb-1">{label}</p>
+        {payload.map((p, i) => (
+          <p key={i} className="tabular-nums" style={{ color: p.color }}>
+            {p.dataKey === 'backtest'
+              ? `${p.name}: ${p.value >= 0 ? '+' : ''}${p.value?.toFixed(2)}%`
+              : `${p.name}: ${p.value >= 0 ? '+' : ''}${p.value?.toFixed(2)}% (${tradePoint?.ejecucion_usdt >= 0 ? '+' : ''}${tradePoint?.ejecucion_usdt?.toFixed(0)} USDT)`
+            }
+          </p>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Comparison chart */}
+      {hasComparison && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <TrendingUp size={14} className="text-violet-500" />
+            Backtest vs Ejecución (real + paper)
+          </h4>
+          <ResponsiveContainer width="100%" height={220}>
+            <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 4, bottom: 0 }}>
+              <defs>
+                <linearGradient id="gradBacktest" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="gradEjecucion" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                </linearGradient>
+                <linearGradient id="gradRealistic" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.2} />
+                  <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.15)" />
+              <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} tickFormatter={d => d?.slice(5)} />
+              <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} tickLine={false} axisLine={false} tickFormatter={v => `${v.toFixed(0)}`} width={48} />
+              <ReTooltip content={<ComparisonTooltip />} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Area type="monotone" dataKey="backtest" name="Backtest" stroke="#3b82f6" strokeWidth={2} fill="url(#gradBacktest)" dot={false} activeDot={{ r: 3 }} />
+              <Area type="monotone" dataKey="ideal" name="Ideal (referencia)" stroke="#8b5cf6" strokeWidth={2} fill="url(#gradRealistic)" dot={false} activeDot={{ r: 3 }} />
+              <Area type="monotone" dataKey="ejecucion" name="Ejecución (real+paper)" stroke="#f59e0b" strokeWidth={2} fill="url(#gradEjecucion)" dot={false} activeDot={{ r: 3 }} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-slate-800 dark:text-white">{total}</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total señales</div>
+        </div>
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{resolved.length}</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Resueltas</div>
+        </div>
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className={cn('text-lg font-bold', winRate >= 50 ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400')}>{winRate}%</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Win rate</div>
+        </div>
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-slate-800 dark:text-white">{avgPnL}%</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Avg PnL</div>
+        </div>
+      </div>
+
+      {/* Toggle detail */}
+      <button
+        onClick={() => setExpanded(e => !e)}
+        className="flex items-center gap-2 text-xs font-medium text-blue-600 dark:text-blue-400 mb-2 hover:underline"
+      >
+        {expanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+        {expanded ? 'Ocultar detalle' : `Ver detalle (${total} señales)`}
+      </button>
+
+      {expanded && (
+        <div className="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+          <table className="w-full text-xs">
+            <thead className="text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+              <tr>
+                <th className="text-left py-2 px-2">Fecha</th>
+                <th className="text-left py-2 px-2">Dir</th>
+                <th className="text-left py-2 px-2">Score</th>
+                <th className="text-left py-2 px-2">Tier</th>
+                <th className="text-left py-2 px-2">Entrada</th>
+                <th className="text-left py-2 px-2">Resultado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {signals.map(s => (
+                <tr key={s.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                  <td className="py-2 px-2 text-slate-600 dark:text-slate-300">{new Date(s.signal_time).toLocaleDateString()}</td>
+                  <td className="py-2 px-2">
+                    <span className={cn(
+                      'font-bold',
+                      s.direction === 'long' ? 'text-green-600 dark:text-green-400' : 'text-red-600 dark:text-red-400'
+                    )}>{s.direction?.toUpperCase()}</span>
+                  </td>
+                  <td className="py-2 px-2 text-slate-600 dark:text-slate-300">{s.score}</td>
+                  <td className="py-2 px-2"><QualityBadge tier={s.quality_tier} status={s.anti_fake_status} successProbability={s.success_probability} mlStatus={s.ml_status} /></td>
+                  <td className="py-2 px-2 text-slate-600 dark:text-slate-300">${fmtPrice(s.entry_price)}</td>
+                  <td className="py-2 px-2"><OutcomeBadge outcome={s.outcome} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Symbol validation (filtered by symbol, correct API structure) ─────────────
+
+function SymbolValidation({ symbol }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [days, setDays] = useState(30)
+
+  useEffect(() => {
+    setLoading(true)
+    aiService.heuristicValidation({ days, ticker: symbol })
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [symbol, days])
+
+  if (loading) return <div className="py-10 text-center text-sm text-slate-500">Cargando validación…</div>
+  if (!data) return <div className="py-10 text-center text-sm text-red-400">Sin datos de validación.</div>
+
+  const summary = data.summary || {}
+  const rows = data.by_tier_status || []
+
+  return (
+    <div>
+      {/* Summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-4">
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-slate-800 dark:text-white">{summary.total_signals ?? 0}</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Total señales</div>
+        </div>
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-blue-600 dark:text-blue-400">{summary.resolved ?? 0}</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Resueltas</div>
+        </div>
+        <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 text-center">
+          <div className="text-lg font-bold text-slate-800 dark:text-white">{summary.total_signals ? Math.round((summary.resolved / summary.total_signals) * 100) : 0}%</div>
+          <div className="text-[10px] text-slate-500 uppercase tracking-wide">Tasa resolución</div>
+        </div>
+      </div>
+
+      {/* Days filter */}
+      <div className="flex items-center gap-3 mb-4">
+        <span className="text-xs text-slate-500">Días:</span>
+        {[7, 30, 90].map(d => (
+          <button key={d} onClick={() => setDays(d)} className={cn(
+            'text-xs px-2 py-1 rounded border',
+            days === d
+              ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-700'
+              : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+          )}>{d}d</button>
+        ))}
+      </div>
+
+      {/* Table */}
+      <div className="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+        <table className="w-full text-xs">
+          <thead className="text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+            <tr>
+              <th className="text-left py-2 px-2">Tier</th>
+              <th className="text-left py-2 px-2">Status</th>
+              <th className="text-right py-2 px-2">Señales</th>
+              <th className="text-right py-2 px-2">Resueltas</th>
+              <th className="text-right py-2 px-2">Win Rate</th>
+              <th className="text-right py-2 px-2">Avg PnL</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                <td className="py-2 px-2 text-slate-700 dark:text-slate-200 font-medium">{r.tier}</td>
+                <td className="py-2 px-2"><QualityBadge tier={r.tier} status={r.status} /></td>
+                <td className="py-2 px-2 text-right text-slate-600 dark:text-slate-300">{r.count}</td>
+                <td className="py-2 px-2 text-right text-slate-600 dark:text-slate-300">{r.resolved}</td>
+                <td className="py-2 px-2 text-right">
+                  <span className={cn(r.win_rate > 50 ? 'text-green-600 dark:text-green-400' : r.win_rate > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-slate-500 dark:text-slate-400')}>
+                    {r.win_rate != null ? r.win_rate.toFixed(1) : '—'}%
+                  </span>
+                </td>
+                <td className="py-2 px-2 text-right text-slate-600 dark:text-slate-300">{r.avg_pnl_pct != null ? r.avg_pnl_pct.toFixed(2) + '%' : '—'}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 // ── Symbol detail modal ───────────────────────────────────────────────────────
 
 function SymbolModal({ symbol, timeframe, onClose }) {
   const [chartData, setChartData] = useState(null)
   const [signals,   setSignals]   = useState([])
   const [loading,   setLoading]   = useState(true)
+  const [diagnosisSignal, setDiagnosisSignal] = useState(null)
   const chartRef = useRef(null)
 
   useEffect(() => {
@@ -457,7 +1557,7 @@ function SymbolModal({ symbol, timeframe, onClose }) {
                     )}
                   </div>
                   <div className="space-y-1.5">
-                    {sigs.map(sig => <SignalDayRow key={sig.id} sig={sig} />)}
+                    {sigs.map(sig => <SignalDayRow key={sig.id} sig={sig} onViewDiagnosis={setDiagnosisSignal} />)}
                   </div>
                 </div>
               )
@@ -465,14 +1565,21 @@ function SymbolModal({ symbol, timeframe, onClose }) {
           </div>
         </div>
       </div>
+
+      {diagnosisSignal && (
+        <SignalDiagnosisModal
+          signal={diagnosisSignal}
+          onClose={() => setDiagnosisSignal(null)}
+        />
+      )}
     </div>
   )
 }
 
 // ── Symbol Slot Card ──────────────────────────────────────────────────────────
 
-function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, onChangeTimeframe, onScanOne, onSelect }) {
-  const { symbol, timeframe } = entry
+function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, onChangeTimeframe, onScanOne, onSelect, isSelected }) {
+  const { symbol, timeframe, resolved_timeframe } = entry
   const status   = result?.status
   const isSignal = status === 'SIGNAL'
   const hasAiBot = aiBotNames?.length > 0
@@ -482,14 +1589,24 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
       onClick={() => { if (!scanning) onSelect(symbol, timeframe) }}
       className={cn(
         'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3',
-        'cursor-pointer select-none transition-shadow',
+        'cursor-pointer select-none transition-shadow relative',
         !scanning && 'hover:shadow-md hover:border-slate-300 dark:hover:border-slate-600',
         scanning && 'opacity-70 cursor-wait',
         isSignal && result.direction === 'long'  && 'ring-1 ring-green-500/40',
         isSignal && result.direction === 'short' && 'ring-1 ring-red-500/40',
         hasAiBot && 'ring-1 ring-blue-400/30',
+        isSelected && 'ring-2 ring-blue-500 dark:ring-blue-400',
       )}
     >
+      {/* Selection checkmark */}
+      {isSelected && (
+        <div className="absolute -top-2 -right-2 z-10">
+          <span className="flex items-center justify-center w-6 h-6 rounded-full bg-blue-500 text-white shadow-md">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+          </span>
+        </div>
+      )}
+
       {/* Header — stop propagation so controls work */}
       <div className="flex items-center gap-2 mb-3" onClick={e => e.stopPropagation()}>
         <div className="flex items-center gap-1.5 flex-1 min-w-0">
@@ -504,17 +1621,24 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
             </span>
           )}
         </div>
-        <select
-          value={timeframe}
-          onChange={e => onChangeTimeframe(symbol, e.target.value)}
-          className={cn(
-            'text-xs border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500',
-            'bg-slate-100 text-slate-700 border-slate-300',
-            'dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600',
+        <div className="flex flex-col items-end gap-0.5">
+          <select
+            value={timeframe}
+            onChange={e => onChangeTimeframe(symbol, e.target.value)}
+            className={cn(
+              'text-xs border rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500',
+              'bg-slate-100 text-slate-700 border-slate-300',
+              'dark:bg-slate-800 dark:text-slate-300 dark:border-slate-600',
+            )}
+          >
+            {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
+          </select>
+          {timeframe === 'auto' && resolved_timeframe && (
+            <span className="text-[9px] font-medium text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-500/10 px-1 rounded">
+              → {resolved_timeframe}
+            </span>
           )}
-        >
-          {TIMEFRAMES.map(tf => <option key={tf} value={tf}>{tf}</option>)}
-        </select>
+        </div>
         <button
           onClick={() => onScanOne(symbol, timeframe)}
           disabled={scanning}
@@ -596,7 +1720,7 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
                 : 'text-red-600 dark:text-red-400',
             )}>
               {result.direction === 'long' ? <TrendingUp size={15} /> : <TrendingDown size={15} />}
-              {result.direction.toUpperCase()}
+              {result.direction?.toUpperCase()}
             </span>
             <OutcomeBadge outcome={result.outcome} />
           </div>
@@ -604,7 +1728,7 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <ConfBadge confidence={result.confidence} />
             {result.quality_tier && (
-              <QualityBadge tier={result.quality_tier} status={result.anti_fake_status} />
+              <QualityBadge tier={result.quality_tier} status={result.anti_fake_status} successProbability={result.success_probability} mlStatus={result.ml_status} />
             )}
           </div>
           <div className="text-[10px] text-slate-400 font-mono">
@@ -620,9 +1744,11 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
             <span className="text-slate-400">
               <span className="font-bold text-slate-600 dark:text-slate-300">{tickerStats.total}</span>
               {' '}señal{tickerStats.total !== 1 ? 'es' : ''}
+              <span className="ml-1 text-[9px] text-slate-400 dark:text-slate-500">(backtest)</span>
             </span>
             <span className="text-slate-400">
-              Win:{' '}
+              Win{' '}
+              <span className="text-[9px] text-slate-400 dark:text-slate-500">sim:</span>{' '}
               <span className={cn(
                 'font-bold',
                 tickerStats.win_rate == null ? 'text-slate-500' :
@@ -639,14 +1765,17 @@ function SlotCard({ entry, result, scanning, tickerStats, aiBotNames, onRemove, 
         ) : (
           <span className="text-slate-400 dark:text-slate-600">Sin señales aún</span>
         )}
-        {result?.anti_fake_status ? (
+        {(result?.ml_status || result?.anti_fake_status) ? (
           <span className={cn(
             'ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded',
-            result.anti_fake_status === 'CLEAR'   ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
-            result.anti_fake_status === 'CAUTION' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
+            (result.ml_status || result.anti_fake_status) === 'CLEAR'   ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
+            (result.ml_status || result.anti_fake_status) === 'CAUTION' ? 'bg-yellow-500/20 text-yellow-600 dark:text-yellow-400' :
                                                     'bg-red-500/20 text-red-600 dark:text-red-400',
           )}>
-            XGB {result.anti_fake_status}
+            {result.success_probability != null ? 'ML ' : 'XGB '}{(result.ml_status || result.anti_fake_status)}
+            {result.success_probability != null && (
+              <span className="opacity-70"> ({(result.success_probability * 100).toFixed(0)}%)</span>
+            )}
           </span>
         ) : (
           <span className="ml-auto text-[9px] text-slate-400 dark:text-slate-600">→ ver gráfico</span>
@@ -691,17 +1820,589 @@ function PnlChart({ points }) {
   )
 }
 
+// ── Validation Tab ────────────────────────────────────────────────────────────
+
+function ValidationTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [days, setDays] = useState(30)
+
+  useEffect(() => {
+    setLoading(true)
+    aiService.heuristicValidation({ days })
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [days])
+
+  if (loading) return <div className="py-10 text-center text-sm text-slate-500">Cargando validación heurística…</div>
+  if (!data) return <div className="py-10 text-center text-sm text-red-400">Error cargando datos de validación.</div>
+
+  const { summary, by_tier_status, by_tier, by_status } = data
+
+  const TierBadge = ({ tier }) => (
+    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded',
+      tier === 'STRONG'   ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400' :
+      tier === 'MODERATE' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400' :
+      tier === 'WEAK'     ? 'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400' :
+      'bg-slate-100 text-slate-700 dark:bg-slate-500/20 dark:text-slate-400'
+    )}>{tier}</span>
+  )
+
+  const StatusBadge = ({ status }) => (
+    <span className={cn('text-[10px] font-bold px-2 py-0.5 rounded',
+      status === 'CLEAR'   ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400' :
+      status === 'CAUTION' ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400' :
+      'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+    )}>{status}</span>
+  )
+
+  const WinRateBar = ({ wr }) => {
+    if (wr == null) return <span className="text-xs text-slate-400">—</span>
+    const color = wr >= 60 ? 'bg-emerald-500' : wr >= 45 ? 'bg-yellow-500' : 'bg-red-500'
+    return (
+      <div className="flex items-center gap-2">
+        <div className="w-16 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+          <div className={cn('h-full rounded-full', color)} style={{ width: `${Math.min(100, wr)}%` }} />
+        </div>
+        <span className={cn('text-xs font-bold tabular-nums',
+          wr >= 60 ? 'text-emerald-400' : wr >= 45 ? 'text-yellow-400' : 'text-red-400'
+        )}>{wr}%</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">Validación Heurística</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {summary.total_signals} señales · {summary.resolved} resueltas · últimos {days} días
+          </p>
+        </div>
+        <select value={days} onChange={e => setDays(parseInt(e.target.value))}
+          className="input text-xs py-1 w-32"
+        >
+          {[7, 14, 30, 60, 90, 180, 365].map(d => (
+            <option key={d} value={d}>Últimos {d} días</option>
+          ))}
+        </select>
+      </div>
+
+      {/* By tier + status matrix */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+          <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Matriz Tier × Status</h3>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-slate-50 dark:bg-slate-800/50 text-slate-500 dark:text-slate-400">
+                <th className="text-left px-3 py-2 font-medium">Tier</th>
+                <th className="text-left px-3 py-2 font-medium">Status</th>
+                <th className="text-right px-3 py-2 font-medium">Total</th>
+                <th className="text-right px-3 py-2 font-medium">Resueltas</th>
+                <th className="text-right px-3 py-2 font-medium">✓ SUCCESS</th>
+                <th className="text-right px-3 py-2 font-medium">✗ FAILURE</th>
+                <th className="text-right px-3 py-2 font-medium">⏱ EXPIRED</th>
+                <th className="text-left px-3 py-2 font-medium">Win Rate</th>
+                <th className="text-right px-3 py-2 font-medium">Avg PnL %</th>
+              </tr>
+            </thead>
+            <tbody>
+              {by_tier_status.map((row, i) => (
+                <tr key={i} className="border-t border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                  <td className="px-3 py-2"><TierBadge tier={row.tier} /></td>
+                  <td className="px-3 py-2"><StatusBadge status={row.status} /></td>
+                  <td className="px-3 py-2 text-right font-mono">{row.count}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-500">{row.resolved}</td>
+                  <td className="px-3 py-2 text-right font-mono text-emerald-600">{row.success}</td>
+                  <td className="px-3 py-2 text-right font-mono text-red-600">{row.failure}</td>
+                  <td className="px-3 py-2 text-right font-mono text-slate-400">{row.expired}</td>
+                  <td className="px-3 py-2"><WinRateBar wr={row.win_rate} /></td>
+                  <td className="px-3 py-2 text-right font-mono">
+                    {row.avg_pnl_pct != null ? (
+                      <span className={row.avg_pnl_pct >= 0 ? 'text-emerald-600' : 'text-red-600'}>
+                        {row.avg_pnl_pct > 0 ? '+' : ''}{row.avg_pnl_pct}%
+                      </span>
+                    ) : '—'}
+                  </td>
+                </tr>
+              ))}
+              {by_tier_status.length === 0 && (
+                <tr><td colSpan={9} className="px-3 py-6 text-center text-slate-400">No hay señales resueltas en este periodo</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Roll-ups */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {/* By tier */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+            <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Por Tier</h3>
+          </div>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {by_tier.map(t => (
+              <div key={t.key} className="flex items-center gap-3 px-4 py-3">
+                <TierBadge tier={t.key} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-500">{t.count} señales · {t.resolved} resueltas</span>
+                    <WinRateBar wr={t.win_rate} />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {by_tier.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-slate-400">Sin datos</div>
+            )}
+          </div>
+        </div>
+
+        {/* By status */}
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+          <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-700">
+            <h3 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wide">Por Anti-Fake Status</h3>
+          </div>
+          <div className="divide-y divide-slate-100 dark:divide-slate-800">
+            {by_status.map(s => (
+              <div key={s.key} className="flex items-center gap-3 px-4 py-3">
+                <StatusBadge status={s.key} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-slate-500">{s.count} señales · {s.resolved} resueltas</span>
+                    <WinRateBar wr={s.win_rate} />
+                  </div>
+                </div>
+              </div>
+            ))}
+            {by_status.length === 0 && (
+              <div className="px-4 py-6 text-center text-xs text-slate-400">Sin datos</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Guidance */}
+      <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg px-4 py-3 text-xs text-amber-700 dark:text-amber-300 space-y-1">
+        <p className="font-semibold">💡 Cómo interpretar estos datos</p>
+        <ul className="list-disc list-inside space-y-0.5 text-amber-600/80 dark:text-amber-400/80">
+          <li>Si <strong>CAUTION</strong> tiene win rate similar a <strong>CLEAR</strong>, el heurístico de red flags está siendo demasiado conservador.</li>
+          <li>Si <strong>MODERATE</strong> tiene win rate &gt;50% y avg PnL positivo, puede valer la pena activarlo con sizing reducido.</li>
+          <li>Si <strong>WEAK</strong> tiene win rate &lt;40%, mantenlo desactivado o solo en paper trading.</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
+
+// ── Real Performance Tab (global IA trades) ──────────────────────────────────
+
+function RealPerformanceTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [mode, setMode] = useState('total')
+
+  useEffect(() => {
+    setLoading(true)
+    aiService.realPerformance(mode)
+      .then(r => setData(r.data))
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [mode])
+
+  if (loading) {
+    return <div className="py-20 text-center text-sm text-slate-400">Cargando rendimiento real…</div>
+  }
+
+  if (!data) {
+    return <div className="py-20 text-center text-sm text-slate-400">Sin datos de rendimiento real</div>
+  }
+
+  const summary = data.summary || {}
+  const trades = data.trades || []
+  const openPos = data.open_positions || []
+
+  const Stat = ({ label, value, color }) => {
+    const colorCls =
+      color === 'green' ? 'text-green-600 dark:text-green-400' :
+      color === 'red'   ? 'text-red-600 dark:text-red-400' :
+      'text-slate-800 dark:text-white'
+    return (
+      <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-4 text-center">
+        <div className={cn('text-2xl font-bold', colorCls)}>{value}</div>
+        <div className="text-[10px] text-slate-500 uppercase tracking-wide mt-1">{label}</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Mode selector */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-slate-500 dark:text-slate-400">Modo:</span>
+        {['total', 'real', 'paper'].map(m => (
+          <button
+            key={m}
+            onClick={() => setMode(m)}
+            className={cn(
+              'text-[11px] px-2 py-1 rounded border font-medium transition-colors',
+              mode === m
+                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:text-blue-400 dark:border-blue-700'
+                : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+            )}
+          >
+            {m === 'total' ? 'Total' : m === 'real' ? 'Real' : 'Paper'}
+          </button>
+        ))}
+      </div>
+
+      {/* Summary */}
+      <div>
+        <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+          <Trophy size={16} className="text-violet-500" />
+          Rendimiento IA global
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-3">
+          <Stat label="Trades" value={summary.total_trades ?? 0} />
+          <Stat label="Win Rate" value={`${summary.win_rate ?? 0}%`} color={summary.win_rate >= 50 ? 'green' : 'red'} />
+          <Stat label="Ganados" value={summary.winning_trades ?? 0} color="green" />
+          <Stat label="Perdidos" value={summary.losing_trades ?? 0} color="red" />
+          <Stat label="PnL total" value={`${summary.total_pnl >= 0 ? '+' : ''}${summary.total_pnl?.toFixed(2) ?? '0.00'}`} color={summary.total_pnl >= 0 ? 'green' : 'red'} />
+          <Stat label="Avg PnL" value={`${summary.avg_pnl >= 0 ? '+' : ''}${summary.avg_pnl?.toFixed(2) ?? '0.00'}`} />
+          <Stat label="Mejor" value={`+${summary.best_trade?.toFixed(2) ?? '0.00'}`} color="green" />
+          <Stat label="Peor" value={`${summary.worst_trade?.toFixed(2) ?? '0.00'}`} color="red" />
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+          <Stat label="Longs" value={summary.long_trades ?? 0} />
+          <Stat label="Shorts" value={summary.short_trades ?? 0} />
+        </div>
+      </div>
+
+      {/* Open positions */}
+      {openPos.length > 0 && (
+        <div>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <Zap size={16} className="text-amber-500" />
+            Posiciones IA abiertas ({openPos.length})
+          </h3>
+          <div className="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                <tr>
+                  <th className="text-left py-2 px-3">Símbolo</th>
+                  <th className="text-left py-2 px-3">Dirección</th>
+                  <th className="text-right py-2 px-3">Entrada</th>
+                  <th className="text-right py-2 px-3">Cantidad</th>
+                  <th className="text-right py-2 px-3">Palanca</th>
+                  <th className="text-right py-2 px-3">PnL no realizado</th>
+                  <th className="text-right py-2 px-3">Abierta</th>
+                </tr>
+              </thead>
+              <tbody>
+                {openPos.map(p => (
+                  <tr key={p.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="py-2 px-3 font-medium text-slate-700 dark:text-slate-200">{p.symbol}</td>
+                    <td className="py-2 px-3">
+                      <span className={cn('font-bold uppercase', p.side === 'long' ? 'text-green-600' : 'text-red-600')}>{p.side}</span>
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-600 dark:text-slate-300">${p.entry_price?.toFixed(4) ?? '—'}</td>
+                    <td className="py-2 px-3 text-right text-slate-600 dark:text-slate-300">{fmtQty(p.quantity)}</td>
+                    <td className="py-2 px-3 text-right text-slate-600 dark:text-slate-300">{p.leverage ?? '—'}x</td>
+                    <td className="py-2 px-3 text-right font-bold">
+                      <span className={p.unrealized_pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                        {p.unrealized_pnl >= 0 ? '+' : ''}{p.unrealized_pnl?.toFixed(4) ?? '0.0000'}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-400">{p.opened_at ? new Date(p.opened_at).toLocaleDateString() : '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* Trade history */}
+      {trades.length > 0 && (
+        <div>
+          <h3 className="text-sm font-bold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <BarChart2 size={16} className="text-blue-500" />
+            Historial de trades IA ({trades.length})
+          </h3>
+          <div className="overflow-x-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+            <table className="w-full text-xs">
+              <thead className="text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
+                <tr>
+                  <th className="text-left py-2 px-3">Fecha cierre</th>
+                  <th className="text-left py-2 px-3">Símbolo</th>
+                  <th className="text-left py-2 px-3">Dir</th>
+                  <th className="text-right py-2 px-3">Entrada</th>
+                  <th className="text-right py-2 px-3">Salida</th>
+                  <th className="text-right py-2 px-3">Cantidad</th>
+                  <th className="text-right py-2 px-3">PnL</th>
+                  <th className="text-right py-2 px-3">Fee</th>
+                </tr>
+              </thead>
+              <tbody>
+                {trades.map(t => (
+                  <tr key={t.id} className="border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="py-2 px-3 text-slate-500">{t.closed_at ? new Date(t.closed_at).toLocaleDateString() : '—'}</td>
+                    <td className="py-2 px-3 font-medium text-slate-700 dark:text-slate-200">{t.symbol}</td>
+                    <td className="py-2 px-3">
+                      <span className={cn('font-bold uppercase', t.side === 'long' ? 'text-green-600' : 'text-red-600')}>{t.side}</span>
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-600">${t.entry_price?.toFixed(4) ?? '—'}</td>
+                    <td className="py-2 px-3 text-right text-slate-600">${t.exit_price?.toFixed(4) ?? '—'}</td>
+                    <td className="py-2 px-3 text-right text-slate-600">{fmtQty(t.quantity)}</td>
+                    <td className="py-2 px-3 text-right font-bold">
+                      <span className={t.realized_pnl >= 0 ? 'text-green-600' : 'text-red-600'}>
+                        {t.realized_pnl >= 0 ? '+' : ''}{t.realized_pnl?.toFixed(4) ?? '0.0000'}
+                      </span>
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-400">{t.fee?.toFixed(4) ?? '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {trades.length === 0 && openPos.length === 0 && (
+        <div className="py-16 text-center">
+          <Trophy size={32} className="text-slate-300 dark:text-slate-600 mx-auto mb-3" />
+          <p className="text-sm text-slate-500 dark:text-slate-400">Aún no hay trades IA ejecutados</p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Las operaciones aparecerán aquí cuando el bot IA ejecute señales reales.</p>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Ranking Tab ───────────────────────────────────────────────────────────────
+
+function RankingTab() {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [sortBy, setSortBy] = useState('win_rate')
+  const [minSignals, setMinSignals] = useState(5)
+
+  useEffect(() => {
+    setLoading(true)
+    aiService.statsByTicker()
+      .then(r => {
+        const obj = r.data && typeof r.data === 'object' ? r.data : {}
+        setData(obj)
+      })
+      .catch(() => setData({}))
+      .finally(() => setLoading(false))
+  }, [])
+
+  const rows = useMemo(() => {
+    if (!data) return []
+    const arr = Object.entries(data).map(([ticker, stats]) => ({ ticker, ...stats }))
+      .filter(r => r.total >= minSignals)
+    // Sort: nulls last, descending for numeric metrics
+    const sortOrder = ['win_rate', 'avg_pnl_pct', 'avg_score', 'total'].includes(sortBy) ? -1 : 1
+    arr.sort((a, b) => {
+      const av = a[sortBy]
+      const bv = b[sortBy]
+      if (av == null && bv == null) return b.total - a.total
+      if (av == null) return 1
+      if (bv == null) return -1
+      return (av > bv ? 1 : av < bv ? -1 : 0) * sortOrder
+    })
+    return arr
+  }, [data, sortBy, minSignals])
+
+  if (loading) return <div className="py-10 text-center text-sm text-slate-500">Cargando ranking…</div>
+  if (!rows.length) return <div className="py-10 text-center text-sm text-slate-400">Sin datos suficientes. Necesitas al menos {minSignals} señales por símbolo.</div>
+
+  const SortHeader = ({ id, label, right = false }) => (
+    <th
+      onClick={() => setSortBy(id)}
+      className={cn(
+        'px-3 py-2 font-medium cursor-pointer select-none hover:text-slate-700 dark:hover:text-slate-200 transition-colors',
+        right ? 'text-right' : 'text-left',
+        sortBy === id ? 'text-blue-600 dark:text-blue-400' : 'text-slate-500 dark:text-slate-400'
+      )}
+    >
+      <span className="flex items-center gap-1" style={{ justifyContent: right ? 'flex-end' : 'flex-start' }}>
+        {label}
+        {sortBy === id && <ChevronDown size={12} className="shrink-0" />}
+      </span>
+    </th>
+  )
+
+  return (
+    <div className="space-y-5">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-sm font-bold text-slate-800 dark:text-slate-200">Ranking de Activos</h2>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Ordenado por rendimiento histórico. Usa el score medio como referencia para ajustar el bot.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-slate-500">Mín. señales:</span>
+          {[3, 5, 10, 20].map(n => (
+            <button key={n} onClick={() => setMinSignals(n)} className={cn(
+              'text-xs px-2 py-1 rounded border font-medium transition-colors',
+              minSignals === n
+                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-500/20 dark:border-blue-500/40 dark:text-blue-400'
+                : 'bg-white text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700',
+            )}>{n}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* Table */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs">
+            <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-200 dark:border-slate-700">
+              <tr>
+                <SortHeader id="ticker" label="Símbolo" />
+                <SortHeader id="total" label="Señales" right />
+                <SortHeader id="win_rate" label="Win Rate" right />
+                <SortHeader id="avg_score" label="Score Medio" right />
+                <SortHeader id="avg_pnl_pct" label="P&L Sim." right />
+                <SortHeader id="avg_bars" label="Bars Ø" right />
+                <th className="px-3 py-2 text-left font-medium text-slate-500 dark:text-slate-400">Óptimo</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {rows.map((r, i) => {
+                const wr = r.win_rate
+                const pnl = r.avg_pnl_pct
+                const tierStatus = r.best_tier && r.best_status ? `${r.best_tier} + ${r.best_status}` : r.best_tier || r.best_status || '—'
+                return (
+                  <tr key={r.ticker} className="hover:bg-slate-50 dark:hover:bg-slate-800/30">
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        <span className={cn(
+                          'w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0',
+                          i === 0 ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400' :
+                          i === 1 ? 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300' :
+                          i === 2 ? 'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400' :
+                          'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-500'
+                        )}>
+                          {i + 1}
+                        </span>
+                        <span className="font-bold text-slate-800 dark:text-slate-200">{baseOf(r.ticker)}</span>
+                        <span className="text-[10px] text-slate-400">USDT</span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">{r.total}</td>
+                    <td className="px-3 py-2 text-right">
+                      {wr != null ? (
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="w-12 h-1.5 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
+                            <div className={cn('h-full rounded-full', wr >= 55 ? 'bg-green-500' : wr >= 45 ? 'bg-yellow-500' : 'bg-red-500')} style={{ width: `${Math.min(100, wr)}%` }} />
+                          </div>
+                          <span className={cn('font-bold tabular-nums', wr >= 55 ? 'text-green-600 dark:text-green-400' : wr >= 45 ? 'text-yellow-600 dark:text-yellow-400' : 'text-red-500')}>
+                            {wr}%
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">{r.avg_score}</td>
+                    <td className="px-3 py-2 text-right">
+                      {pnl != null ? (
+                        <span className={cn('font-mono font-medium', pnl >= 0 ? 'text-green-600 dark:text-green-400' : 'text-red-500')}>
+                          {pnl >= 0 ? '+' : ''}{pnl}%
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-right font-mono text-slate-600 dark:text-slate-300">
+                      {r.avg_bars != null ? `${r.avg_bars}` : '—'}
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {r.best_direction && (
+                          <span className={cn(
+                            'text-[10px] font-bold px-1.5 py-0.5 rounded',
+                            r.best_direction === 'long'
+                              ? 'bg-green-100 text-green-700 dark:bg-green-500/20 dark:text-green-400'
+                              : 'bg-red-100 text-red-700 dark:bg-red-500/20 dark:text-red-400'
+                          )}>
+                            {r.best_direction.toUpperCase()}
+                          </span>
+                        )}
+                        {tierStatus !== '—' && (
+                          <span className="text-[10px] font-medium text-slate-600 dark:text-slate-300">
+                            {tierStatus}
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {rows.length === 0 && (
+          <div className="px-4 py-8 text-center text-xs text-slate-400 dark:text-slate-600">
+            Ningún símbolo cumple el filtro de {minSignals} señales mínimas.
+          </div>
+        )}
+      </div>
+
+      {/* Legend */}
+      <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg px-4 py-3 text-xs text-blue-700 dark:text-blue-300 space-y-1">
+        <p className="font-semibold">💡 Cómo usar este ranking</p>
+        <ul className="list-disc list-inside space-y-0.5 text-blue-600/80 dark:text-blue-400/80">
+          <li><strong>Score Medio:</strong> Usa este valor como referencia para el <em>min_score</em> de tu bot en ese par.</li>
+          <li><strong>Win Rate &gt;55% + P&L positivo:</strong> Candidato ideal para trading automático.</li>
+          <li><strong>Bars Ø:</strong> Tiempo promedio de resolución. Útil para ajustar el timeframe o la paciencia del bot.</li>
+          <li><strong>Óptimo:</strong> Dirección y combinación Tier+Status con mejor rendimiento histórico.</li>
+        </ul>
+      </div>
+    </div>
+  )
+}
+
 // ── Backtest Tab ──────────────────────────────────────────────────────────────
 
 function BacktestTab() {
   const [signals, setSignals] = useState([])
   const [loading, setLoading] = useState(true)
   const [filter,  setFilter]  = useState('ALL')
+  const [diagnosisSignal, setDiagnosisSignal] = useState(null)
+  const [comparisonData, setComparisonData] = useState(null)
+  const user = useAuthStore(s => s.user)
+  const isAdmin = user?.role === 'admin'
 
   useEffect(() => {
-    aiService.listSignals(200)
-      .then(r => setSignals(Array.isArray(r.data) ? r.data : []))
-      .catch(() => setSignals([]))
+    setLoading(true)
+    Promise.all([
+      aiService.listSignals(200)
+        .then(r => Array.isArray(r.data) ? r.data : [])
+        .catch(() => []),
+      aiService.backtestComparison()
+        .then(r => r.data)
+        .catch(() => null),
+    ])
+      .then(([sigData, compData]) => {
+        setSignals(sigData)
+        setComparisonData(compData)
+      })
+      .catch(() => {
+        setSignals([])
+        setComparisonData(null)
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -709,17 +2410,20 @@ function BacktestTab() {
     filter === 'ALL' ? signals : signals.filter(s => s.quality_tier === filter),
   [signals, filter])
 
-  const resolved = useMemo(() => filtered.filter(s => s.outcome !== 'PENDING'), [filtered])
+  const resolved = useMemo(() => filtered.filter(s => s.outcome !== 'PENDING' && s.outcome !== 'INVALID'), [filtered])
   const wins     = useMemo(() => resolved.filter(s => s.outcome === 'SUCCESS').length, [resolved])
   const winRate  = resolved.length > 0 ? Math.round(wins / resolved.length * 100) : null
 
   const pnlPoints = useMemo(() => {
     const sorted = [...filtered]
-      .filter(s => s.outcome !== 'PENDING' && s.outcome !== 'EXPIRED')
+      .filter(s => s.outcome !== 'PENDING' && s.outcome !== 'EXPIRED' && s.outcome !== 'INVALID')
       .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
     let cum = 0
     return sorted.map(s => {
-      const pnl = s.pnl_pct != null ? s.pnl_pct : (s.outcome === 'SUCCESS' ? 1.5 : -1.0)
+      // Prefer realistic P&L (models slippage/fees/gaps), fallback to ideal
+      const pnl = s.realistic_pnl_pct != null ? s.realistic_pnl_pct
+        : s.pnl_pct != null ? s.pnl_pct
+        : (s.outcome === 'SUCCESS' ? 1.5 : -1.0)
       cum += pnl
       return { cum }
     })
@@ -734,7 +2438,7 @@ function BacktestTab() {
 
   const byTier = useMemo(() => ['STRONG', 'MODERATE', 'WEAK'].map(tier => {
     const sub = signals.filter(s => s.quality_tier === tier)
-    const res = sub.filter(s => s.outcome !== 'PENDING')
+    const res = sub.filter(s => s.outcome !== 'PENDING' && s.outcome !== 'INVALID')
     const w   = res.filter(s => s.outcome === 'SUCCESS').length
     return { tier, total: sub.length, resolved: res.length, win_rate: res.length > 0 ? Math.round(w / res.length * 100) : null }
   }), [signals])
@@ -771,6 +2475,54 @@ function BacktestTab() {
           </div>
         ))}
       </div>
+
+      {/* Global comparison chart: Backtest vs Execution */}
+      {comparisonData?.signal_curve?.length > 0 && comparisonData?.trade_curve?.length > 0 && (
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4">
+          <h4 className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <TrendingUp size={14} className="text-violet-500" />
+            Backtest vs Ejecución (global)
+          </h4>
+          <ResponsiveContainer width="100%" height={240}>
+            <ComposedChart
+              data={comparisonData.signal_curve.map((d, i) => ({
+                date: d.date,
+                backtest: d.cumulative_pnl,
+                ideal: comparisonData.ideal_curve?.[i]?.cumulative_pnl ?? d.cumulative_pnl,
+                ejecucion: comparisonData.trade_curve[i]?.cumulative_pnl ?? 0,
+              }))}
+              margin={{ top: 4, right: 4, left: 4, bottom: 0 }}
+            >
+              <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+              <XAxis dataKey="date" tick={{ fontSize: 10 }} interval="preserveStartEnd" />
+              <YAxis
+                yAxisId="left"
+                tick={{ fontSize: 10 }}
+                tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
+                label={{ value: 'Backtest (%)', angle: -90, position: 'insideLeft', fontSize: 10, fill: '#3b82f6' }}
+              />
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                tick={{ fontSize: 10 }}
+                tickFormatter={v => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`}
+                label={{ value: 'Ejecución (USDT)', angle: 90, position: 'insideRight', fontSize: 10, fill: '#f59e0b' }}
+              />
+              <ReTooltip
+                contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                formatter={(value, name) => {
+                  const suffix = name === 'Backtest' || name === 'Ideal (referencia)' ? '%' : ' USDT'
+                  return [`${value >= 0 ? '+' : ''}${value?.toFixed(2)}${suffix}`, name]
+                }}
+              />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Area yAxisId="left" type="monotone" dataKey="backtest" name="Backtest" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.1} strokeWidth={2} />
+              <Area yAxisId="left" type="monotone" dataKey="ideal" name="Ideal (referencia)" stroke="#8b5cf6" fill="#8b5cf6" fillOpacity={0.1} strokeWidth={2} />
+              <Line yAxisId="right" type="monotone" dataKey="ejecucion" name="Ejecución" stroke="#f59e0b" strokeWidth={2} dot={false} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      )}
 
       {/* P&L curve */}
       {pnlPoints.length >= 2 ? (
@@ -823,7 +2575,7 @@ function BacktestTab() {
             <table className="w-full text-xs">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50">
-                  {['Fecha', 'Par', 'TF', 'Dir.', 'Score', 'ADX', 'Tier', 'HTF', 'Outcome', 'P&L'].map(h => (
+                  {['Fecha', 'Par', 'TF', 'Dir.', 'Score', 'ADX', 'Tier', 'HTF', 'Outcome', 'P&L', 'IA'].map(h => (
                     <th key={h} className={cn('px-3 py-2 text-slate-500 font-medium', h === 'Score' || h === 'ADX' || h === 'P&L' ? 'text-right' : 'text-left')}>{h}</th>
                   ))}
                 </tr>
@@ -887,6 +2639,17 @@ function BacktestTab() {
                       )}>
                         {pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%` : '—'}
                       </td>
+                      <td className="px-3 py-2 text-center">
+                        {(sig.anti_fake_status === 'BLOCK' || sig.anti_fake_status === 'CAUTION') && (
+                          <button
+                            onClick={() => setDiagnosisSignal(sig)}
+                            className="text-[10px] text-blue-500 hover:text-blue-400 font-medium transition-colors"
+                            title={isAdmin ? "Ver diagnóstico IA" : "Ver contexto del par"}
+                          >
+                            {isAdmin ? 'IA' : 'Ctx'}
+                          </button>
+                        )}
+                      </td>
                     </tr>
                   )
                 })}
@@ -904,6 +2667,13 @@ function BacktestTab() {
         <div className="text-center py-12 text-slate-400 dark:text-slate-600 text-sm">
           Sin señales registradas aún.
         </div>
+      )}
+
+      {diagnosisSignal && (
+        <SignalDiagnosisModal
+          signal={diagnosisSignal}
+          onClose={() => setDiagnosisSignal(null)}
+        />
       )}
     </div>
   )
@@ -1005,6 +2775,65 @@ function SymbolPicker({ watchlist, onAdd }) {
   )
 }
 
+// ── Laboratorio / Simulado tab ────────────────────────────────────────────────
+
+function LaboratorioTab({ stats }) {
+  const [sub, setSub] = useState('dashboard')
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-slate-600 dark:text-slate-300 bg-amber-50 dark:bg-amber-500/10 border border-amber-100 dark:border-amber-500/20 rounded-lg px-4 py-3 flex items-start gap-2">
+        <span className="text-amber-500">⚠️</span>
+        <p>
+          Esta sección muestra métricas <strong>teóricas y de backtest/simulación</strong>.
+          No representan trades reales ejecutados: sirven para auditar el motor,
+          comparar escenarios y validar el modelo, pero el rendimiento real está en
+          la pestaña <strong>Rendimiento real</strong>.
+        </p>
+      </div>
+
+      <div className="flex gap-0 border-b border-slate-200 dark:border-slate-800 -mb-1">
+        {[
+          { id: 'dashboard',  label: 'Dashboard',  icon: <Brain size={13} /> },
+          { id: 'ranking',    label: 'Ranking',    icon: <Trophy size={13} /> },
+          { id: 'backtest',   label: 'Backtest',   icon: <BarChart2 size={13} /> },
+          { id: 'validation', label: 'Validación', icon: <ShieldAlert size={13} /> },
+        ].map(t => (
+          <button
+            key={t.id}
+            onClick={() => setSub(t.id)}
+            className={cn(
+              'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
+              sub === t.id
+                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
+                : 'border-transparent text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-300',
+            )}
+          >
+            {t.icon} {t.label}
+          </button>
+        ))}
+      </div>
+
+      <StatsBar stats={stats} />
+
+      {sub === 'dashboard' && (
+        <Suspense fallback={
+          <div className="py-20 text-center">
+            <div className="animate-spin inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full" />
+            <p className="text-sm text-slate-400 mt-3">Cargando Dashboard IA…</p>
+          </div>
+        }>
+          <AIDashboardTab />
+        </Suspense>
+      )}
+
+      {sub === 'ranking'    && <RankingTab />}
+      {sub === 'backtest'   && <BacktestTab />}
+      {sub === 'validation' && <ValidationTab />}
+    </div>
+  )
+}
+
 // ── Stats Bar ─────────────────────────────────────────────────────────────────
 
 function StatsBar({ stats }) {
@@ -1021,12 +2850,17 @@ function StatsBar({ stats }) {
     <div className="space-y-2">
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {[
-          { label: 'Señales totales', value: stats.total ?? 0 },
-          { label: 'Win rate',        value: stats.win_rate != null ? `${stats.win_rate}%` : '—' },
-          { label: 'Score promedio',  value: stats.avg_score ?? '—' },
-          { label: 'Datos XGBoost',   value: stats.model_ready ? '✓ Listo' : `${stats.resolved ?? 0} / 200` },
+          { label: 'Señales totales (backtest)', value: stats.total ?? 0 },
+          { label: 'Win rate (backtest)',        value: stats.win_rate != null ? `${stats.win_rate}%` : '—' },
+          { label: 'Score promedio',             value: stats.avg_score ?? '—' },
+          { label: 'Datos Ensemble',             value: stats.model_ready ? '✓ Listo' : `${stats.resolved ?? 0} / 50` },
         ].map(({ label, value }) => (
-          <div key={label} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 text-center">
+          <div key={label} className={cn(
+            'bg-white dark:bg-slate-900 border rounded-lg p-3 text-center',
+            label.includes('backtest')
+              ? 'border-dashed border-slate-300 dark:border-slate-600'
+              : 'border-slate-200 dark:border-slate-700'
+          )}>
             <div className="text-xs text-slate-500 dark:text-slate-400 mb-1">{label}</div>
             <div className="text-lg font-bold text-slate-900 dark:text-slate-100">{value}</div>
           </div>
@@ -1093,7 +2927,7 @@ function XGBoostCard({ modelStatus, stats }) {
         {/* Header */}
         <div className="flex items-center gap-2">
           <Database size={15} className="text-violet-500 shrink-0" />
-          <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Anti-Fake XGBoost</span>
+          <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">Ensemble Híbrido</span>
           {modelStatus?.model_ready
             ? <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-500/20 px-1.5 py-0.5 rounded">ACTIVO</span>
             : modelStatus && <span className="text-[10px] text-slate-400">{modelStatus.progress_pct}% entrenado</span>
@@ -1106,7 +2940,7 @@ function XGBoostCard({ modelStatus, stats }) {
           <div className="mt-3">
             <div className="flex justify-between text-xs mb-1">
               <span className="text-slate-500 dark:text-slate-400">Señales resueltas</span>
-              <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">{modelStatus.resolved_signals} / 200</span>
+              <span className="font-mono font-semibold text-slate-600 dark:text-slate-300">{modelStatus.resolved_signals} / 50</span>
             </div>
             <div className="h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
               <div
@@ -1123,7 +2957,7 @@ function XGBoostCard({ modelStatus, stats }) {
 
             {/* What it does */}
             <div className="text-[11px] text-slate-500 dark:text-slate-400 space-y-1.5 leading-relaxed">
-              <p><strong className="text-slate-600 dark:text-slate-300">¿Qué hace?</strong> Analiza cada señal ICT/SMC y la puntúa con un modelo XGBoost entrenado con el historial de señales pasadas. Clasifica en:</p>
+              <p><strong className="text-slate-600 dark:text-slate-300">¿Qué hace?</strong> Analiza cada señal ICT/SMC con un ensemble de 3 modelos (XGBoost + RandomForest + LogisticRegression) + meta-learner LR. Clasifica en:</p>
               <div className="flex flex-wrap gap-2 pt-0.5">
                 {[
                   { label: 'CLEAR',   color: 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400', desc: 'alta probabilidad real' },
@@ -1142,8 +2976,8 @@ function XGBoostCard({ modelStatus, stats }) {
             {modelStatus?.model_ready && modelStatus.metrics && (
               <div className="grid grid-cols-3 gap-2">
                 {[
-                  { label: 'AUC-ROC', value: modelStatus.metrics.auc },
-                  { label: 'Accuracy', value: `${(modelStatus.metrics.accuracy * 100).toFixed(1)}%` },
+                  { label: 'AUC-ROC', value: modelStatus.metrics.ensemble_auc ?? modelStatus.metrics.oof_auc ?? modelStatus.metrics.auc ?? '—' },
+                  { label: 'Accuracy', value: (modelStatus.metrics.ensemble_accuracy ?? modelStatus.metrics.oof_accuracy ?? modelStatus.metrics.accuracy) != null ? `${((modelStatus.metrics.ensemble_accuracy ?? modelStatus.metrics.oof_accuracy ?? modelStatus.metrics.accuracy) * 100).toFixed(1)}%` : '—' },
                   { label: 'F1-Score', value: modelStatus.metrics.f1 ?? '—' },
                 ].map(({ label, value }) => (
                   <div key={label} className="text-center bg-violet-50 dark:bg-violet-500/10 rounded-lg p-2">
@@ -1157,7 +2991,7 @@ function XGBoostCard({ modelStatus, stats }) {
             {/* Win rate by confidence from stats */}
             {Object.keys(byConf).length > 0 && (
               <div>
-                <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">Win Rate por clasificación XGBoost</div>
+                <div className="text-xs font-semibold text-slate-600 dark:text-slate-400 mb-2">Win Rate por clasificación Ensemble</div>
                 <div className="space-y-2">
                   {[
                     { key: 'HIGH',   label: 'HIGH conf.',   color: 'bg-green-500' },
@@ -1274,7 +3108,7 @@ function BotActivatorCard({ aiBots, tickerStats }) {
           <p className="text-[11px] text-slate-400 dark:text-slate-500 leading-relaxed mt-2">
             Ningún bot configurado para auto-ejecutar señales IA.
             En <strong className="text-slate-500">Configuración de bot</strong> activa
-            {' '}<em>Modo señal IA</em> para que las señales STRONG+CLEAR disparen órdenes reales.
+            {' '}<em>Modo señal IA</em> para que las señales del scanner disparen órdenes reales.
           </p>
         ) : (
           <div className="mt-2 space-y-1">
@@ -1297,7 +3131,7 @@ function BotActivatorCard({ aiBots, tickerStats }) {
 
             {/* Cómo funciona */}
             <div className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed space-y-1">
-              <p><strong className="text-slate-600 dark:text-slate-300">¿Qué busca?</strong> Señales ICT/SMC con tier <strong>STRONG</strong> + XGBoost <strong>CLEAR</strong> + score ≥ min_score. La señal debe coincidir exactamente con el par configurado en el bot.</p>
+              <p><strong className="text-slate-600 dark:text-slate-300">¿Qué busca?</strong> Señales ICT/SMC cuyo tier y status estén dentro de los filtros configurados en el bot (por defecto STRONG+CLEAR) + score ≥ min_score. La señal debe coincidir exactamente con el par configurado en el bot.</p>
               <p><strong className="text-slate-600 dark:text-slate-300">Riesgo:</strong> SL automático en el precio calculado por el ICT engine · TP1 60% de qty · TP2 40% · Circuit breaker: 3 SL seguidos → pausa automática.</p>
               <p><strong className="text-slate-600 dark:text-slate-300">Importante:</strong> El par debe estar en tu watchlist para que el scanner lo analice. Sin watchlist → sin señales → bot nunca se activa.</p>
             </div>
@@ -1404,10 +3238,117 @@ function BotActivatorCard({ aiBots, tickerStats }) {
   )
 }
 
+// ── Macro Context Bar ─────────────────────────────────────────────────────────
+
+function MacroContextBar({ watchlist }) {
+  const [alerts, setAlerts] = useState([])
+  const [currentIndex, setCurrentIndex] = useState(0)
+
+  // Carga macro context de toda la watchlist y filtra solo alertas
+  useEffect(() => {
+    let cancelled = false
+    const load = async () => {
+      if (!watchlist?.length) return
+      const results = await Promise.allSettled(
+        watchlist.map(item =>
+          aiService.macroContext(item.symbol)
+            .then(r => ({ symbol: item.symbol, data: r.data }))
+            .catch(() => null)
+        )
+      )
+      if (cancelled) return
+      const newAlerts = results
+        .filter(r => r.status === 'fulfilled' && r.value && r.value.data)
+        .map(r => r.value)
+        .filter(({ data }) => {
+          const funding = data.funding || {}
+          const events = data.high_impact_soon || []
+          const rec = data.recommendation
+          return (
+            rec === 'avoid' ||
+            rec === 'caution' ||
+            funding.signal === 'extreme' ||
+            funding.signal === 'high' ||
+            events.length > 0
+          )
+        })
+      setAlerts(newAlerts)
+      setCurrentIndex(prev => (newAlerts.length ? 0 : prev))
+    }
+
+    load()
+    const interval = setInterval(load, 60000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [watchlist])
+
+  // Rotación automática tipo cartel cada 5 segundos
+  useEffect(() => {
+    if (alerts.length <= 1) return
+    const interval = setInterval(() => {
+      setCurrentIndex(prev => (prev + 1) % alerts.length)
+    }, 5000)
+    return () => clearInterval(interval)
+  }, [alerts.length])
+
+  if (alerts.length === 0) return null
+
+  const current = alerts[currentIndex]
+  const ctx = current.data
+  const funding = ctx.funding || {}
+  const events = ctx.high_impact_soon || []
+  const rec = ctx.recommendation
+
+  const borderColor = rec === 'avoid'
+    ? 'border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/10'
+    : rec === 'caution' || funding.signal === 'high' || events.length > 0
+    ? 'border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/10'
+    : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/30'
+
+  return (
+    <div className={`rounded-lg border px-4 py-2.5 text-xs ${borderColor}`}>
+      <div className="flex items-center gap-3 flex-wrap">
+        <Globe size={14} className={
+          rec === 'avoid' ? 'text-red-500' : 'text-amber-500'
+        } />
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-slate-700 dark:text-slate-200">Macro {current.symbol}</span>
+          {funding.annualized_pct != null && (
+            <span className={cn('font-mono',
+              funding.signal === 'extreme' ? 'text-red-600 dark:text-red-400 font-bold' :
+              funding.signal === 'high' ? 'text-amber-600 dark:text-amber-400' :
+              'text-slate-500 dark:text-slate-400'
+            )}>
+              Funding {funding.annualized_pct > 0 ? '+' : ''}{funding.annualized_pct}%/año
+            </span>
+          )}
+        </div>
+        {events.length > 0 && (
+          <div className="flex items-center gap-1.5 ml-auto">
+            <span className="text-amber-600 dark:text-amber-400 font-medium">⚠ Eventos próximos:</span>
+            {events.map(e => (
+              <span key={e.title} className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded px-1.5 py-0.5">
+                {e.title} ({e.minutes_until}min)
+              </span>
+            ))}
+          </div>
+        )}
+        {alerts.length > 1 && (
+          <span className="ml-auto text-[10px] text-slate-400 dark:text-slate-500 tabular-nums">
+            {currentIndex + 1}/{alerts.length}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AIPage() {
-  const [tab,              setTab]           = useState('scanner')
+  const [tab,              setTab]           = useState('operativa')
   const [watchlist,        setWatchlistRaw]  = useState(() => loadLS(WATCHLIST_KEY, DEFAULT_WATCHLIST))
   const [autoRefresh,      setAutoRefresh]   = useState(() => loadLS(AUTO_KEY, false))
   const [scanning,         setScanning]      = useState({})
@@ -1446,10 +3387,26 @@ export default function AIPage() {
     let cancelled = false
 
     async function bootstrap() {
-      const localWL = loadLS(WATCHLIST_KEY, DEFAULT_WATCHLIST)
-      aiService.syncWatchlist(localWL).catch(() => {})
+      // 1. Preferir watchlist del backend; solo usar localStorage como fallback
+      let watchlistItems = []
+      try {
+        const res = await aiService.getWatchlist()
+        if (res?.data && Array.isArray(res.data) && res.data.length > 0) {
+          watchlistItems = res.data.map(e => ({ symbol: e.symbol, timeframe: e.timeframe }))
+          saveLS(WATCHLIST_KEY, watchlistItems)
+        }
+      } catch {}
 
-      const syms = localWL.map(e => e.symbol)
+      // Si backend vacío o falló, usar localStorage / default
+      if (watchlistItems.length === 0) {
+        watchlistItems = loadLS(WATCHLIST_KEY, DEFAULT_WATCHLIST)
+        // Sync al backend para que la próxima vez esté persistido
+        aiService.syncWatchlist(watchlistItems).catch(() => {})
+      }
+
+      if (!cancelled) setWatchlistRaw(watchlistItems)
+
+      const syms = watchlistItems.map(e => e.symbol)
       if (syms.length > 0) {
         try {
           const scanRes = await aiService.latestScans(syms)
@@ -1460,7 +3417,7 @@ export default function AIPage() {
               newResults[sym] = {
                 ...d,
                 symbol:    sym,
-                timeframe: d.timeframe ?? localWL.find(e => e.symbol === sym)?.timeframe ?? '1h',
+                timeframe: d.timeframe ?? watchlistItems.find(e => e.symbol === sym)?.timeframe ?? '1h',
                 scannedAt: d.scanned_at ? new Date(d.scanned_at) : null,
               }
             })
@@ -1524,8 +3481,27 @@ export default function AIPage() {
     if (!watchlist.length) return
     setScanning(Object.fromEntries(watchlist.map(e => [e.symbol, true])))
     let signalCount = 0
-    await Promise.all(
-      watchlist.map(({ symbol, timeframe }) =>
+
+    // Limit concurrent scans to avoid overwhelming the backend / exchange rate limits
+    const asyncPool = async (poolLimit, array, iteratorFn) => {
+      const ret = []
+      const executing = []
+      for (const item of array) {
+        const p = Promise.resolve().then(() => iteratorFn(item))
+        ret.push(p)
+        if (array.length >= poolLimit) {
+          const e = p.then(() => executing.splice(executing.indexOf(e), 1))
+          executing.push(e)
+          if (executing.length >= poolLimit) await Promise.race(executing)
+        }
+      }
+      return Promise.all(ret)
+    }
+
+    await asyncPool(
+      4,
+      watchlist,
+      ({ symbol, timeframe }) =>
         aiService.analyze(symbol, timeframe)
           .then(res => {
             const data = res.data ?? {}
@@ -1538,7 +3514,6 @@ export default function AIPage() {
           .finally(() => {
             setScanning(s => { const n = { ...s }; delete n[symbol]; return n })
           })
-      )
     )
     const now = new Date()
     setLastScan(now)
@@ -1615,6 +3590,9 @@ export default function AIPage() {
             cualquier caja para ver el gráfico con overlays ICT+SMC y el historial de señales.
           </p>
         </div>
+        <div className="ml-auto">
+          <SymbolPicker watchlist={watchlist} onAdd={addSymbol} />
+        </div>
         {lastScan && (
           <span className="text-xs text-slate-400 dark:text-slate-500 shrink-0 self-start pt-1">
             Último: {lastScan.toLocaleTimeString()}
@@ -1622,13 +3600,13 @@ export default function AIPage() {
         )}
       </div>
 
-      {/* Tab toggle */}
+      {/* Main tab toggle */}
       <div className="flex gap-0 border-b border-slate-200 dark:border-slate-800 -mb-1">
         {[
-          { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
-          { id: 'scanner',  label: 'Scanner',  icon: <ScanLine size={13} /> },
-          { id: 'backtest', label: 'Backtest', icon: <BarChart2 size={13} /> },
-          { id: 'control',  label: 'Control',  icon: <Gauge size={13} /> },
+          { id: 'operativa',   label: 'Operativa',            icon: <Zap size={13} /> },
+          { id: 'real',        label: 'Rendimiento real',     icon: <TrendingUp size={13} /> },
+          { id: 'laboratorio', label: 'Laboratorio / Simulado', icon: <BarChart2 size={13} /> },
+          { id: 'control',     label: 'Control del motor',    icon: <SlidersHorizontal size={13} /> },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={cn(
             'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
@@ -1641,174 +3619,50 @@ export default function AIPage() {
         ))}
       </div>
 
-      {/* Global stats */}
-      <StatsBar stats={stats} />
+      {tab === 'laboratorio' && <LaboratorioTab stats={stats} />}
 
-      {tab === 'dashboard' && <AIDashboardTab />}
+      {tab === 'real'       && <RealPerformanceTab />}
 
-      {tab === 'backtest' && <BacktestTab />}
-
-      {tab === 'control' && <AIEngineControlTab />}
-
-      {tab === 'scanner' && (<>
-      {/* Toolbar */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <button
-          onClick={() => scanAll('manual')}
-          disabled={isAnyScanning || !watchlist.length}
-          className="btn-primary flex items-center gap-2 text-sm"
-        >
-          {isAnyScanning
-            ? <><RefreshCw size={14} className="animate-spin" />Escaneando…</>
-            : <><ScanLine size={14} />Escanear todo ({watchlist.length})</>}
-        </button>
-
-        <button
-          onClick={() => setAutoRefresh(v => !v)}
-          title="Repite el scan automáticamente cada 5 minutos"
-          className={cn(
-            'flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors',
-            autoRefresh
-              ? 'bg-blue-100 border-blue-300 text-blue-700 dark:bg-blue-600/20 dark:border-blue-500/40 dark:text-blue-400'
-              : 'bg-slate-100 border-slate-300 text-slate-600 hover:bg-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400 dark:hover:bg-slate-700',
-          )}
-        >
-          <Clock size={13} />
-          Auto-scan {autoRefresh ? 'ON · 5 min' : 'OFF'}
-        </button>
-
-        <div className="ml-auto">
-          <SymbolPicker watchlist={watchlist} onAdd={addSymbol} />
-        </div>
-      </div>
-
-      {/* Auto-scan status bar */}
-      {autoRefresh && (
-        <div className={cn(
-          'flex items-center gap-4 px-4 py-2.5 rounded-lg border text-xs flex-wrap',
-          isAnyScanning
-            ? 'bg-blue-50 border-blue-200 dark:bg-blue-500/10 dark:border-blue-500/30'
-            : 'bg-slate-50 border-slate-200 dark:bg-slate-800/50 dark:border-slate-700',
-        )}>
-          <div className="flex items-center gap-2">
-            <span className={cn(
-              'w-2 h-2 rounded-full shrink-0',
-              isAnyScanning ? 'bg-blue-500 animate-ping' : 'bg-green-500 animate-pulse',
-            )} />
-            <span className={cn(
-              'font-semibold',
-              isAnyScanning ? 'text-blue-700 dark:text-blue-400' : 'text-slate-700 dark:text-slate-300',
-            )}>
-              {isAnyScanning ? 'Escaneando mercado…' : 'Auto-scan activo'}
-            </span>
+      {tab === 'control' && (
+        <Suspense fallback={
+          <div className="py-20 text-center">
+            <div className="animate-spin inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full" />
+            <p className="text-sm text-slate-400 mt-3">Cargando Control del Motor IA…</p>
           </div>
-          {!isAnyScanning && countdown !== null && (
-            <span className="text-slate-500 dark:text-slate-400">
-              Próximo en{' '}
-              <strong className="text-slate-700 dark:text-slate-200 tabular-nums">
-                {Math.floor(countdown / 60)}:{String(countdown % 60).padStart(2, '0')}
-              </strong>
-            </span>
-          )}
-          {lastScan && !isAnyScanning && (
-            <span className="text-slate-400 dark:text-slate-500">Último: {lastScan.toLocaleTimeString()}</span>
-          )}
-          {!isAnyScanning && countdown !== null && (
-            <div className="flex-1 min-w-16 max-w-32 ml-auto">
-              <div className="h-1 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-blue-400 dark:bg-blue-500 rounded-full transition-all duration-1000"
-                  style={{ width: `${((AUTO_INTERVAL / 1000 - countdown) / (AUTO_INTERVAL / 1000)) * 100}%` }}
-                />
-              </div>
-            </div>
-          )}
-        </div>
+        }>
+          <AIEngineControlTab />
+        </Suspense>
       )}
 
-      {/* Symbol grid */}
-      {loadingPersisted ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {watchlist.map(entry => (
-            <div key={entry.symbol} className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-3 space-y-2 animate-pulse">
-              <div className="flex items-center gap-2">
-                <div className="h-4 w-12 bg-slate-200 dark:bg-slate-700 rounded" />
-                <div className="h-3 w-8 bg-slate-100 dark:bg-slate-800 rounded ml-auto" />
-              </div>
-              <div className="h-3 w-full bg-slate-100 dark:bg-slate-800 rounded" />
-              <div className="h-3 w-3/4 bg-slate-100 dark:bg-slate-800 rounded" />
-            </div>
-          ))}
-        </div>
-      ) : watchlist.length === 0 ? (
-        <div className="text-center py-16 text-slate-400 dark:text-slate-600">
-          <ScanLine size={32} className="mx-auto mb-3 opacity-30" />
-          <p className="text-sm">Usa <strong className="text-slate-500 dark:text-slate-500">Añadir par</strong> para construir tu watchlist</p>
-          <p className="text-xs mt-1">Máximo 15 pares simultáneos</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-          {watchlist.map(entry => (
-            <SlotCard
-              key={entry.symbol}
-              entry={entry}
-              result={results[entry.symbol]}
-              scanning={!!scanning[entry.symbol]}
-              tickerStats={tickerStats[entry.symbol] ?? null}
-              aiBotNames={aiBotsBySymbol[entry.symbol] ?? null}
-              onRemove={removeSymbol}
-              onChangeTimeframe={changeTimeframe}
-              onScanOne={scanOne}
-              onSelect={(sym, tf) => setSelected({ symbol: sym, timeframe: tf })}
-            />
-          ))}
-        </div>
+      {tab === 'operativa' && (
+        <IAMissionControlTab
+          watchlist={watchlist}
+          results={results}
+          scanning={scanning}
+          tickerStats={tickerStats}
+          aiBots={aiBots}
+          selected={selected}
+          autoRefresh={autoRefresh}
+          lastScan={lastScan}
+          countdown={countdown}
+          isAnyScanning={isAnyScanning}
+          onSelect={(sym, tf) => setSelected({ symbol: sym, timeframe: tf })}
+          onRemove={removeSymbol}
+          onChangeTimeframe={changeTimeframe}
+          onScanOne={scanOne}
+          onScanAll={() => scanAll('manual')}
+          onToggleAutoRefresh={() => setAutoRefresh((v) => !v)}
+        />
       )}
 
-      {/* Scan activity log */}
-      {scanLog.length > 0 && (
-        <div className="border-t border-slate-200 dark:border-slate-800 pt-4">
-          <div className="text-xs font-semibold text-slate-400 dark:text-slate-500 mb-2 uppercase tracking-wide">
-            Actividad del scanner
-          </div>
-          <div className="space-y-1">
-            {scanLog.map((entry, i) => (
-              <div key={i} className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-500">
-                <span className="tabular-nums text-slate-400 dark:text-slate-600 w-16 shrink-0">
-                  {entry.time.toLocaleTimeString()}
-                </span>
-                <span className={cn(
-                  'px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0',
-                  entry.type === 'auto'
-                    ? 'bg-blue-100 text-blue-600 dark:bg-blue-500/20 dark:text-blue-400'
-                    : 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-400',
-                )}>
-                  {entry.type === 'auto' ? 'AUTO' : 'MANUAL'}
-                </span>
-                <span>{entry.symbols} par{entry.symbols !== 1 ? 'es' : ''} analizados</span>
-                {entry.signals > 0
-                  ? <span className="text-yellow-600 dark:text-yellow-400 font-semibold">
-                      {entry.signals} señal{entry.signals !== 1 ? 'es' : ''} detectada{entry.signals !== 1 ? 's' : ''}
-                    </span>
-                  : <span className="text-slate-400 dark:text-slate-600">sin señales</span>
-                }
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
-      {/* XGBoost + Bot Activator */}
-      <XGBoostCard modelStatus={modelStatus} stats={stats} />
-      <BotActivatorCard aiBots={aiBots} tickerStats={tickerStats} />
-      </>)}
-
-      {/* Symbol detail modal */}
+      {/* Symbol detail panel */}
       {selected && (
-        <SymbolModal
+        <SymbolDetailPanel
           symbol={selected.symbol}
           timeframe={selected.timeframe}
           onClose={() => setSelected(null)}
+          aiBots={aiBots}
         />
       )}
     </div>

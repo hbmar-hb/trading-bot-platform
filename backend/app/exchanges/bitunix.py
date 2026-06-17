@@ -31,11 +31,11 @@ class BitunixExchange(BaseExchange):
 
     def _generate_nonce(self) -> str:
         """
-        Genera nonce de 32 bits (4 bytes = 8 caracteres hex).
-        Documentación: "cadena aleatoria de exactamente 32 bits"
+        Genera nonce de 32 caracteres hexadecimales.
+        Documentación oficial: "random string, 32-bit" se refiere a 32 chars hex.
+        Código PHP de referencia: bin2hex(random_bytes(16)) → 32 chars hex.
         """
-        # 32 bits = 4 bytes = 8 caracteres hexadecimales
-        return secrets.token_hex(4)  # 4 bytes = 8 chars hex
+        return secrets.token_hex(16)  # 16 bytes = 32 chars hex
 
     def _sign(self, nonce: str, timestamp: str, query_params: str, body: str) -> str:
         """
@@ -55,21 +55,24 @@ class BitunixExchange(BaseExchange):
         """Realiza petición autenticada."""
         from loguru import logger
         
-        # Generar nonce (8 chars hex = 32 bits) y timestamp
+        # Generar nonce (32 chars hex) y timestamp
         nonce = self._generate_nonce()
         timestamp = str(int(time.time() * 1000))
         
-        # Preparar query params ordenados alfabéticamente
-        query_params = ""
+        # Preparar query params para la PETICIÓN HTTP (key=value&key2=value2)
+        # y query params para la FIRMA (keyvaluekey2value2 sin separadores)
+        # Según documentación PHP de referencia:
+        #   $queryParamsString .= $key . $value;
+        query_params_sign = ""
         if params:
             sorted_params = sorted(params.items())
-            query_params = "&".join([f"{k}={v}" for k, v in sorted_params])
+            query_params_sign = "".join([f"{k}{v}" for k, v in sorted_params])
         
-        # Preparar body (JSON sin espacios)
-        body_str = json.dumps(body, separators=(",", ":")) if body else ""
+        # Preparar body (JSON sin espacios, keys ordenadas alfabéticamente)
+        body_str = json.dumps(body, separators=(",", ":"), sort_keys=True) if body else ""
         
         # Generar firma
-        signature = self._sign(nonce, timestamp, query_params, body_str)
+        signature = self._sign(nonce, timestamp, query_params_sign, body_str)
         
         # Headers
         headers = {
@@ -82,9 +85,9 @@ class BitunixExchange(BaseExchange):
         
         logger.info("=" * 60)
         logger.info(f"[BITUNIX] {method} {path}")
-        logger.info(f"[BITUNIX] Nonce (8 chars): {nonce}")
+        logger.info(f"[BITUNIX] Nonce (32 chars): {nonce}")
         logger.info(f"[BITUNIX] Timestamp: {timestamp}")
-        logger.info(f"[BITUNIX] Query params: '{query_params}'")
+        logger.info(f"[BITUNIX] Query params sign: '{query_params_sign}'")
         logger.info(f"[BITUNIX] Body: '{body_str[:100]}'")
         logger.info(f"[BITUNIX] Sign: {signature[:50]}...")
         
@@ -112,11 +115,11 @@ class BitunixExchange(BaseExchange):
         from loguru import logger
         
         logger.info("=" * 70)
-        logger.info("BITUNIX VERIFICATION - NONCE 32 BITS (8 chars)")
+        logger.info("BITUNIX VERIFICATION - NONCE 32 CHARS HEX")
         logger.info("=" * 70)
         
         tests = [
-            ("GET", "api/v1/futures/account", None, None),
+            ("GET", "api/v1/futures/account", {"marginCoin": "USDT"}, None),
             ("POST", "api/v1/futures/account/change_margin_mode", None, {"symbol": "BTCUSDT", "marginMode": "ISOLATED", "marginCoin": "USDT"}),
         ]
         
@@ -156,7 +159,7 @@ class BitunixExchange(BaseExchange):
         return (time_module.monotonic() - start) * 1000
 
     async def get_equity(self) -> BalanceInfo:
-        result = await self._request("GET", "api/v1/futures/account")
+        result = await self._request("GET", "api/v1/futures/account", params={"marginCoin": "USDT"})
         data = result.get("data", {})
         if isinstance(data, list) and data:
             data = data[0]
@@ -265,6 +268,7 @@ class BitunixExchange(BaseExchange):
                 side = "long" if qty > 0 else "short"
                 qty = abs(qty)
             
+            leverage_raw = p.get("leverage")
             result_list.append(OpenPosition(
                 symbol=p.get("symbol", ""),
                 side=side,
@@ -272,9 +276,85 @@ class BitunixExchange(BaseExchange):
                 quantity=qty,
                 unrealized_pnl=Decimal(str(p.get("unrealizedPnL", 0))),
                 exchange_position_id=str(p.get("positionId", "")),
+                leverage=int(leverage_raw) if leverage_raw else None,
             ))
         
         return result_list
+
+    async def get_trade_history(self, symbol=None, limit=100, since=None, extra_symbols=None) -> list[dict]:
+        """
+        Obtiene historial de trades/posiciones cerradas desde Bitunix.
+        Bitunix no tiene un endpoint de 'trade history' tradicional; usamos
+        el historial de posiciones cerradas (get_history_positions).
+        """
+        from loguru import logger
+        from decimal import Decimal
+
+        trades = []
+        try:
+            result = await self._request("GET", "api/v1/futures/position/get_history_positions")
+            positions = result.get("data", {}).get("positionList", [])
+            if not positions:
+                return []
+
+            for p in positions:
+                trade_id = str(p.get("positionId", ""))
+                if not trade_id:
+                    continue
+
+                # Timestamp de cierre (mtime) o apertura (ctime) si no hay mtime
+                ts = p.get("mtime") or p.get("ctime") or 0
+                if since and ts and int(ts) < since:
+                    continue
+
+                # Normalizar símbolo: HUMAUSDT → HUMA/USDT:USDT
+                sym = p.get("symbol", "")
+                if "/" not in sym and sym.endswith("USDT"):
+                    sym = f"{sym[:-4]}/USDT:USDT"
+                elif "/" not in sym and sym.endswith("USD"):
+                    sym = f"{sym[:-3]}/USD:USD"
+
+                # Side: SELL → short, BUY → long
+                side_raw = p.get("side", "").upper()
+                side = "short" if side_raw == "SELL" else "long"
+
+                # Fee total = fee + abs(funding)
+                fee = Decimal(str(p.get("fee") or 0))
+                funding = Decimal(str(p.get("funding") or 0))
+                total_fee = fee + abs(funding)
+
+                # PnL
+                pnl = p.get("realizedPNL")
+                if pnl is not None:
+                    try:
+                        pnl = Decimal(str(pnl))
+                    except Exception:
+                        pnl = None
+
+                trades.append({
+                    "id": trade_id,
+                    "symbol": sym,
+                    "side": side,
+                    "quantity": Decimal(str(p.get("qty") or 0)),
+                    "price": Decimal(str(p.get("closePrice") or p.get("entryPrice") or 0)),
+                    "pnl": pnl,
+                    "fee": total_fee,
+                    "fee_asset": "USDT",
+                    "timestamp": int(ts),
+                    "order_type": "market",
+                    "raw": p,
+                })
+
+            logger.info(f"[BITUNIX] {len(trades)} trades de historial obtenidos")
+
+        except Exception as e:
+            logger.warning(f"[BITUNIX] get_trade_history error: {e}")
+
+        return sorted(trades, key=lambda x: x.get("timestamp", 0), reverse=True)[:limit]
+
+    async def get_open_orders(self) -> list[dict]:
+        """Lista órdenes limit abiertas. Bitunix no expone este endpoint directamente."""
+        return []
 
     async def close(self) -> None:
         await self._client.aclose()

@@ -68,7 +68,7 @@ def _get_exchange_for_bot(db: Session, bot: BotConfig) -> BaseExchange:
             raise ValueError(f"PaperBalance {bot.paper_balance_id} no encontrado")
         
         logger.info(f"[ENGINE] Usando PAPER TRADING para bot {bot.id} - {paper_balance.label}")
-        return create_paper_exchange(paper_balance)
+        return create_paper_exchange(paper_balance, bot_id=str(bot.id))
     else:
         # Exchange real
         if not bot.exchange_account:
@@ -107,10 +107,19 @@ def execute_signal(
 
 def _arun(coro):
     """
-    Ejecuta una corrutina en un loop nuevo y la cierra inmediatamente.
-    No reutiliza ninguna conexión del proceso padre — seguro con fork.
+    Ejecuta una corrutina en el event loop del thread.
+    Reutiliza el loop existente para mantener vivas las sesiones aiohttp
+    de ccxt.async_support. El loop se cierra cuando el thread de Celery muere.
     """
-    return asyncio.run(coro)
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 # ─── Lógica principal ─────────────────────────────────────────
@@ -144,6 +153,11 @@ def _process(
     logger.info(f"[ENGINE] Signal source: {raw_payload.get('source', 'webhook')}, "
                 f"action: {action}, is_manual_limit: {is_manual_limit}")
 
+    # Determinar source de la señal
+    signal_source = raw_payload.get("source", "webhook")
+    if is_manual_limit:
+        signal_source = "manual"
+    
     if action in ("long", "short"):
         # Validación post-delay: si el bot tiene confirmación configurada y la señal
         # trajo precio de referencia, verificar que el precio actual confirma la dirección
@@ -177,7 +191,7 @@ def _process(
             except Exception as e:
                 logger.warning(f"[ENGINE] No se pudo verificar precio de confirmación: {e}, ejecutando igualmente")
 
-        _open_position(db, bot, signal_id, action, effective_price)
+        _open_position(db, bot, signal_id, action, effective_price, source=signal_source)
     elif action == "close":
         _close_position(db, bot, signal_id)
     else:
@@ -190,67 +204,68 @@ def _open_position(
     signal_id: uuid.UUID,
     side: str,
     price: float | None,
+    source: str = "webhook",
 ) -> None:
-    # Determinar el exchange para verificar conflictos
-    account_id_for_conflict = bot.exchange_account_id or f"paper_{bot.paper_balance_id}"
+    """
+    Abre una posición aplicando el sistema de conflictos v2.
     
-    # Verificar conflictos con otros bots (síncrono con psycopg2)
-    conflict = db.query(BotConfig).filter(
-        BotConfig.symbol == bot.symbol,
-        BotConfig.exchange_account_id == bot.exchange_account_id,
-        BotConfig.status == "active",
-        BotConfig.id != bot.id,
-    ).first()
-    if conflict:
-        msg = f"Conflicto: bot '{conflict.bot_name}' ya opera {bot.symbol} en esta cuenta"
-        logger.warning(msg)
-        _log_event(db, bot.id, "conflict_rejected", msg)
-        raise _BusinessError(msg)
+    Args:
+        source: Fuente de la señal — "webhook" | "indicator" | "manual"
+    """
+    # Normalizar source a los valores guardados en Position
+    position_source = {
+        "webhook": "bot_ext",
+        "indicator": "bot_int",
+        "manual": "app_manual",
+    }.get(source, source)
+    from app.core.conflict_resolver import get_conflicting_positions, resolve_conflict
 
-    # Verificar si hay posición abierta del LADO OPUESTO
-    opposite_side = "short" if side == "long" else "long"
-    opposite_pos = db.query(Position).filter(
+    # 0. Cerrar posición contraria del PROPIO bot si existe
+    own_opposite = db.query(Position).filter(
+        Position.bot_id == bot.id,
         Position.symbol == bot.symbol,
         Position.status == "open",
-        Position.bot_id == bot.id,
-        Position.side == opposite_side,
+        Position.side != side,
     ).first()
+
+    if own_opposite:
+        logger.info(
+            f"[ENGINE] Cerrando posición contraria {own_opposite.side} "
+            f"del propio bot {bot.bot_name} para abrir {side}"
+        )
+        # No pasar signal_id para no marcar la señal nueva como procesada antes de abrir
+        _close_position(db, bot, None, position_to_close=own_opposite)
+        db.commit()
+
+    # 1. Resolver conflictos con otras posiciones
+    conflicting = get_conflicting_positions(db, bot)
+    result = resolve_conflict(db, bot, side, source, conflicting)
+
+    if result["action"] == "reject":
+        msg = result["reason"]
+        logger.warning(f"[ENGINE] {msg}")
+        _log_event(db, bot.id, "conflict_rejected", msg)
+        # Notificar Telegram
+        from app.models.user import User
+        user = db.query(User).filter(User.id == bot.user_id).first()
+        if user and user.telegram_chat_id:
+            notif = _get_notification_tasks()
+            notif.trade_rejected.delay(
+                bot_name=bot.bot_name,
+                symbol=bot.symbol,
+                side=side,
+                reason=msg,
+                chat_id=user.telegram_chat_id,
+            )
+        raise _BusinessError(msg)
     
-    if opposite_pos:
-        # Calcular PnL no realizado para decidir si hacer flip
-        if price:
-            current_price = Decimal(str(price))
-        else:
-            async def _get_price():
-                exchange = _get_exchange_for_bot(db, bot)
-                try:
-                    return await exchange.get_price(bot.symbol)
-                finally:
-                    await exchange.close()
-            current_price = _arun(_get_price())
-        entry = opposite_pos.entry_price
-        qty = opposite_pos.quantity
-        
-        if opposite_pos.side == "long":
-            unrealized_pnl = (current_price - entry) * qty
-        else:
-            unrealized_pnl = (entry - current_price) * qty
-        
-        logger.info(f"[ENGINE] Posición {opposite_side} abierta con PnL: {unrealized_pnl:.2f} USDT")
-        
-        # Solo hacer flip si está en PÉRDIDA (PnL negativo)
-        if unrealized_pnl < 0:
-            logger.info(f"[ENGINE] PnL negativo, cerrando {opposite_side} y abriendo {side}")
-            _close_position(db, bot, signal_id, position_to_close=opposite_pos)
-            db.commit()
-        else:
-            # Posición en profit, ignorar señal opuesta (dejar correr)
-            msg = f"Posición {opposite_side} en profit ({unrealized_pnl:.2f} USDT), ignorando señal de {side}"
-            logger.warning(f"[ENGINE] {msg}")
-            _log_event(db, bot.id, "signal_ignored_profit", msg)
-            raise _BusinessError(msg)
+    # 2. Cerrar posiciones contrarias si la config lo indica
+    for pos_to_close in result.get("close_positions", []):
+        logger.info(f"[ENGINE] Cerrando posición {pos_to_close.side} de {pos_to_close.bot_id} para abrir {side}")
+        _close_position(db, bot, signal_id, position_to_close=pos_to_close)
+        db.commit()
     
-    # Verificar si hay posición del MISMO lado abierta (después de cerrar la opuesta)
+    # 3. Verificar si hay posición del MISMO lado en ESTE bot (después de cerrar contrarias)
     same_side_pos = db.query(Position).filter(
         Position.symbol == bot.symbol,
         Position.status == "open",
@@ -280,11 +295,21 @@ def _open_position(
             )
             logger.info(f"[ENGINE] Calculated quantity: {quantity}")
             
-            # Validar cantidad mínima
             if quantity <= Decimal("0"):
-                raise ValueError(f"Cantidad calculada es 0 o negativa: {quantity}. Verifica el sizing y el balance.")
+                raise ValueError(
+                    f"Cantidad calculada es 0 o negativa: {quantity:.3f}. "
+                    f"Bot={bot.bot_name}, equity={balance.total_equity} USDT, "
+                    f"sizing={bot.position_sizing_type}/{bot.position_value}, leverage={bot.leverage}x. "
+                    f"Aumenta el balance, el % de sizing o el apalancamiento."
+                )
             
-            await exchange.set_leverage(bot.symbol, bot.leverage, side)
+            try:
+                await exchange.set_leverage(bot.symbol, bot.leverage, side)
+            except Exception as lev_exc:
+                logger.warning(
+                    f"[ENGINE] {bot.bot_name} set_leverage({bot.leverage}x) failed: {lev_exc}. "
+                    f"Continuing with exchange's current leverage."
+                )
 
             # Si se proporcionó un precio, usarlo (orden limit)
             entry_price_arg = Decimal(str(price)) if price else None
@@ -294,6 +319,21 @@ def _open_position(
                 order = await exchange.open_long(bot.symbol, quantity, entry_price_arg)
             else:
                 order = await exchange.open_short(bot.symbol, quantity, entry_price_arg)
+
+            # Verify real leverage after open (critical for risk calculations)
+            try:
+                live_positions = await exchange.get_open_positions()
+                live_pos = next(
+                    (p for p in live_positions if p.symbol == bot.symbol and p.side == side),
+                    None,
+                )
+                if live_pos and live_pos.leverage and live_pos.leverage != bot.leverage:
+                    logger.warning(
+                        f"[ENGINE] {bot.bot_name} leverage MISMATCH: expected={bot.leverage}x, "
+                        f"exchange={live_pos.leverage}x. Risk calculations will use expected value."
+                    )
+            except Exception as lev_verify_exc:
+                logger.debug(f"[ENGINE] Could not verify real leverage after open: {lev_verify_exc}")
 
             is_limit = entry_price_arg is not None
             if is_limit:
@@ -343,6 +383,7 @@ def _open_position(
         current_tp_prices=tp_records,
         exchange_order_id=order.order_id,
         exchange_sl_order_id=sl_order_id,
+        source=position_source,
         status=position_status,
         opened_at=datetime.now(timezone.utc),
     )
@@ -383,15 +424,26 @@ def _open_position(
             sl=float(sl_price) if sl_price else 0.0,
             chat_id=user.telegram_chat_id,
             is_limit=is_limit_order,
+            source=position_source,
+            timeframe=bot.timeframe,
         )
 
 
-def _close_position(
+def close_position_for_bot(
     db: Session,
     bot: BotConfig,
-    signal_id: uuid.UUID,
+    signal_id: uuid.UUID | None = None,
     position_to_close: Position | None = None,
-) -> None:
+) -> Position:
+    """
+    Cierra la posición abierta de un bot.
+    
+    Si se pasa position_to_close, cierra esa posición específica.
+    Si no, busca la posición abierta del bot.
+    
+    Puede ser llamado desde engine (procesamiento de señal) o desde
+    bot_activator (cuando IA cierra una posición de señal).
+    """
     # Si se pasa una posición específica, usarla; si no, buscar la del bot
     position = position_to_close or db.query(Position).filter(
         Position.bot_id == bot.id,
@@ -404,8 +456,20 @@ def _close_position(
     async def _do_close():
         exchange = _get_exchange_for_bot(db, bot)
         try:
+            # Cancelar SL
             if position.exchange_sl_order_id:
-                await exchange.cancel_order(bot.symbol, position.exchange_sl_order_id)
+                try:
+                    await exchange.cancel_order(bot.symbol, position.exchange_sl_order_id)
+                except Exception as exc:
+                    logger.warning(f"[ENGINE] Error cancelando SL al cerrar: {exc}")
+            # Cancelar TP orders (OCO soft)
+            for tp in position.current_tp_prices or []:
+                tp_order_id = tp.get("order_id")
+                if tp_order_id:
+                    try:
+                        await exchange.cancel_order(bot.symbol, str(tp_order_id))
+                    except Exception as exc:
+                        logger.warning(f"[ENGINE] Error cancelando TP al cerrar: {exc}")
             return await exchange.close_position(bot.symbol, position.side, position.quantity)
         finally:
             await exchange.close()
@@ -421,9 +485,10 @@ def _close_position(
     )
     
     mode_str = "[PAPER] " if bot.is_paper_trading else ""
-    _mark_signal_processed(db, signal_id)
+    if signal_id:
+        _mark_signal_processed(db, signal_id)
     _log_event(db, bot.id, "order_closed",
-        f"Cerrado {bot.symbol} @ {order.fill_price} | PnL={position.realized_pnl:.2f} USDT",
+        f"{mode_str}Cerrado {bot.symbol} @ {order.fill_price} | PnL={position.realized_pnl:.2f} USDT",
         metadata={"close_price": float(order.fill_price)}
     )
     db.commit()
@@ -443,6 +508,12 @@ def _close_position(
             side=position.side,
             pnl=float(position.realized_pnl),
             chat_id=user.telegram_chat_id,
+            source=position.source,
+            entry_price=float(position.entry_price) if position.entry_price else None,
+            exit_price=float(order.fill_price) if order and order.fill_price else None,
+            quantity=float(position.quantity) if position.quantity else None,
+            leverage=int(position.leverage) if position.leverage else None,
+            timeframe=bot.timeframe,
         )
 
     # Disparar auto-optimización si el bot lo tiene habilitado
@@ -453,6 +524,26 @@ def _close_position(
             logger.info(f"[ENGINE] Auto-optimize disparado para bot {bot.bot_name} tras cierre de posición")
         except Exception as e:
             logger.warning(f"[ENGINE] No se pudo disparar auto-optimize para {bot.bot_name}: {e}")
+
+    # Disparar recalibración de config AI óptima si el bot tiene modo AI autónomo
+    if position.source == "ai_bot" and bot.ai_optimal_config_enabled:
+        try:
+            from app.tasks.ai_optimal_config_task import refresh_optimal_configs
+            refresh_optimal_configs.delay(bot_id=str(bot.id))
+            logger.info(
+                f"[ENGINE] AI optimal config recalibration triggered for bot {bot.bot_name} "
+                f"after closing AI position"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[ENGINE] Could not trigger AI config refresh for {bot.bot_name}: {e}"
+            )
+    
+    return position
+
+
+# Alias privado para compatibilidad con código existente
+_close_position = close_position_for_bot
 
 
 # ─── Helpers DB (síncronos) ───────────────────────────────────
@@ -476,9 +567,15 @@ def _notify_error_if_configured(db: Session, bot_id: str, error: str) -> None:
 
 
 def _get_active_bot(db: Session, bot_id: uuid.UUID) -> BotConfig | None:
+    # Manual bots are kept paused (they're position trackers, not scheduled bots)
+    # but still need to execute when triggered explicitly.
+    from sqlalchemy import or_
     return db.query(BotConfig).filter(
         BotConfig.id == bot_id,
-        BotConfig.status == "active",
+        or_(
+            BotConfig.status == "active",
+            BotConfig.bot_name.like("[MANUAL]%"),
+        ),
     ).first()
 
 

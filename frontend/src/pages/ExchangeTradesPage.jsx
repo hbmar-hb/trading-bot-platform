@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, RefreshCw, TrendingUp, TrendingDown, Bot, User, Filter, Upload } from 'lucide-react'
+import { ArrowLeft, Brain, RefreshCw, TrendingUp, TrendingDown, Bot, User, Filter, Upload } from 'lucide-react'
 import { exchangeTradesService } from '@/services/exchangeTrades'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
 
 const SOURCE_OPTIONS = [
   { value: '', label: 'Todos' },
-  { value: 'bot', label: '🤖 Solo Bot', color: 'text-blue-400' },
-  { value: 'manual', label: '👤 Solo Manuales', color: 'text-orange-400' },
+  { value: 'bot', label: '🤖 Bot (sin clasificar)', color: 'text-blue-400' },
+  { value: 'bot_int', label: '🤖 Bot int. (internas)', color: 'text-cyan-400' },
+  { value: 'bot_ext', label: '🤖 Bot ext. (webhook)', color: 'text-sky-400' },
+  { value: 'ai_bot', label: '🧠 Solo Bot IA', color: 'text-violet-400' },
+  { value: 'app_manual', label: '📱 Manual', color: 'text-purple-400' },
+  { value: 'paper', label: '📄 Solo Paper', color: 'text-green-400' },
+  { value: 'manual', label: '👤 BingX Manual', color: 'text-orange-400' },
 ]
 
 function StatsCard({ title, stats, icon: Icon, color }) {
@@ -58,7 +63,8 @@ function StatsCard({ title, stats, icon: Icon, color }) {
 }
 
 function TradeRow({ trade }) {
-  const isBot = trade.source === 'bot'
+  const isBot = ['bot', 'bot_int', 'bot_ext', 'ai_bot'].includes(trade.source)
+  const isAiBot = trade.source === 'ai_bot'
   const pnl = trade.realized_pnl !== null && trade.realized_pnl !== undefined 
     ? parseFloat(trade.realized_pnl) 
     : null
@@ -85,7 +91,9 @@ function TradeRow({ trade }) {
     <tr className="border-b border-slate-200 dark:border-gray-800/50 hover:bg-slate-100 dark:hover:bg-gray-800/40">
       <td className="py-3 pr-4">
         <div className="flex items-center gap-2">
-          {isBot ? (
+          {isAiBot ? (
+            <Brain size={14} className="text-violet-400" title="Bot IA" />
+          ) : isBot ? (
             <Bot size={14} className="text-blue-400" title="Bot" />
           ) : (
             <User size={14} className="text-orange-400" title="Manual" />

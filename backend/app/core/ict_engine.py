@@ -55,6 +55,15 @@ class StructureBreak:
 
 
 @dataclass
+class ForwardLevel:
+    """Structural level ahead of current price used for TP / SL management."""
+    price: float
+    kind: Literal["eq_high", "eq_low", "fvg_bull", "fvg_bear", "ob_bull", "ob_bear"]
+    distance_pct: float   # distance from entry in %
+    liquidity_type: str = ""  # "IRL" (Internal Range Liquidity) or "ERL" (External Range Liquidity)
+
+
+@dataclass
 class ICTResult:
     bias: Literal["bull", "bear"]
     last_break: StructureBreak | None
@@ -65,6 +74,14 @@ class ICTResult:
     signal: Literal["long", "short", "none"] = "none"
     entry_zone: tuple[float, float] | None = None
     trigger: str = ""   # "ob" | "fvg"
+    grade: Literal["A+", "A", "A-", "none"] = "none"
+    # Forward-looking exit levels — computed at signal time for structural TP/SL
+    forward_levels: list[ForwardLevel] = field(default_factory=list)
+    # Support/resistance levels for dynamic SL — BELOW entry for LONG, ABOVE for SHORT
+    support_levels: list[ForwardLevel] = field(default_factory=list)
+    # Last swing points for Trading Range / Premium-Discount calculation
+    last_swing_high: SwingPoint | None = None
+    last_swing_low: SwingPoint | None = None
 
 
 # ─── API pública ─────────────────────────────────────────────────────────────
@@ -172,7 +189,25 @@ def analyze(
         and f.bar > len(df) - 100
     ]
 
-    return ICTResult(
+    # ─── Forward-looking exit levels (structural TPs / SL steps) ─────────────
+    forward_levels: list[ForwardLevel] = []
+    support_levels: list[ForwardLevel] = []
+    if signal != "none" and entry_zone is not None:
+        entry_mid = (entry_zone[0] + entry_zone[1]) / 2
+        # Trading Range for IRL/ERL classification
+        tr = None
+        if active_h and active_l:
+            tr_high = max(active_h.price, active_l.price)
+            tr_low  = min(active_h.price, active_l.price)
+            tr = (tr_low, tr_high)
+        forward_levels = _compute_forward_levels(
+            entry_mid, eq_highs, eq_lows, fvgs, bull_bias, trading_range=tr
+        )
+        support_levels = _compute_support_levels(
+            entry_mid, eq_highs, eq_lows, fvgs, bull_bias
+        )
+
+    result = ICTResult(
         bias="bull" if bull_bias else "bear",
         last_break=last_break,
         active_ob=active_ob,
@@ -182,10 +217,162 @@ def analyze(
         signal=signal,
         entry_zone=entry_zone,
         trigger=trigger,
+        forward_levels=forward_levels,
+        support_levels=support_levels,
+        last_swing_high=active_h,
+        last_swing_low=active_l,
     )
+    result.grade = _compute_grade(result)
+    return result
+
+
+# Structural strength of POIs — used for ordering forward levels
+_POI_STRENGTH = {
+    "eq_high": 1.00, "eq_low": 1.00,
+    "swing_high": 0.95, "swing_low": 0.95,
+    "breaker_block_bear": 0.88, "breaker_block_bull": 0.88,
+    "ob_bear": 0.82, "ob_bull": 0.82,
+    "fvg_bear": 0.70, "fvg_bull": 0.70,
+}
+
+
+def _compute_forward_levels(
+    entry_mid: float,
+    eq_highs: list[float],
+    eq_lows: list[float],
+    all_fvgs: list[FVG],
+    bull_bias: bool,
+    trading_range: tuple[float, float] | None = None,
+) -> list[ForwardLevel]:
+    """
+    Build a sorted list of structural levels AHEAD of the entry price.
+    For LONG:  EQ highs and bearish FVGs above entry (resistance / take-profit targets).
+    For SHORT: EQ lows  and bullish  FVGs below entry (support   / take-profit targets).
+    Sorted by: (1) structural strength DESC, (2) distance from entry ASC.
+    An EQ high at 1.2R is preferred as TP1 over a weak FVG at 0.8R.
+    """
+    levels: list[ForwardLevel] = []
+
+    tr_low, tr_high = trading_range if trading_range else (None, None)
+
+    def _liquidity_type(price: float) -> str:
+        if tr_low is None or tr_high is None:
+            return ""
+        if tr_low <= price <= tr_high:
+            return "IRL"
+        return "ERL"
+
+    if bull_bias:
+        # LONG — targets above entry
+        for h in eq_highs:
+            if h > entry_mid:
+                levels.append(ForwardLevel(
+                    price=h,
+                    kind="eq_high",
+                    distance_pct=round((h - entry_mid) / entry_mid * 100, 4),
+                    liquidity_type=_liquidity_type(h),
+                ))
+        for f in all_fvgs:
+            if not f.filled and f.kind == "bear" and f.bottom > entry_mid:
+                levels.append(ForwardLevel(
+                    price=f.bottom,
+                    kind="fvg_bear",
+                    distance_pct=round((f.bottom - entry_mid) / entry_mid * 100, 4),
+                    liquidity_type=_liquidity_type(f.bottom),
+                ))
+    else:
+        # SHORT — targets below entry
+        for l in eq_lows:
+            if l < entry_mid:
+                levels.append(ForwardLevel(
+                    price=l,
+                    kind="eq_low",
+                    distance_pct=round((entry_mid - l) / entry_mid * 100, 4),
+                    liquidity_type=_liquidity_type(l),
+                ))
+        for f in all_fvgs:
+            if not f.filled and f.kind == "bull" and f.top < entry_mid:
+                levels.append(ForwardLevel(
+                    price=f.top,
+                    kind="fvg_bull",
+                    distance_pct=round((entry_mid - f.top) / entry_mid * 100, 4),
+                    liquidity_type=_liquidity_type(f.top),
+                ))
+
+    # Sort by strength DESC, then distance ASC
+    levels.sort(key=lambda x: (-_POI_STRENGTH.get(x.kind, 0.5), x.distance_pct))
+    return levels
+
+
+def _compute_support_levels(
+    entry_mid: float,
+    eq_highs: list[float],
+    eq_lows: list[float],
+    all_fvgs: list[FVG],
+    bull_bias: bool,
+) -> list[ForwardLevel]:
+    """
+    Build a sorted list of structural support/resistance levels BEHIND the entry price.
+    These are levels the price has ALREADY surpassed as it moves favourably,
+    which can be used as new trailing SL floors.
+
+    For LONG:  EQ lows and bullish FVGs below entry (price moves up, leaves them behind).
+    For SHORT: EQ lows and bullish FVGs below entry (price moves down, breaks through them).
+    Sorted by: (1) structural strength DESC, (2) distance from entry ASC.
+    """
+    levels: list[ForwardLevel] = []
+
+    # For BOTH long and short, support_levels are structural lows BELOW entry.
+    # LONG: price rises above them → they become trailing SL floors.
+    # SHORT: price falls through them → they become trailing SL floors (below entry).
+    for l in eq_lows:
+        if l < entry_mid:
+            levels.append(ForwardLevel(
+                price=l,
+                kind="eq_low",
+                distance_pct=round((entry_mid - l) / entry_mid * 100, 4),
+            ))
+    for f in all_fvgs:
+        if not f.filled and f.kind == "bull" and f.top < entry_mid:
+            levels.append(ForwardLevel(
+                price=f.top,
+                kind="fvg_bull",
+                distance_pct=round((entry_mid - f.top) / entry_mid * 100, 4),
+            ))
+
+    # Sort by strength DESC, then distance ASC
+    levels.sort(key=lambda x: (-_POI_STRENGTH.get(x.kind, 0.5), x.distance_pct))
+    return levels
 
 
 # ─── Cálculos internos ────────────────────────────────────────────────────────
+
+def _compute_grade(result: "ICTResult") -> Literal["A+", "A", "A-", "none"]:
+    """
+    Asigna grade a la señal ICT usando la misma convención que el indicador frontend:
+
+      A+  BOS alcista  → señal LONG  (continuación de tendencia bullish)
+      A   CHoCH        → señal LONG o SHORT (cambio de carácter, reversión)
+      A-  BOS bajista  → señal SHORT (continuación de tendencia bearish)
+
+    Esta convención permite al usuario filtrar por tipo de señal:
+      - A+      solo longs por BOS
+      - A       solo reversiones (ambas direcciones)
+      - A-      solo shorts por BOS
+      - A+,A    longs: BOS + reversión alcista
+      - A,A-    shorts: reversión bajista + BOS
+      - A+,A,A- todo
+    """
+    if result.signal == "none":
+        return "none"
+    if result.last_break is None:
+        # Sin estructura confirmada — tratar como continuación
+        return "A+" if result.signal == "long" else "A-"
+    if result.last_break.kind == "CHoCH":
+        return "A"
+    # BOS
+    return "A+" if result.signal == "long" else "A-"
+
 
 def _compute_atr(df: pd.DataFrame, period: int) -> pd.Series:
     h = df["high"]

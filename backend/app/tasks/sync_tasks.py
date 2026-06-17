@@ -2,6 +2,7 @@
 Tareas Celery para sincronización periódica de trades del exchange.
 """
 import asyncio
+import gc
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,12 +14,15 @@ from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 @shared_task(
@@ -124,10 +128,14 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
         logger.info(f"[SYNC] cuenta={account.label} existing={len(existing_ids)}")
 
         # Posiciones del usuario (abiertas Y cerradas) para clasificar source
+        # Solo posiciones REALES — las paper nunca generan trades en exchange real
         pos_result = await db.execute(
             select(Position)
             .join(BotConfig, Position.bot_id == BotConfig.id)
-            .where(BotConfig.user_id == user_id)
+            .where(
+                BotConfig.user_id == user_id,
+                BotConfig.paper_balance_id.is_(None),
+            )
         )
         positions = pos_result.scalars().all()
 
@@ -136,10 +144,26 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
         for pos in positions:
             positions_by_symbol.setdefault(pos.symbol, []).append(pos)
 
+        # Fallback: bots con ai_signal_mode=true pero posiciones legacy con source='bot'
+        bot_ai_mode_result = await db.execute(
+            select(BotConfig.id, BotConfig.ai_signal_mode)
+            .where(BotConfig.user_id == user_id)
+        )
+        bot_ai_mode = {row[0]: row[1] for row in bot_ai_mode_result.all()}
+
+    # Símbolos de posiciones cerradas recientemente para no perder trades
+    # de cierres de símbolos que ya no tienen posición abierta
+    closed_recent_symbols = list({
+        pos.symbol for pos in positions
+        if pos.closed_at and pos.closed_at >= since_dt
+    })
+
     # Obtener trades del exchange (fuera de la sesión DB para no bloquear)
     exchange = create_exchange(account)
     try:
-        trades_raw = await exchange.get_trade_history(limit=500, since=since_ts)
+        trades_raw = await exchange.get_trade_history(
+            limit=500, since=since_ts, extra_symbols=closed_recent_symbols
+        )
     finally:
         await exchange.close()
 
@@ -178,7 +202,10 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
                     if pos.opened_at and pos.opened_at <= trade_dt:
                         end = pos.closed_at or datetime.now(timezone.utc)
                         if trade_dt <= end:
-                            source = "bot"
+                            source = pos.source if pos.source in ("bot", "bot_int", "bot_ext", "ai_bot", "app_manual") else "bot"
+                            # Fallback legacy: posiciones antiguas con source='bot' de bots IA
+                            if source == "bot" and pos.bot_id and bot_ai_mode.get(pos.bot_id):
+                                source = "ai_bot"
                             position_id = pos.id
                             bot_id = pos.bot_id
                             matched_pos = pos
@@ -228,8 +255,15 @@ async def _sync_account(account_id: uuid.UUID, user_id: uuid.UUID) -> dict:
         await db.commit()
 
     logger.info(f"[SYNC] cuenta={account.label} nuevos={new_count}")
+
+    total_from_exchange = len(trades_raw)
+
+    # Liberar estructuras pesadas explícitamente
+    del existing_ids, positions_by_symbol, trades_raw
+    gc.collect()
+
     return {
         "status": "success",
         "new_trades": new_count,
-        "total_from_exchange": len(trades_raw),
+        "total_from_exchange": total_from_exchange,
     }

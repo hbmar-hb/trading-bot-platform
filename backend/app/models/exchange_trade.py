@@ -18,8 +18,9 @@ class ExchangeTrade(Base):
     Trade real ejecutado en el exchange.
     
     Se sincroniza periódicamente desde la API del exchange.
-    source='bot' → ejecutado por nuestro bot
-    source='manual' → ejecutado manualmente por el usuario en el exchange
+    source='bot'     → ejecutado por nuestro bot (legacy)
+    source='ai_bot'  → ejecutado por bot en modo IA
+    source='manual'  → ejecutado manualmente por el usuario en el exchange
     """
     __tablename__ = "exchange_trades"
 

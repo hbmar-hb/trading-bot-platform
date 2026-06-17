@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { TrendingDown, TrendingUp, ArrowRight, BarChart3, Bot, FileText, User, Smartphone, X, ExternalLink, Clock, RefreshCw, ShieldCheck, ChevronDown, ChevronUp, Loader2, AlertCircle, Plus, Minus } from 'lucide-react'
+import { TrendingDown, TrendingUp, ArrowRight, BarChart3, Bot, Brain, FileText, User, Smartphone, X, ExternalLink, Clock, RefreshCw, ShieldCheck, ChevronDown, ChevronUp, Loader2, AlertCircle, Plus, Minus, AlertTriangle } from 'lucide-react'
 import { useUnifiedPositions } from '@/hooks/useUnifiedPositions'
 import usePositionStore from '@/store/positionStore'
 import { positionsService } from '@/services/positions'
@@ -55,10 +55,25 @@ function PnlCell({ value, roi }) {
 // Badge para mostrar el tipo de posición
 function SourceBadge({ source }) {
   const configs = {
-    bot: { 
-      icon: Bot, 
-      label: 'Bot', 
-      className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800' 
+    bot: {
+      icon: Bot,
+      label: 'Bot (sin clasificar)',
+      className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200 dark:border-blue-800'
+    },
+    bot_int: {
+      icon: Bot,
+      label: 'Bot int.',
+      className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400 border-cyan-200 dark:border-cyan-800'
+    },
+    bot_ext: {
+      icon: Bot,
+      label: 'Bot ext.',
+      className: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400 border-sky-200 dark:border-sky-800'
+    },
+    ai_bot: {
+      icon: Brain,
+      label: 'Bot IA',
+      className: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400 border-violet-200 dark:border-violet-800'
     },
     app_manual: { 
       icon: Smartphone, 
@@ -491,6 +506,16 @@ export default function PositionsPage() {
       ? positions.filter(p => p.status === 'pending_limit')
       : positions.filter(p => p.source === filter && p.status !== 'pending_limit')
   
+  // Calcular símbolos con múltiples posiciones abiertas (alerta)
+  const openPositions = positions.filter(p => p.status !== 'pending_limit')
+  const symbolCounts = {}
+  openPositions.forEach(p => {
+    symbolCounts[p.symbol] = (symbolCounts[p.symbol] || 0) + 1
+  })
+  const duplicateSymbols = new Set(
+    Object.entries(symbolCounts).filter(([_, count]) => count > 1).map(([sym]) => sym)
+  )
+  
   // Abrir posición (gráfico o modal según tipo)
   const handleOpenPosition = (pos) => {
     setSelectedPosition(pos)
@@ -609,19 +634,55 @@ export default function PositionsPage() {
           >
             Todas ({counts.total})
           </button>
-          <button 
+          <button
             onClick={() => setFilter('bot')}
             className={`px-3 py-1.5 rounded-lg border transition-colors ${
-              filter === 'bot' 
-                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700' 
+              filter === 'bot'
+                ? 'bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/50 dark:text-blue-300 dark:border-blue-700'
                 : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-800'
             }`}
           >
             <span className="flex items-center gap-1">
-              <Bot size={12} /> Bots ({counts.bot})
+              <Bot size={12} /> Bot ({counts.bot || 0})
             </span>
           </button>
-          <button 
+          <button
+            onClick={() => setFilter('bot_int')}
+            className={`px-3 py-1.5 rounded-lg border transition-colors ${
+              filter === 'bot_int'
+                ? 'bg-cyan-100 text-cyan-700 border-cyan-300 dark:bg-cyan-900/50 dark:text-cyan-300 dark:border-cyan-700'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-800'
+            }`}
+          >
+            <span className="flex items-center gap-1">
+              <Bot size={12} /> Bot int. ({counts.bot_int || 0})
+            </span>
+          </button>
+          <button
+            onClick={() => setFilter('bot_ext')}
+            className={`px-3 py-1.5 rounded-lg border transition-colors ${
+              filter === 'bot_ext'
+                ? 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/50 dark:text-sky-300 dark:border-sky-700'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-800'
+            }`}
+          >
+            <span className="flex items-center gap-1">
+              <Bot size={12} /> Bot ext. ({counts.bot_ext || 0})
+            </span>
+          </button>
+          <button
+            onClick={() => setFilter('ai_bot')}
+            className={`px-3 py-1.5 rounded-lg border transition-colors ${
+              filter === 'ai_bot'
+                ? 'bg-violet-100 text-violet-700 border-violet-300 dark:bg-violet-900/50 dark:text-violet-300 dark:border-violet-700'
+                : 'bg-white text-slate-600 border-slate-200 hover:bg-slate-50 dark:bg-gray-900 dark:text-gray-400 dark:border-gray-700 dark:hover:bg-gray-800'
+            }`}
+          >
+            <span className="flex items-center gap-1">
+              <Brain size={12} /> Bot IA ({counts.ai_bot || 0})
+            </span>
+          </button>
+          <button
             onClick={() => setFilter('app_manual')}
             className={`px-3 py-1.5 rounded-lg border transition-colors ${
               filter === 'app_manual' 
@@ -717,7 +778,12 @@ export default function PositionsPage() {
                       {pos.side === 'long'
                         ? <TrendingUp size={14} className="text-green-400" />
                         : <TrendingDown size={14} className="text-red-400" />}
-                      <span className="font-semibold text-slate-900 dark:text-gray-100">{pos.symbol}</span>
+                      <span className="font-semibold text-slate-900 dark:text-gray-100 flex items-center gap-1">
+                        {pos.symbol}
+                        {duplicateSymbols.has(pos.symbol) && (
+                          <AlertTriangle size={12} className="text-yellow-500" title="Múltiples posiciones en este activo" />
+                        )}
+                      </span>
                       <span className={`text-xs font-medium ${pos.side === 'long' ? 'text-green-400' : 'text-red-400'}`}>
                         {pos.side.toUpperCase()}
                       </span>
@@ -766,7 +832,7 @@ export default function PositionsPage() {
                   )}
                   
                   {/* Info del bot para posiciones de bot */}
-                  {pos.source === 'bot' && pos.bot_name && (
+                  {['bot', 'bot_int', 'bot_ext', 'ai_bot'].includes(pos.source) && pos.bot_name && (
                     <div className="text-xs text-blue-600 dark:text-blue-400">
                       Bot: {pos.bot_name}
                     </div>
@@ -846,7 +912,12 @@ export default function PositionsPage() {
                             {pos.side === 'long'
                               ? <TrendingUp size={14} className={isPendingLimit ? 'text-yellow-400' : 'text-green-400'} />
                               : <TrendingDown size={14} className={isPendingLimit ? 'text-yellow-400' : 'text-red-400'} />}
-                            <span className="font-medium text-slate-900 dark:text-gray-100">{pos.symbol}</span>
+                            <span className="font-medium text-slate-900 dark:text-gray-100 flex items-center gap-1">
+                              {pos.symbol}
+                              {duplicateSymbols.has(pos.symbol) && (
+                                <AlertTriangle size={12} className="text-yellow-500" title="Múltiples posiciones en este activo" />
+                              )}
+                            </span>
                             <span className={`text-xs ${pos.side === 'long' ? 'text-green-500' : 'text-red-500'}`}>
                               {pos.side.toUpperCase()}
                             </span>
@@ -883,7 +954,7 @@ export default function PositionsPage() {
                         <div className="flex items-center gap-2">
                           {isPendingLimit ? (
                             <span className="text-xs text-yellow-600 dark:text-yellow-400">Esperando...</span>
-                          ) : pos.source === 'bot' && pos.bot_name ? (
+                          ) : ['bot', 'bot_int', 'bot_ext', 'ai_bot'].includes(pos.source) && pos.bot_name ? (
                             <span className="text-xs text-blue-600 dark:text-blue-400">{pos.bot_name}</span>
                           ) : pos.source === 'manual' ? (
                             <span className="text-xs text-orange-600 dark:text-orange-400">Manual ({pos.exchange})</span>

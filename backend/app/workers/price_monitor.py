@@ -19,7 +19,8 @@ from app.models.position import Position
 from app.services.cache import async_redis, set_price
 from app.services.database import AsyncSessionLocal
 
-POLL_INTERVAL = 2   # segundos entre ciclos
+POLL_INTERVAL_SLOW = 2.0   # segundos entre ciclos sin posiciones abiertas
+POLL_INTERVAL_FAST = 0.5   # segundos entre ciclos con posiciones abiertas
 
 
 class PriceMonitor:
@@ -27,26 +28,30 @@ class PriceMonitor:
     def __init__(self):
         # Clientes públicos (sin auth) por nombre de exchange
         self._clients: dict[str, ccxt.Exchange] = {}
+        # Símbolos que fallaron en fetch_ticker individual — se excluyen del batch
+        self._invalid_symbols: dict[str, set[str]] = defaultdict(set)
 
     async def run(self) -> None:
-        logger.info("PriceMonitor arrancado")
+        logger.info("PriceMonitor arrancado (dynamic polling)")
         try:
             while True:
                 try:
-                    await self._cycle()
+                    has_open = await self._cycle()
                 except Exception as exc:
                     logger.warning(f"PriceMonitor ciclo fallido: {exc}")
-                await asyncio.sleep(POLL_INTERVAL)
+                    has_open = False
+                interval = POLL_INTERVAL_FAST if has_open else POLL_INTERVAL_SLOW
+                await asyncio.sleep(interval)
         except asyncio.CancelledError:
             logger.info("PriceMonitor detenido")
         finally:
             await self._close_clients()
 
-    async def _cycle(self) -> None:
+    async def _cycle(self) -> bool:
         # 1. Obtener (exchange, symbol) únicos de bots activos
-        pairs = await self._get_active_pairs()
+        pairs, has_open_positions = await self._get_active_pairs()
         if not pairs:
-            return
+            return has_open_positions
 
         # 2. Agrupar por exchange
         by_exchange: dict[str, set[str]] = defaultdict(set)
@@ -59,36 +64,85 @@ class PriceMonitor:
             for exchange_name, symbols in by_exchange.items()
         ]
         await asyncio.gather(*tasks, return_exceptions=True)
+        return has_open_positions
 
     async def _fetch_exchange_prices(
         self, exchange_name: str, symbols: set[str]
     ) -> None:
         client = self._get_client(exchange_name)
-        for symbol in symbols:
+        symbol_list = list(symbols)
+
+        invalid = self._invalid_symbols[exchange_name]
+
+        # ── Intento 1: batch fetch (mucho más eficiente) ─────────────
+        # Excluye símbolos ya conocidos como inválidos para no romper el batch.
+        valid_symbols = [s for s in symbol_list if _to_ccxt_symbol(s, exchange_name) not in invalid]
+        skipped = len(symbol_list) - len(valid_symbols)
+        if skipped:
+            logger.debug(f"{exchange_name}: omitiendo {skipped} símbolo(s) inválido(s) conocidos del batch")
+
+        if valid_symbols:
+            try:
+                ccxt_symbols = [_to_ccxt_symbol(s, exchange_name) for s in valid_symbols]
+                tickers = await client.fetch_tickers(ccxt_symbols)
+                for symbol in valid_symbols:
+                    ccxt_symbol = _to_ccxt_symbol(symbol, exchange_name)
+                    ticker = tickers.get(ccxt_symbol)
+                    if not ticker:
+                        continue
+                    price = float(ticker.get("last", 0))
+                    if price <= 0:
+                        continue
+                    change_24h = 0.0
+                    if "percentage" in ticker and ticker["percentage"] is not None:
+                        change_24h = float(ticker["percentage"])
+                    elif "change" in ticker and ticker["change"] is not None:
+                        if price > 0:
+                            change_24h = (float(ticker["change"]) / (price - float(ticker["change"]))) * 100
+                    await set_price(symbol, price, change_24h)
+                return
+            except Exception as exc:
+                logger.warning(
+                    f"fetch_tickers batch falló para {exchange_name} "
+                    f"({len(valid_symbols)} símbolos), degradando a loop individual: {exc}"
+                )
+
+        # ── Fallback: loop individual ────────────────────────────────
+        # Los símbolos que fallen aquí se marcan como inválidos para futuros ciclos.
+        for symbol in valid_symbols:
             try:
                 ccxt_symbol = _to_ccxt_symbol(symbol, exchange_name)
                 ticker = await client.fetch_ticker(ccxt_symbol)
                 price = float(ticker["last"])
-                # Obtener cambio porcentual 24h (puede estar en 'percentage' o 'change')
                 change_24h = 0.0
                 if "percentage" in ticker and ticker["percentage"] is not None:
                     change_24h = float(ticker["percentage"])
                 elif "change" in ticker and ticker["change"] is not None:
-                    # Calcular porcentaje si solo tenemos el cambio absoluto
                     if price > 0:
                         change_24h = (float(ticker["change"]) / (price - float(ticker["change"]))) * 100
                 await set_price(symbol, price, change_24h)
             except Exception as exc:
-                logger.debug(f"Error precio {exchange_name}/{symbol}: {exc}")
+                ccxt_symbol = _to_ccxt_symbol(symbol, exchange_name)
+                if ccxt_symbol not in invalid:
+                    invalid.add(ccxt_symbol)
+                    logger.warning(
+                        f"{exchange_name}: símbolo '{ccxt_symbol}' marcado como inválido "
+                        f"y excluido de futuros batches ({exc})"
+                    )
+                else:
+                    logger.debug(f"Error precio {exchange_name}/{symbol}: {exc}")
 
-    async def _get_active_pairs(self) -> list[tuple[str, str]]:
+    async def _get_active_pairs(self) -> tuple[list[tuple[str, str]], bool]:
         """Devuelve todos los pares únicos que necesitan precio en tiempo real:
         - Bots activos/pausados (reales y paper)
         - Posiciones abiertas o pendientes (manuales app, bots, paper)
         - Posiciones manuales externas guardadas en Redis por el unified endpoint.
+
+        También retorna True si hay al menos una posición abierta/pendiente.
         """
         pairs: list[tuple[str, str]] = []
         seen = set()
+        has_open = False
 
         def _add(exchange: str, symbol: str) -> None:
             pair = (exchange, symbol)
@@ -127,7 +181,10 @@ class PriceMonitor:
                 .where(Position.status.in_(["open", "pending_limit"]))
                 .distinct()
             )
-            for row in pos_result.all():
+            pos_rows = pos_result.all()
+            if pos_rows:
+                has_open = True
+            for row in pos_rows:
                 exchange = row[0].lower() if row[0] else "bingx"
                 if exchange in ("paper", "unknown"):
                     exchange = "bingx"
@@ -149,7 +206,7 @@ class PriceMonitor:
         except Exception:
             pass
 
-        return pairs
+        return pairs, has_open
 
     def _get_client(self, exchange_name: str) -> ccxt.Exchange:
         if exchange_name not in self._clients:

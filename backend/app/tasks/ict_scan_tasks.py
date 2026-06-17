@@ -1,20 +1,23 @@
 """
-Tarea Celery que ejecuta el motor ICT sobre los bots habilitados para ICT scan.
+Tarea Celery que ejecuta el motor ICT sobre los bots con alert trigger configurado.
 
 Ciclo (disparado por Beat cada 60 s):
-  1. Obtener todos los bots activos con ict_scan_enabled=True
-  2. Por cada bot, comprobar si ha pasado al menos un período de vela desde el
-     último escaneo (throttle por timeframe — no escanear más de 1 vez por vela)
-  3. Obtener velas del exchange
-  4. Ejecutar análisis ICT (excluye la vela en curso para evitar look-ahead)
-  5. Si hay señal → crear SignalLog + disparar execute_signal task
+  1. Obtener bots activos con trigger_indicator IS NOT NULL (o ict_scan_enabled legacy)
+  2. Agrupar por (symbol, timeframe) para reutilizar las mismas velas
+  3. Para cada bot, aplicar throttle según timing:
+       - candle_close:  esperar cierre completo de vela (1 escaneo por vela)
+       - intracandle:   escanear cada trigger_interval_minutes (incluye vela en curso)
+  4. Correr análisis ICT — filtrar por grade >= trigger_min_grade
+  5. Verificar min_confirm_candles (señal debe persistir N escaneos)
+  6. Si todo ok → crear SignalLog + despachar execute_signal
 """
 import asyncio
+import gc
 from datetime import datetime, timezone
 
 from celery import shared_task
 from loguru import logger
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import selectinload
 
 from app.services.cache import sync_redis
@@ -26,14 +29,34 @@ _TIMEFRAME_SECONDS: dict[str, int] = {
     "6h": 21600, "12h": 43200, "1d": 86400,
 }
 
+def _grade_allowed(signal_grade: str, allowed_grades_str: str) -> bool:
+    """
+    Comprueba si el grade de la señal está en la lista configurada.
+
+    allowed_grades_str puede ser:
+      - "A+"          solo BOS alcistas (long)
+      - "A"           solo CHoCH (reversiones, ambas direcciones)
+      - "A-"          solo BOS bajistas (short)
+      - "A+,A"        longs: BOS + reversión alcista
+      - "A,A-"        shorts: reversión bajista + BOS
+      - "A+,A,A-"     todo (default)
+    """
+    if not allowed_grades_str or allowed_grades_str.strip() in ("", "all"):
+        return True
+    allowed = {g.strip() for g in allowed_grades_str.split(",")}
+    return signal_grade in allowed
+
 
 def _run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 # ─── Tarea raíz (Celery Beat la llama cada minuto) ───────────────────────────
@@ -44,7 +67,7 @@ def _run_async(coro):
     max_retries=0,
 )
 def ict_scan_all() -> dict:
-    """Escanea todos los bots con ICT habilitado."""
+    """Escanea todos los bots con ICT trigger configurado."""
     try:
         return _run_async(_ict_scan_all_async())
     except Exception as exc:
@@ -61,7 +84,8 @@ async def _ict_scan_all_async() -> dict:
             .options(selectinload(BotConfig.exchange_account))
             .where(
                 BotConfig.status == "active",
-                BotConfig.ict_scan_enabled == True,
+                BotConfig.indicator_enabled == True,
+                BotConfig.alerts_only == False,
             )
         )
         bots = result.scalars().all()
@@ -76,6 +100,9 @@ async def _ict_scan_all_async() -> dict:
                 signaled += 1
         except Exception as exc:
             logger.error(f"[ICT] Error escaneando bot {bot.bot_name}: {exc}")
+        finally:
+            # Forzar liberación de memoria entre bots para evitar acumulación
+            gc.collect()
 
     logger.info(f"[ICT] Escaneo completo: {scanned} bots | {signaled} señales")
     return {"scanned": scanned, "signaled": signaled}
@@ -88,27 +115,45 @@ async def _scan_bot(bot) -> bool:
     from app.core.ict_engine import analyze
     from app.exchanges.factory import create_exchange, create_paper_exchange
 
-    tf = bot.timeframe
-    candle_secs = _TIMEFRAME_SECONDS.get(tf, 3600)
+    # ── Configuración de trigger ──────────────────────────────────────────
+    # Soporte legacy: bots con ict_scan_enabled sin trigger_indicator
+    indicator = bot.trigger_indicator or "ict"
+    scan_tf   = bot.trigger_timeframe or bot.timeframe
+    min_grade = getattr(bot, 'trigger_min_grade', 'A') or 'A'
+    timing    = getattr(bot, 'trigger_timing', 'candle_close') or 'candle_close'
+    interval_m = int(getattr(bot, 'trigger_interval_minutes', 5) or 5)
+    min_confirm = int(getattr(bot, 'min_confirm_candles', 1) or 1)
 
-    # Throttle — no escanear más de una vez por vela cerrada
+    if indicator not in ("ict", "quantum_gold"):
+        logger.debug(f"[ICT] Bot {bot.bot_name}: indicador '{indicator}' no soportado aún")
+        return False
+
+    candle_secs = _TIMEFRAME_SECONDS.get(scan_tf, 3600)
+
+    # ── Throttle dinámico según timing ───────────────────────────────────
+    # En modo intracandle, interval_m = número de sub-escaneos por vela
+    # El intervalo real = candle_secs / interval_m, con mínimo 60s (cadencia del Beat)
+    if timing == "intracandle":
+        sub_interval_secs = max(60, candle_secs / max(1, interval_m))
+    else:
+        sub_interval_secs = candle_secs
+
     redis_key = f"ict:scan:{bot.id}:last"
     last_ts = sync_redis.get(redis_key)
     if last_ts:
         elapsed = datetime.now(timezone.utc).timestamp() - float(last_ts)
-        if elapsed < candle_secs * 0.9:
+        if elapsed < sub_interval_secs * 0.9:
             return False
 
+    # ── Obtener velas ─────────────────────────────────────────────────────
     ict_cfg = bot.ict_config or {}
-    pivot_len = int(ict_cfg.get("pivot_len", 5))
-    atr_mult  = float(ict_cfg.get("atr_mult", 1.5))
-    atr_len   = int(ict_cfg.get("atr_len", 14))
-    entry_mode = str(ict_cfg.get("entry_mode", "ob_or_fvg"))
+    pivot_len     = int(ict_cfg.get("pivot_len", 5))
+    atr_mult      = float(ict_cfg.get("atr_mult", 0.3))
+    atr_len       = int(ict_cfg.get("atr_len", 14))
+    entry_mode    = str(ict_cfg.get("entry_mode", "ob_or_fvg"))
     candles_limit = int(ict_cfg.get("candles_limit", 200))
 
-    # Obtener velas del exchange
     if bot.paper_balance_id is not None:
-        # Paper trading — necesitamos el PaperBalance para crear el exchange
         from app.models.paper_balance import PaperBalance
         async with AsyncSessionLocal() as db:
             pb_result = await db.get(PaperBalance, bot.paper_balance_id)
@@ -123,7 +168,7 @@ async def _scan_bot(bot) -> bool:
         exchange = create_exchange(bot.exchange_account)
 
     try:
-        candles = await exchange.get_candles(bot.symbol, tf, candles_limit)
+        candles = await exchange.get_candles(bot.symbol, scan_tf, candles_limit)
     except Exception as exc:
         logger.warning(f"[ICT] Bot {bot.bot_name}: error obteniendo velas — {exc}")
         return False
@@ -134,22 +179,80 @@ async def _scan_bot(bot) -> bool:
         logger.warning(f"[ICT] Bot {bot.bot_name}: velas insuficientes ({len(candles) if candles else 0})")
         return False
 
-    # Excluir la vela en curso (incompleta) para evitar señales prematuras
-    closed_candles = candles[:-1]
+    # ── Selección de velas según timing ──────────────────────────────────
+    if timing == "intracandle":
+        analysis_candles = candles           # incluye vela en curso
+    else:
+        analysis_candles = candles[:-1]      # solo velas cerradas
 
-    result = analyze(closed_candles, pivot_len, atr_mult, atr_len, entry_mode)
+    if indicator == "quantum_gold":
+        from app.engines.quantum_gold_engine import analyze as qg_analyze
+        qg_cfg = bot.ict_config or {}   # reutilizamos ict_config para params QG
+        result = qg_analyze(
+            analysis_candles,
+            ema_fast           = int(qg_cfg.get("ema_fast",           9)),
+            ema_mid            = int(qg_cfg.get("ema_mid",            21)),
+            ema_slow           = int(qg_cfg.get("ema_slow",           50)),
+            ema_trend          = int(qg_cfg.get("ema_trend",         200)),
+            st_atr_len         = int(qg_cfg.get("st_atr_len",         10)),
+            st_factor          = float(qg_cfg.get("st_factor",        3.0)),
+            bb_len             = int(qg_cfg.get("bb_len",             20)),
+            bb_std             = float(qg_cfg.get("bb_std",           2.0)),
+            bb_sqz_threshold   = float(qg_cfg.get("bb_sqz_threshold", 0.9)),
+            rsi_len            = int(qg_cfg.get("rsi_len",            14)),
+            rsi_bull_lo        = int(qg_cfg.get("rsi_bull_lo",        52)),
+            rsi_bull_hi        = int(qg_cfg.get("rsi_bull_hi",        68)),
+            rsi_bear_lo        = int(qg_cfg.get("rsi_bear_lo",        32)),
+            rsi_bear_hi        = int(qg_cfg.get("rsi_bear_hi",        48)),
+            vol_len            = int(qg_cfg.get("vol_len",            20)),
+            vol_mult           = float(qg_cfg.get("vol_mult",         1.4)),
+            atr_len            = int(qg_cfg.get("atr_len",            14)),
+            tp_mult            = float(qg_cfg.get("tp_mult",          2.0)),
+            sl_mult            = float(qg_cfg.get("sl_mult",          1.0)),
+            use_trend_filter   = bool(qg_cfg.get("use_trend_filter",  True)),
+            min_atr_filter     = float(qg_cfg.get("min_atr_filter",   3.0)),
+            use_sess           = bool(qg_cfg.get("use_sess",          True)),
+        )
+    else:
+        result = analyze(analysis_candles, pivot_len, atr_mult, atr_len, entry_mode)
 
-    # Actualizar timestamp de último escaneo (tanto si hay señal como si no)
-    sync_redis.setex(redis_key, candle_secs * 2, str(datetime.now(timezone.utc).timestamp()))
+    # Actualizar timestamp de último escaneo
+    ttl = int(sub_interval_secs * 3)
+    sync_redis.setex(redis_key, ttl, str(datetime.now(timezone.utc).timestamp()))
 
     logger.debug(
-        f"[ICT] {bot.bot_name} | bias={result.bias} | "
-        f"break={result.last_break.kind if result.last_break else 'none'} | "
-        f"signal={result.signal}"
+        f"[{indicator.upper()}] {bot.bot_name} | tf={scan_tf} | timing={timing} | "
+        f"bias={result.bias} | signal={result.signal} | grade={result.grade}"
     )
 
     if result.signal == "none":
         return False
+
+    # ── Filtro por grade ──────────────────────────────────────────────────
+    if not _grade_allowed(result.grade, min_grade):
+        logger.debug(
+            f"[ICT] {bot.bot_name}: señal {result.signal} descartada — "
+            f"grade={result.grade} no está en permitidos={min_grade}"
+        )
+        return False
+
+    # ── Confirmación de velas (min_confirm_candles) ───────────────────────
+    if min_confirm > 1:
+        confirm_key = f"ict:confirm:{bot.id}:{result.signal}:{result.grade}"
+        raw = sync_redis.get(confirm_key)
+        count = int(raw) + 1 if raw else 1
+        if count < min_confirm:
+            sync_redis.setex(confirm_key, candle_secs * (min_confirm + 1), str(count))
+            logger.debug(
+                f"[ICT] {bot.bot_name}: confirmación {count}/{min_confirm} para {result.signal} {result.grade}"
+            )
+            return False
+        # Confirmación completa — limpiar contador
+        sync_redis.delete(confirm_key)
+    else:
+        # Reset confirmación si la señal cambia
+        sync_redis.delete(f"ict:confirm:{bot.id}:long:{result.grade}")
+        sync_redis.delete(f"ict:confirm:{bot.id}:short:{result.grade}")
 
     return _dispatch_signal(bot, result)
 
@@ -165,7 +268,6 @@ def _dispatch_signal(bot, result) -> bool:
     now = datetime.now(timezone.utc)
     action = result.signal  # "long" | "short"
 
-    # Usar el centro de la entrada zone como precio de referencia para el hash
     ref_price: float | None = None
     if result.entry_zone:
         ref_price = round((result.entry_zone[0] + result.entry_zone[1]) / 2, 8)
@@ -173,29 +275,29 @@ def _dispatch_signal(bot, result) -> bool:
     sig_hash = generate_signal_hash(bot.id, action, now, ref_price)
 
     with SessionLocal() as db:
-        # Idempotencia — misma señal dentro de la ventana de 30 s → ignorar
         exists = db.query(SignalLog).filter(SignalLog.signal_hash == sig_hash).first()
         if exists:
             logger.debug(f"[ICT] Señal duplicada para {bot.bot_name} ({action}), ignorando")
             return False
 
         payload = {
-            "source": "ict_scan",
-            "action": action,
-            "price": ref_price,
-            "bias": result.bias,
-            "trigger": result.trigger,
-            "entry_zone": list(result.entry_zone) if result.entry_zone else None,
-            "break_kind": result.last_break.kind if result.last_break else None,
+            "source":      "indicator",
+            "action":      action,
+            "grade":       result.grade,
+            "price":       ref_price,
+            "bias":        result.bias,
+            "trigger":     result.trigger,
+            "entry_zone":  list(result.entry_zone) if result.entry_zone else None,
+            "break_kind":  result.last_break.kind if result.last_break else None,
             "break_level": result.last_break.level if result.last_break else None,
             "ob": {
-                "top": result.active_ob.top,
+                "top":    result.active_ob.top,
                 "bottom": result.active_ob.bottom,
-                "kind": result.active_ob.kind,
+                "kind":   result.active_ob.kind,
             } if result.active_ob else None,
             "fvgs_count": len(result.active_fvgs),
-            "eq_highs": result.eq_highs[:5],
-            "eq_lows": result.eq_lows[:5],
+            "eq_highs":   result.eq_highs[:5],
+            "eq_lows":    result.eq_lows[:5],
         }
 
         signal_log = SignalLog(
@@ -211,11 +313,10 @@ def _dispatch_signal(bot, result) -> bool:
         signal_id = str(signal_log.id)
 
     logger.info(
-        f"[ICT] Señal generada → {bot.bot_name} | {action.upper()} | "
+        f"[ICT] Alerta disparada → {bot.bot_name} | {action.upper()} {result.grade} | "
         f"trigger={result.trigger} | zone={result.entry_zone}"
     )
 
-    # Siempre orden de mercado — la zona ICT ya es el precio de entrada
     execute_signal.delay(
         bot_id=str(bot.id),
         signal_id=signal_id,

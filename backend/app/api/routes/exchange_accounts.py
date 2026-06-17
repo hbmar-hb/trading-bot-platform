@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.exchanges.factory import create_exchange
 from app.models.exchange_account import ExchangeAccount
 from app.schemas.exchange_account import (
@@ -16,7 +16,7 @@ from app.schemas.exchange_account import (
 from app.services.database import get_db
 from app.utils.crypto import encrypt
 
-router = APIRouter(prefix="/exchange-accounts", tags=["exchange-accounts"])
+router = APIRouter(prefix="/exchange-accounts", tags=["exchange-accounts"], dependencies=[Depends(get_current_authorized_user)])
 
 
 # ── Helpers ───────────────────────────────────────────────────
@@ -234,7 +234,7 @@ async def _check_credentials_sync(account: ExchangeAccount) -> dict:
 
     except Exception as exc:
         from loguru import logger
-        logger.exception(f"[verify_credentials] account={account.id} exchange={account.exchange}: {exc}")
+        logger.warning(f"[verify_credentials] account={account.id} exchange={account.exchange}: {type(exc).__name__}")
         error_str = str(exc).lower()
         if any(x in error_str for x in ["apikey", "api key", "key", "secret", "unauthorized", "authentication", "auth", "forbidden", "403", "401"]):
             err_status = "error_credentials"
@@ -242,7 +242,8 @@ async def _check_credentials_sync(account: ExchangeAccount) -> dict:
             err_status = "error_network"
         else:
             err_status = "error_unknown"
-        return {"status": err_status, "error": str(exc)[:500]}
+        # No devolver el mensaje de error raw para evitar filtrar secrets
+        return {"status": err_status, "error": "Error de conexión o credenciales. Verifica tu configuración."}
 
     finally:
         if exchange is not None:

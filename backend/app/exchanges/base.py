@@ -36,6 +36,7 @@ class OpenPosition:
     quantity: Decimal
     unrealized_pnl: Decimal
     exchange_position_id: str = ""
+    leverage: int | None = None
 
 
 # ─── Interfaz abstracta ───────────────────────────────────────
@@ -167,7 +168,11 @@ class BaseExchange(ABC):
             margin_usdt = sizing_value
 
         notional = margin_usdt * Decimal(leverage)
-        # Truncar a 3 decimales para evitar problemas de precisión
+        # Fallback: truncar a 3 decimales.
+        # IMPORTANTE: Cada exchange DEBE sobreescribir este método para respetar
+        # el step_size (amount precision) real del mercado. BingX ya lo hace.
+        # Bitunix y Paper usan este fallback — puede generar cantidades inválidas
+        # para símbolos con precisión diferente a 0.001.
         return (notional / price).quantize(Decimal("0.001"))
 
     async def get_markets(self) -> list[str]:
@@ -203,7 +208,8 @@ class BaseExchange(ABC):
         return []
 
     async def get_trade_history(
-        self, symbol: str | None = None, limit: int = 100, since: int | None = None
+        self, symbol: str | None = None, limit: int = 100, since: int | None = None,
+        extra_symbols: list[str] | None = None,
     ) -> list[dict]:
         """
         Historial de trades ejecutados (fills/orders cerrados).

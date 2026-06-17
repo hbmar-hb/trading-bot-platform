@@ -18,9 +18,12 @@ async def has_active_bot_conflict(
     symbol: str,
     exchange_account_id: uuid.UUID,
     exclude_bot_id: uuid.UUID | None = None,
+    timeframe: str | None = None,
 ) -> BotConfig | None:
     """
     Devuelve el bot conflictivo (activo, mismo símbolo + cuenta) o None.
+    Si se proporciona timeframe, la comparación incluye mismo símbolo + timeframe + cuenta,
+    permitiendo activar bots del mismo par en temporalidades distintas.
     exclude_bot_id: ignorar el propio bot al comprobar (usado al activar).
     
     NOTA: Los bots con prefijo [MANUAL] no bloquean otros bots, ya que son
@@ -35,6 +38,8 @@ async def has_active_bot_conflict(
         # Ignorar bots manuales (no bloquean otros bots)
         not_(BotConfig.bot_name.startswith("[MANUAL]")),
     )
+    if timeframe:
+        query = query.where(BotConfig.timeframe == timeframe)
     if exclude_bot_id:
         query = query.where(BotConfig.id != exclude_bot_id)
 

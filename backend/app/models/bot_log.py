@@ -17,6 +17,10 @@ EVENT_TYPES = (
     "trailing_activated",
     "conflict_rejected",
     "error",
+    "emergency_reduce",
+    "scale_out",
+    "time_exit",
+    "exposure_cap_blocked",
 )
 
 
@@ -32,7 +36,7 @@ class BotLog(Base):
     )
 
     event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
-    message: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Datos adicionales del evento (precio, qty, orden ID, etc.)
     extra_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True, name="metadata")

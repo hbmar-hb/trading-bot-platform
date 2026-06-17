@@ -154,12 +154,8 @@ def calculate_dynamic_sl_price(
 
     if side == "long":
         price = entry_price * (Decimal("1") - sl_factor + step_factor)
-        # El SL no puede subir por encima de la entrada (protección)
-        price = min(price, entry_price * Decimal("0.9999"))
     else:
         price = entry_price * (Decimal("1") + sl_factor - step_factor)
-        # El SL no puede bajar por debajo de la entrada (protección)
-        price = max(price, entry_price * Decimal("1.0001"))
 
     return _round_price(max(price, Decimal("0.0001")))
 

@@ -62,7 +62,7 @@ class RegisterRequest(BaseModel):
 class UserCreate(BaseModel):
     username: str
     email: str
-    role: str = "user"
+    role: str = "rol1"
     telegram_chat_id: str | None = None
 
 
@@ -106,6 +106,7 @@ class ResendVerificationRequest(BaseModel):
 
 class TwoFactorVerifyRequest(BaseModel):
     totp_code: str
+    current_password: str | None = None  # Requerido para setup/verify/disable desde ahora
 
 
 class TwoFactorLoginRequest(BaseModel):
@@ -115,6 +116,7 @@ class TwoFactorLoginRequest(BaseModel):
 
 class UserProfileUpdateRequest(BaseModel):
     telegram_chat_id: str | None = None
+    telegram_username: str | None = None
     notify_on_open: bool | None = None
     notify_on_partial: bool | None = None
     notify_on_close: bool | None = None
@@ -154,16 +156,22 @@ class TwoFactorSetupResponse(BaseModel):
     qr_image: str    # base64 PNG
 
 
+class TelegramLinkResponse(BaseModel):
+    link: str
+    username: str | None = None
+
+
 class UserResponse(BaseModel):
     id: uuid.UUID
     username: str
     email: str
     is_active: bool
-    role: str = "user"
+    role: str = "rol1"
     email_verified: bool = False
     totp_enabled: bool = False
     must_change_password: bool = False
     telegram_chat_id: str | None = None
+    telegram_username: str | None = None
     notify_on_open: bool = True
     notify_on_partial: bool = True
     notify_on_close: bool = True

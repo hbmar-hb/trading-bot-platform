@@ -3,6 +3,7 @@ Tareas Celery para auto-optimización automática de bots.
 Se ejecuta periódicamente (cada 5 min) y también tras cerrar una posición.
 """
 import asyncio
+import gc
 import uuid
 
 from celery import shared_task
@@ -15,12 +16,15 @@ from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 async def _auto_optimize_bot(bot_id: uuid.UUID):
@@ -36,6 +40,8 @@ async def _auto_optimize_bot(bot_id: uuid.UUID):
             bot = bot_result.scalar_one_or_none()
             if not bot or not bot.auto_optimize_enabled:
                 return {"status": "skipped", "reason": "not_enabled"}
+            if bot.ai_signal_mode:
+                return {"status": "skipped", "reason": "ai_signal_mode_excluded"}
 
             result = await _run_auto_optimize_for_bot(bot, db, dry_run=False)
             logger.info(f"[AUTO-OPTIMIZE TASK] Bot {bot_id}: {result['status']}")
@@ -109,7 +115,10 @@ def auto_optimize_all_bots_task(self):
         results = []
         async with AsyncSessionLocal() as db:
             bots_result = await db.execute(
-                select(BotConfig).where(BotConfig.auto_optimize_enabled == True)
+                select(BotConfig).where(
+                    BotConfig.auto_optimize_enabled == True,
+                    BotConfig.ai_signal_mode == False,
+                )
             )
             bots = bots_result.scalars().all()
 
@@ -131,7 +140,7 @@ def auto_optimize_all_bots_task(self):
                     logger.info(
                         f"[AUTO-OPTIMIZE TASK] {bot.bot_name}: {result['status']}"
                     )
-                    
+
                     # Notificar si se aplicaron cambios
                     if result.get("status") == "applied" and result.get("changes"):
                         try:
@@ -157,6 +166,10 @@ def auto_optimize_all_bots_task(self):
                             )
                         except Exception as ne:
                             logger.warning(f"[AUTO-OPTIMIZE TASK] No se pudo enviar notificacion: {ne}")
+
+                    # Liberar memoria entre bots para evitar acumulación
+                    del result
+                    gc.collect()
                 except Exception as e:
                     logger.error(
                         f"[AUTO-OPTIMIZE TASK] Error en {bot.bot_name}: {e}"

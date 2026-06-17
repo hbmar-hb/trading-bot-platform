@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
-import { TrendingDown, TrendingUp, X, ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle, Plus, Minus, Calculator, BarChart3, ShieldCheck, ExternalLink } from 'lucide-react'
+import { TrendingDown, TrendingUp, X, ChevronDown, ChevronUp, Loader2, AlertCircle, CheckCircle, Plus, Minus, Calculator, BarChart3, ShieldCheck, ExternalLink, AlertTriangle } from 'lucide-react'
 import { createChart, CrosshairMode } from 'lightweight-charts'
 import { manualTradeService } from '@/services/manualTrade'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
@@ -7,6 +7,12 @@ import { paperTradingService } from '@/services/paperTrading'
 import { usePrice } from '@/hooks/usePrice'
 import usePositionStore from '@/store/positionStore'
 import api from '@/services/api'
+
+// "SOL/USDT:USDT" -> "SOLUSDT"
+const toCompactSymbol = (s) =>
+  typeof s === 'string'
+    ? s.replace(/\/([^:]+):[^:]+$/, '$1').replace('/', '').toUpperCase()
+    : s
 
 // ── Symbol Search Component (from BotEditPage) ───────────────
 function SymbolSearch({ value, onChange, accountId, accountType }) {
@@ -16,24 +22,34 @@ function SymbolSearch({ value, onChange, accountId, accountType }) {
   const [open,    setOpen]      = useState(false)
   const ref = useRef(null)
 
+  const loadBingxMarkets = () => {
+    setLoading(true)
+    exchangeAccountsService.marketsByExchange('bingx')
+      .then(r => setMarkets((r.data || []).map(toCompactSymbol)))
+      .catch(() => setMarkets([]))
+      .finally(() => setLoading(false))
+  }
+
   // Cargar mercados cuando cambia la cuenta
   useEffect(() => {
     if (accountType === 'paper') {
-      // En modo paper, cargamos mercados de Binance (más común)
-      setLoading(true)
-      exchangeAccountsService.marketsByExchange('binance')
-        .then(r => setMarkets(r.data || []))
-        .catch(() => setMarkets([]))
-        .finally(() => setLoading(false))
+      loadBingxMarkets()
       return
     }
     
     if (!accountId) { setMarkets([]); return }
     setLoading(true)
     exchangeAccountsService.markets(accountId)
-      .then(r => setMarkets(r.data || []))
-      .catch(() => setMarkets([]))
-      .finally(() => setLoading(false))
+      .then(r => {
+        const list = (r.data || []).map(toCompactSymbol)
+        if (list.length === 0) {
+          loadBingxMarkets()
+        } else {
+          setMarkets(list)
+          setLoading(false)
+        }
+      })
+      .catch(() => loadBingxMarkets())
   }, [accountId, accountType])
 
   // Sincronizar query si el valor externo cambia
@@ -46,21 +62,22 @@ function SymbolSearch({ value, onChange, accountId, accountType }) {
     return () => document.removeEventListener('mousedown', handler)
   }, [])
 
-  const filtered = query.length < 1
+  const normalizedQuery = query.toUpperCase()
+  const filtered = normalizedQuery.length < 1
     ? markets.slice(0, 50)
-    : markets.filter(s => s.toLowerCase().includes(query.toLowerCase())).slice(0, 50)
+    : markets.filter(s => s.includes(normalizedQuery)).slice(0, 50)
 
   const handleSelect = (symbol) => {
-    const upperSymbol = symbol.toUpperCase()
-    setQuery(upperSymbol)
-    onChange(upperSymbol)
+    const compact = toCompactSymbol(symbol)
+    setQuery(compact)
+    onChange(compact)
     setOpen(false)
   }
 
   const handleInputChange = (e) => {
-    const upperValue = e.target.value.toUpperCase()
-    setQuery(upperValue)
-    onChange(upperValue)
+    const compact = toCompactSymbol(e.target.value)
+    setQuery(compact)
+    onChange(compact)
     setOpen(true)
   }
 
@@ -727,6 +744,11 @@ export default function ManualTradePage() {
   const [loading, setLoading] = useState(false)
   const [closing, setClosing] = useState(false)
   const [feedback, setFeedback] = useState(null)
+  
+  // Modal de confirmación para conflictos
+  const [confirmModal, setConfirmModal] = useState(false)
+  const [pendingAction, setPendingAction] = useState(null)
+  const [conflicts, setConflicts] = useState([])
 
   // Theme detection
   const [isDark, setIsDark] = useState(false)
@@ -855,7 +877,7 @@ export default function ManualTradePage() {
     return { ...base, exchange_account_id: selectedAccountId }
   }
 
-  const execute = async (action) => {
+  const doExecute = async (action) => {
     if (!selectedAccountId || !symbol.trim()) return
     setLoading(true)
     setFeedback(null)
@@ -872,6 +894,38 @@ export default function ManualTradePage() {
       setFeedback({ type: 'error', msg: err.response?.data?.detail || 'Error al ejecutar' })
     } finally {
       setLoading(false)
+    }
+  }
+
+  const execute = async (action) => {
+    if (!selectedAccountId || !symbol.trim()) return
+    
+    // Verificar conflictos antes de ejecutar
+    try {
+      const params = selectedAccountType === 'paper' 
+        ? { paper_balance_id: selectedAccountId }
+        : { exchange_account_id: selectedAccountId }
+      const { data } = await manualTradeService.checkConflicts(symbol, params)
+      
+      if (data.has_conflict) {
+        setPendingAction(action)
+        setConflicts(data.conflicts)
+        setConfirmModal(true)
+        return
+      }
+    } catch (e) {
+      // Si falla el check, continuamos igual (fail-open)
+      console.warn('Error checking conflicts:', e)
+    }
+    
+    doExecute(action)
+  }
+  
+  const handleConfirmExecute = () => {
+    setConfirmModal(false)
+    if (pendingAction) {
+      doExecute(pendingAction)
+      setPendingAction(null)
     }
   }
 
@@ -1324,6 +1378,55 @@ export default function ManualTradePage() {
           )}
         </div>
       </div>
+
+      {/* Modal de confirmación de conflictos */}
+      {confirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md overflow-y-auto max-h-[90vh]">
+            <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-gray-700">
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <AlertTriangle size={20} className="text-yellow-500" />
+                ¿Abrir posición adicional?
+              </h2>
+              <button onClick={() => setConfirmModal(false)} className="text-slate-400 hover:text-slate-600 dark:hover:text-gray-300">
+                <X size={20} />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+                <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                  Ya existe{conflicts.length > 1 ? 'n' : ''} una posición en <strong>{symbol}</strong>:
+                </p>
+                <ul className="mt-2 space-y-1">
+                  {conflicts.map((c, i) => (
+                    <li key={i} className="text-sm text-yellow-600 dark:text-yellow-400 flex items-center gap-2">
+                      <span className={`inline-block w-2 h-2 rounded-full ${c.side === 'long' ? 'bg-green-500' : 'bg-red-500'}`} />
+                      {c.side.toUpperCase()} — {c.source === 'ia' ? 'Bot IA' : c.source === 'signal' ? 'Bot Señal' : 'Manual'} ({c.bot_name})
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400">
+                Esto resultará en múltiples posiciones en el mismo activo. Asegúrate de que es lo que quieres hacer.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setConfirmModal(false)}
+                  className="flex-1 py-3 rounded-xl font-semibold text-slate-700 dark:text-gray-300 bg-slate-100 dark:bg-gray-800 hover:bg-slate-200 dark:hover:bg-gray-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={handleConfirmExecute}
+                  className="flex-1 py-3 rounded-xl font-semibold text-white bg-yellow-600 hover:bg-yellow-500 transition-colors"
+                >
+                  Sí, abrir de todos modos
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   )

@@ -20,10 +20,13 @@ from app.services.database import get_db
 from app.services.email_service import send_password_reset_email, send_welcome_email
 from config.settings import settings
 
+# WebSocket manager para consultar usuarios conectados
+from app.api.websocket.manager import ws_manager
+
 router = APIRouter(prefix="/users", tags=["users"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-VALID_ROLES = ("user", "moderator", "admin")
+VALID_ROLES = ("rol1", "moderator", "admin")
 
 
 async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> User:
@@ -64,7 +67,7 @@ async def create_user(
         username=data.username,
         email=data.email,
         hashed_password=pwd_context.hash(temp_password),
-        role=data.role if data.role in VALID_ROLES else "user",
+        role=data.role if data.role in VALID_ROLES else "rol1",
         telegram_chat_id=data.telegram_chat_id.strip() if data.telegram_chat_id and data.telegram_chat_id.strip() else None,
     )
     db.add(user)
@@ -75,9 +78,7 @@ async def create_user(
     token = str(uuid.uuid4())
     set_password_reset_token(str(user.id), token)
     reset_url = f"{settings.frontend_url}/reset-password?token={token}"
-    asyncio.get_event_loop().run_in_executor(
-        None, send_welcome_email, user.email, user.username, reset_url
-    )
+    await asyncio.to_thread(send_welcome_email, user.email, user.username, reset_url)
 
     return user
 
@@ -136,9 +137,7 @@ async def send_reset_email(
     token = str(uuid.uuid4())
     set_password_reset_token(str(user.id), token)
     reset_url = f"{settings.frontend_url}/reset-password?token={token}"
-    asyncio.get_event_loop().run_in_executor(
-        None, send_password_reset_email, user.email, reset_url
-    )
+    await asyncio.to_thread(send_password_reset_email, user.email, reset_url)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -153,3 +152,14 @@ async def delete_user(
     user = await _get_user_or_404(user_id, db)
     await db.delete(user)
     await db.commit()
+
+
+@router.get("/online-status")
+async def online_status(
+    _: User = Depends(get_current_admin_user),
+):
+    """Devuelve el número de usuarios actualmente conectados vía WebSocket."""
+    online_ids = ws_manager.get_online_user_ids()
+    return {
+        "total_connected": len(online_ids),
+    }

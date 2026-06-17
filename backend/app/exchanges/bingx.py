@@ -16,6 +16,7 @@ class BingXExchange(BaseExchange):
             "apiKey": api_key,
             "secret": secret,
             "options": {"defaultType": "swap"},
+            "timeout": 30000,  # 30s max per HTTP call
         })
         if testnet:
             self._client.set_sandbox_mode(True)
@@ -47,37 +48,113 @@ class BingXExchange(BaseExchange):
             side_param = "SHORT"
         await self._client.set_leverage(leverage, symbol, {"side": side_param})
 
+    async def calculate_quantity(
+        self,
+        symbol: str,
+        equity: Decimal,
+        sizing_type: str,
+        sizing_value: Decimal,
+        leverage: int,
+    ) -> Decimal:
+        from loguru import logger
+
+        if not self._client.markets:
+            await self._client.load_markets()
+
+        price = await self.get_price(symbol)
+
+        if sizing_type == "percentage":
+            margin_usdt = equity * (sizing_value / Decimal("100"))
+        else:
+            margin_usdt = sizing_value
+
+        notional = margin_usdt * Decimal(leverage)
+        raw_qty = notional / price
+
+        # Use the exchange's actual step size instead of hardcoded 0.001
+        market = self._client.market(symbol)
+        amount_precision = market.get("precision", {}).get("amount")
+        if amount_precision:
+            qty = Decimal(str(self._client.amount_to_precision(symbol, float(raw_qty))))
+        else:
+            qty = raw_qty.quantize(Decimal("0.001"))
+
+        # Check against exchange minimum order size
+        min_amount = float((market.get("limits") or {}).get("amount", {}).get("min") or 0)
+        min_notional = float((market.get("limits") or {}).get("cost", {}).get("min") or 0)
+
+        logger.info(
+            f"[BingX] calculate_quantity: symbol={symbol}, equity={equity}, "
+            f"sizing={sizing_type}/{sizing_value}, leverage={leverage}x, "
+            f"price={price}, notional={notional:.4f} USDT, qty={qty}, "
+            f"min_amount={min_amount}, min_notional={min_notional}"
+        )
+
+        # Auto-adjust to exchange minimums instead of failing
+        adjusted = False
+        original_qty = qty
+        if min_amount and float(qty) < min_amount:
+            qty = Decimal(str(self._client.amount_to_precision(symbol, min_amount)))
+            adjusted = True
+            logger.warning(
+                f"[BingX] Cantidad ajustada al mínimo del exchange: {original_qty} → {qty} "
+                f"(min_amount={min_amount})"
+            )
+
+        if min_notional and float(qty * price) < min_notional:
+            target_qty = Decimal(str(min_notional)) / price
+            qty = Decimal(str(self._client.amount_to_precision(symbol, float(target_qty))))
+            adjusted = True
+            logger.warning(
+                f"[BingX] Cantidad ajustada por min_notional: {original_qty} → {qty} "
+                f"(min_notional={min_notional} USDT)"
+            )
+
+        if adjusted:
+            actual_margin = (qty * price) / Decimal(leverage)
+            logger.warning(
+                f"[BingX] Riesgo real será ~{actual_margin:.2f} USDT (vs {margin_usdt:.2f} USDT configurado)"
+            )
+
+        return qty
+
     async def open_long(self, symbol: str, quantity: Decimal, price: Decimal | None = None) -> OrderResult:
         from loguru import logger
-        logger.info(f"[BingX] open_long: symbol={symbol}, quantity={quantity}, price={price}")
-        if quantity <= Decimal("0"):
-            raise ValueError(f"Quantity must be greater than 0, got {quantity}")
+        if not self._client.markets:
+            await self._client.load_markets()
+        # Round quantity to exchange precision before sending
+        qty_precise = Decimal(str(self._client.amount_to_precision(symbol, float(quantity))))
+        logger.info(f"[BingX] open_long: symbol={symbol}, quantity={quantity} → {qty_precise}, price={price}")
+        if qty_precise <= Decimal("0"):
+            raise ValueError(f"Quantity must be greater than 0, got {qty_precise}")
         if price:
-            # Orden limit
+            price_precise = Decimal(str(self._client.price_to_precision(symbol, float(price))))
             order = await self._client.create_limit_buy_order(
-                symbol, float(quantity), float(price), params={"positionSide": "LONG"}
+                symbol, float(qty_precise), float(price_precise), params={"positionSide": "LONG"}
             )
         else:
-            # Orden de mercado
             order = await self._client.create_market_buy_order(
-                symbol, float(quantity), params={"positionSide": "LONG"}
+                symbol, float(qty_precise), params={"positionSide": "LONG"}
             )
         return self._parse_order(order, "long")
 
     async def open_short(self, symbol: str, quantity: Decimal, price: Decimal | None = None) -> OrderResult:
         from loguru import logger
-        logger.info(f"[BingX] open_short: symbol={symbol}, quantity={quantity}, price={price}")
-        if quantity <= Decimal("0"):
-            raise ValueError(f"Quantity must be greater than 0, got {quantity}")
+        if not self._client.markets:
+            await self._client.load_markets()
+        # Round quantity to exchange precision before sending
+        qty_precise = Decimal(str(self._client.amount_to_precision(symbol, float(quantity))))
+        logger.info(f"[BingX] open_short: symbol={symbol}, quantity={quantity} → {qty_precise}, price={price}")
+        if qty_precise <= Decimal("0"):
+            raise ValueError(f"Quantity must be greater than 0, got {qty_precise}")
         if price:
-            # Orden limit
+            price_precise = Decimal(str(self._client.price_to_precision(symbol, float(price))))
             order = await self._client.create_limit_sell_order(
-                symbol, float(quantity), float(price), params={"positionSide": "SHORT"}
+                symbol, float(qty_precise), float(price_precise), params={"positionSide": "SHORT"}
             )
         else:
-            # Orden de mercado
             order = await self._client.create_market_sell_order(
-                symbol, float(quantity), params={"positionSide": "SHORT"}
+                symbol, float(qty_precise), params={"positionSide": "SHORT"}
             )
         return self._parse_order(order, "short")
 
@@ -89,14 +166,19 @@ class BingXExchange(BaseExchange):
         if not self._client.markets:
             await self._client.load_markets()
 
-        # Obtener la cantidad real desde el exchange (ignora lo guardado en DB)
+        # Obtener la cantidad real desde el exchange (safety check)
         actual_qty = await self._get_actual_position_qty(symbol, side)
+        requested_qty = float(quantity)
         if actual_qty is not None and actual_qty > 0:
-            qty_float = actual_qty
-            logger.info(f"BingX close_position: usando qty real del exchange {qty_float} (DB tenía {float(quantity)})")
+            # Respetar la cantidad solicitada (cierre parcial), pero nunca cerrar más de lo existente
+            qty_float = min(requested_qty, actual_qty)
+            logger.info(
+                f"BingX close_position: requested={requested_qty}, actual={actual_qty}, "
+                f"using={qty_float} (symbol={symbol}, side={side})"
+            )
         else:
-            qty_float = float(quantity)
-            logger.info(f"BingX close_position: posición no encontrada en exchange, usando qty de DB {qty_float}")
+            qty_float = requested_qty
+            logger.info(f"BingX close_position: posición no encontrada en exchange, usando qty solicitada {qty_float}")
 
         market = self._client.market(symbol)
         min_amount = float((market.get("limits") or {}).get("amount", {}).get("min") or 0)
@@ -109,15 +191,17 @@ class BingXExchange(BaseExchange):
         logger.info(f"BingX close_position: symbol={symbol}, side={side}, qty={qty_float}, min={min_amount}")
 
         if min_amount and qty_float < min_amount:
-            logger.warning(f"BingX: qty {qty_float} < min {min_amount}, no hay posición real que cerrar")
-            # Devolver resultado vacío — la posición ya está cerrada en el exchange
-            return OrderResult(
-                order_id="already_closed",
-                symbol=symbol,
-                side=side,
-                quantity=quantity,
-                fill_price=Decimal("0"),
-            )
+            if actual_qty and actual_qty > 0:
+                # Cierre parcial es menor que el mínimo del exchange — cerrar toda la posición
+                # para no dejar cantidades residuales que no se pueden cerrar
+                logger.warning(
+                    f"BingX: qty {qty_float} < min {min_amount}, cerrando posición completa "
+                    f"actual_qty={actual_qty} en lugar de cierre parcial"
+                )
+                qty_float = float(self._client.amount_to_precision(symbol, actual_qty))
+            else:
+                logger.warning(f"BingX: qty {qty_float} < min {min_amount} y no hay posición real")
+                raise ccxt.ExchangeError("Position already closed")
 
         try:
             if side == "long":
@@ -130,6 +214,13 @@ class BingXExchange(BaseExchange):
                 )
             logger.info(f"BingX close order result: {order}")
             return self._parse_order(order, side)
+        except ccxt.ExchangeError as e:
+            msg = str(e)
+            if "No position to close" in msg or "101205" in msg:
+                logger.warning(f"BingX: posición ya cerrada en exchange — {symbol}")
+                raise ccxt.ExchangeError("Position already closed")
+            logger.error(f"BingX close_position failed: {type(e).__name__}: {e}")
+            raise
         except Exception as e:
             logger.error(f"BingX close_position failed: {type(e).__name__}: {e}")
             raise
@@ -169,9 +260,11 @@ class BingXExchange(BaseExchange):
         if not self._client.markets:
             await self._client.load_markets()
         tp_price_str = self._client.price_to_precision(symbol, float(tp_price))
+        # Hedge mode: BingX rejects reduceOnly on TP/SL orders.
+        # positionSide is sufficient to identify which position to close.
         order = await self._client.create_order(
             symbol=symbol, type="TAKE_PROFIT_MARKET", side=tp_order_side, amount=float(quantity),
-            params={"stopPrice": float(tp_price_str), "positionSide": position_side, "reduceOnly": True},
+            params={"stopPrice": float(tp_price_str), "positionSide": position_side},
         )
         return str(order["id"])
 
@@ -195,6 +288,7 @@ class BingXExchange(BaseExchange):
                 continue
             entry_price = p.get("entryPrice") or p.get("info", {}).get("avgPrice") or 0
             side_raw = p.get("side") or p.get("info", {}).get("positionSide", "long")
+            leverage_raw = p.get("leverage") or p.get("info", {}).get("leverage")
             result.append(OpenPosition(
                 symbol=p["symbol"],
                 side="long" if str(side_raw).lower() in ("long", "buy") else "short",
@@ -202,6 +296,7 @@ class BingXExchange(BaseExchange):
                 quantity=Decimal(str(contracts)),
                 unrealized_pnl=Decimal(str(p.get("unrealizedPnl") or 0)),
                 exchange_position_id=str(p.get("id") or p.get("info", {}).get("positionId") or ""),
+                leverage=int(leverage_raw) if leverage_raw else None,
             ))
         return result
 
@@ -247,7 +342,7 @@ class BingXExchange(BaseExchange):
             logger.warning(f"BingX get_open_orders error: {e}")
             return []
 
-    async def get_trade_history(self, symbol=None, limit=100, since=None):
+    async def get_trade_history(self, symbol=None, limit=100, since=None, extra_symbols=None):
         from loguru import logger
         from decimal import Decimal
         trades = []
@@ -286,6 +381,14 @@ class BingXExchange(BaseExchange):
                     pass
 
                 symbols_to_check = list(active_symbols | recent_symbols)
+
+                # Incluir símbolos extra proporcionados por el caller (p.ej. posiciones cerradas recientes)
+                if extra_symbols:
+                    extra_set = set(extra_symbols)
+                    new_extras = extra_set - set(symbols_to_check)
+                    if new_extras:
+                        symbols_to_check.extend(list(new_extras))
+                        logger.info(f"BingX: Añadidos {len(new_extras)} símbolos extra de posiciones cerradas recientes")
 
                 # Si no encontramos nada (exchange vacío o error), caer en lista base
                 if not symbols_to_check:
@@ -365,7 +468,15 @@ class BingXExchange(BaseExchange):
                         if pnl is None:
                             continue
                         
-                        side = "long" if o.get("side") == "buy" else "short"
+                        # BingX positionSide indica la dirección real de la posición (LONG/SHORT)
+                        # No confundir con 'side' de la orden (BUY/SELL) que es el lado de la orden de cierre
+                        position_side = info.get("positionSide", "").upper()
+                        if position_side == "LONG":
+                            side = "long"
+                        elif position_side == "SHORT":
+                            side = "short"
+                        else:
+                            side = "long" if o.get("side") == "buy" else "short"
                         qty = Decimal(str(o.get("filled") or o.get("amount") or 0))
                         price = Decimal(str(o.get("average") or o.get("price") or 0))
                         

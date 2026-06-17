@@ -4,7 +4,7 @@ import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
 
 const ROLES = [
-  { value: 'user',      label: 'Usuario',    icon: User,        cls: 'bg-slate-500/20 text-slate-400' },
+  { value: 'rol1',      label: 'ROL 1',      icon: User,        cls: 'bg-slate-500/20 text-slate-400' },
   { value: 'moderator', label: 'Moderador',  icon: Shield,      cls: 'bg-amber-500/20 text-amber-400' },
   { value: 'admin',     label: 'Admin',      icon: ShieldCheck, cls: 'bg-blue-500/20 text-blue-400' },
 ]
@@ -43,7 +43,7 @@ function Modal({ title, onClose, children }) {
 
 /* ─── Modal crear usuario ─────────────────────────────────── */
 function CreateUserModal({ onClose, onCreated }) {
-  const [form, setForm]     = useState({ username: '', email: '', role: 'user', telegram_chat_id: '' })
+  const [form, setForm]     = useState({ username: '', email: '', role: 'rol1', telegram_chat_id: '' })
   const [loading, setLoading] = useState(false)
   const [error, setError]   = useState(null)
   const [success, setSuccess] = useState(false)
@@ -108,7 +108,7 @@ function EditUserModal({ user, onClose, onUpdated }) {
   const [form, setForm] = useState({
     username: user.username,
     email: user.email,
-    role: user.role || 'user',
+    role: user.role || 'rol1',
     telegram_chat_id: user.telegram_chat_id || '',
   })
   const [loading, setLoading] = useState(false)
@@ -172,10 +172,17 @@ export default function UsersPage() {
   const [modal, setModal]         = useState(null)
   const [togglingId, setTogglingId] = useState(null)
   const [sendingReset, setSendingReset] = useState(null)
+  const [onlineIds, setOnlineIds] = useState(new Set())
 
   useEffect(() => {
-    usersService.list()
-      .then(r => setUsers(r.data))
+    Promise.all([
+      usersService.list(),
+      usersService.onlineStatus().catch(() => ({ data: { online_user_ids: [] } })),
+    ])
+      .then(([usersRes, onlineRes]) => {
+        setUsers(usersRes.data)
+        setOnlineIds(new Set(onlineRes.data.online_user_ids || []))
+      })
       .catch(() => {})
       .finally(() => setLoading(false))
   }, [])
@@ -216,7 +223,14 @@ export default function UsersPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-bold text-slate-900 dark:text-white">Usuarios</h1>
+        <div className="flex items-center gap-3">
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white">Usuarios</h1>
+          {!loading && (
+            <span className="text-xs px-2 py-1 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20">
+              {onlineIds.size} en línea
+            </span>
+          )}
+        </div>
         <button onClick={() => setModal({ type: 'create' })} className="btn-primary flex items-center gap-2 text-sm">
           <Plus size={16} /> Nuevo usuario
         </button>
@@ -228,10 +242,18 @@ export default function UsersPage() {
         <div className="space-y-2">
           {users.map(user => (
             <div key={user.id} className="card flex items-center gap-4">
-              <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white shrink-0 ${
-                user.role === 'admin' ? 'bg-blue-600' : user.role === 'moderator' ? 'bg-amber-500' : 'bg-slate-500'
-              }`}>
-                {user.username[0].toUpperCase()}
+              <div className="relative shrink-0">
+                <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white ${
+                  user.role === 'admin' ? 'bg-blue-600' : user.role === 'moderator' ? 'bg-amber-500' : 'bg-emerald-600'
+                }`}>
+                  {user.username[0].toUpperCase()}
+                </div>
+                <span
+                  className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full border-2 border-white dark:border-gray-900 ${
+                    onlineIds.has(user.id) ? 'bg-emerald-500' : 'bg-slate-300 dark:bg-slate-600'
+                  }`}
+                  title={onlineIds.has(user.id) ? 'Conectado' : 'Desconectado'}
+                />
               </div>
 
               <div className="flex-1 min-w-0">

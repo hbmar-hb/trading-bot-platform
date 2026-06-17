@@ -346,12 +346,23 @@ function TPPanel({ position, onUpdate }) {
 
 // Panel de Trailing Stop
 function TrailingPanel({ position, onUpdate }) {
+  const tc = position?.trailing_config || {}
   const [config, setConfig] = useState({
-    active: false,
-    distance: 2,
-    step: 0.5,
+    active: tc.enabled ?? false,
+    distance: parseFloat(tc.callback_rate) || 2,
+    step: parseFloat(tc.activation_r ?? tc.activation_profit) || 0.5,
     type: 'percentage'
   })
+
+  useEffect(() => {
+    const tc2 = position?.trailing_config || {}
+    setConfig({
+      active: tc2.enabled ?? false,
+      distance: parseFloat(tc2.callback_rate) || 2,
+      step: parseFloat(tc2.activation_r ?? tc2.activation_profit) || 0.5,
+      type: 'percentage'
+    })
+  }, [position?.trailing_config])
 
   const handleToggle = async () => {
     const newActive = !config.active
@@ -401,6 +412,11 @@ function TrailingPanel({ position, onUpdate }) {
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-500">
             El SL se moverá automáticamente manteniendo {config.distance}% de distancia del precio favorable.
+            {tc.activation_r != null && (
+              <span className="block mt-1 text-amber-600 dark:text-amber-400">
+                Configuración real del bot: activa a {tc.activation_r}R, callback {tc.callback_rate ?? config.distance}%
+              </span>
+            )}
           </p>
         </div>
       )}
@@ -410,11 +426,21 @@ function TrailingPanel({ position, onUpdate }) {
 
 // Panel de BreakEven
 function BreakEvenPanel({ position, onUpdate }) {
+  const bc = position?.breakeven_config || {}
   const [config, setConfig] = useState({
-    active: false,
-    triggerPercent: 1,
-    lockProfit: 0.3
+    active: bc.enabled ?? false,
+    triggerPercent: parseFloat(bc.activation_r ?? bc.activation_profit) || 1,
+    lockProfit: parseFloat(bc.lock_profit) || 0.3
   })
+
+  useEffect(() => {
+    const bc2 = position?.breakeven_config || {}
+    setConfig({
+      active: bc2.enabled ?? false,
+      triggerPercent: parseFloat(bc2.activation_r ?? bc2.activation_profit) || 1,
+      lockProfit: parseFloat(bc2.lock_profit) || 0.3
+    })
+  }, [position?.breakeven_config])
 
   return (
     <div className="bg-slate-100 dark:bg-gray-800/50 rounded-lg p-3">
@@ -459,6 +485,11 @@ function BreakEvenPanel({ position, onUpdate }) {
           </div>
           <p className="text-xs text-slate-500 dark:text-gray-500">
             Cuando el profit alcance {config.triggerPercent}%, el SL se moverá a entrada + {config.lockProfit}%.
+            {bc.activation_r != null && (
+              <span className="block mt-1 text-blue-600 dark:text-blue-400">
+                Configuración real del bot: activa a {bc.activation_r}R, bloquea +{bc.lock_profit ?? config.lockProfit}%
+              </span>
+            )}
           </p>
         </div>
       )}
@@ -468,12 +499,35 @@ function BreakEvenPanel({ position, onUpdate }) {
 
 // Panel de Stop Dinámico
 function DynamicSLPanel({ position, onUpdate }) {
-  const [steps, setSteps] = useState([
+  const dc = position?.dynamic_sl_config || {}
+  const maxSteps = dc.max_steps || 3
+  const stepSize = parseFloat(dc.step_r ?? dc.step_percent) || 0.5
+  const initialSteps = Array.from({ length: maxSteps }, (_, i) => ({
+    tpPercent: parseFloat(((i + 1) * stepSize).toFixed(2)),
+    slPercent: parseFloat(((i + 1) * stepSize * 0.5).toFixed(2))
+  }))
+  const [steps, setSteps] = useState(initialSteps.length > 0 ? initialSteps : [
     { tpPercent: 1, slPercent: 0.5 },
     { tpPercent: 2, slPercent: 1 },
     { tpPercent: 3, slPercent: 2 }
   ])
-  const [active, setActive] = useState(false)
+  const [active, setActive] = useState(dc.enabled ?? false)
+
+  useEffect(() => {
+    const dc2 = position?.dynamic_sl_config || {}
+    setActive(dc2.enabled ?? false)
+    const maxSteps2 = dc2.max_steps || 3
+    const stepSize2 = parseFloat(dc2.step_r ?? dc2.step_percent) || 0.5
+    const newSteps = Array.from({ length: maxSteps2 }, (_, i) => ({
+      tpPercent: parseFloat(((i + 1) * stepSize2).toFixed(2)),
+      slPercent: parseFloat(((i + 1) * stepSize2 * 0.5).toFixed(2))
+    }))
+    setSteps(newSteps.length > 0 ? newSteps : [
+      { tpPercent: 1, slPercent: 0.5 },
+      { tpPercent: 2, slPercent: 1 },
+      { tpPercent: 3, slPercent: 2 }
+    ])
+  }, [position?.dynamic_sl_config])
 
   const addStep = () => {
     setSteps([...steps, { tpPercent: steps.length + 1, slPercent: steps.length * 0.5 }])

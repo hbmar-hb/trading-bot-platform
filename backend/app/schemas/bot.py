@@ -48,7 +48,7 @@ class BotCreate(BaseModel):
     bot_name: str
     symbol: str
     timeframe: str
-    position_sizing_type: Literal["percentage", "fixed"] = "percentage"
+    position_sizing_type: Literal["percentage", "fixed", "risk_based"] = "percentage"
     position_value: Decimal
     leverage: int = 1
     use_roi_percentage: bool = False
@@ -59,11 +59,46 @@ class BotCreate(BaseModel):
     dynamic_sl_config: DynamicSLConfig = DynamicSLConfig()
     signal_confirmation_minutes: int = 0
     ai_signal_mode: bool = False
+    ai_optimal_config_enabled: bool = False
+    auto_timeframe: bool = False
     ai_signal_config: dict = Field(default_factory=dict)
+    webhook_enabled: bool = False
+    indicator_enabled: bool = False
+    telegram_chat_id: str | None = None
+    telegram_thread_id: int | None = None
+    alerts_only: bool = False
+    conflict_config: dict = Field(default_factory=dict)
+    ict_config: dict = Field(default_factory=dict)
+    trigger_indicator: str | None = None
+    trigger_timeframe: str | None = None
+    trigger_min_grade: str = "A"
+    trigger_timing: str = "candle_close"
+    trigger_interval_minutes: int = 5
+    min_confirm_candles: int = 1
+
+    @field_validator("webhook_enabled")
+    @classmethod
+    def force_webhook_for_alerts_only(cls, v: bool, info) -> bool:
+        # Los bots solo alertas reciben señales exclusivamente por webhook
+        if info.data.get("alerts_only"):
+            return True
+        return v
+
+    @field_validator("indicator_enabled", "ai_signal_mode")
+    @classmethod
+    def force_execution_sources_off_for_alerts(cls, v: bool, info) -> bool:
+        # Los bots solo alertas no deben escanear ni usar IA
+        if info.data.get("alerts_only"):
+            return False
+        return v
 
     @field_validator("exchange_account_id", "paper_balance_id")
     @classmethod
     def validate_account(cls, v: uuid.UUID | None, info) -> uuid.UUID | None:
+        # Los bots de solo alertas no requieren cuenta de exchange
+        if info.data.get("alerts_only"):
+            return v
+
         # Verificar que al menos uno esté definido
         if info.field_name == "paper_balance_id":
             exchange_id = info.data.get("exchange_account_id")
@@ -83,6 +118,14 @@ class BotCreate(BaseModel):
                 "Elige trading real o paper trading."
             )
         return v
+
+    @field_validator("timeframe", "trigger_timeframe")
+    @classmethod
+    def timeframe_valid(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        from app.core.constants import validate_timeframe
+        return validate_timeframe(v)
 
     @field_validator("symbol")
     @classmethod
@@ -176,12 +219,41 @@ class BotResponse(BaseModel):
     webhook_secret: str
     signal_confirmation_minutes: int
     ai_signal_mode: bool = False
+    ai_optimal_config_enabled: bool = False
+    auto_timeframe: bool = False
     ai_signal_config: dict = Field(default_factory=dict)
+    webhook_enabled: bool = True
+    indicator_enabled: bool = False
+    telegram_chat_id: str | None = None
+    telegram_thread_id: int | None = None
+    alerts_only: bool = False
+    conflict_config: dict = Field(default_factory=dict)
+    ict_config: dict = Field(default_factory=dict)
+    trigger_indicator: str | None = None
+    trigger_timeframe: str | None = None
+    trigger_min_grade: str = "A"
+    trigger_timing: str = "candle_close"
+    trigger_interval_minutes: int = 5
+    min_confirm_candles: int = 1
     status: str
     created_at: datetime
     updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+    @field_validator("webhook_secret", mode="before")
+    @classmethod
+    def decrypt_webhook_secret(cls, v):
+        # El secret se almacena encriptado en DB; lo devolvemos en clave
+        # para que el usuario pueda configurar TradingView.
+        if not v:
+            return v
+        try:
+            from app.utils.crypto import decrypt
+            return decrypt(v)
+        except Exception:
+            # Si falla el descifrado, asumimos que ya está en clave
+            return v
     
     @computed_field
     @property

@@ -1,21 +1,25 @@
+import re
 import uuid
+from datetime import datetime, timezone, timedelta
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.core.conflict_validator import has_active_bot_conflict, has_open_position
 from app.exchanges.factory import create_exchange
 from app.models.bot_config import BotConfig
 from app.models.bot_log import BotLog
 from app.models.exchange_account import ExchangeAccount
+from app.models.ai_scan import AIWatchlistItem
 from app.models.paper_balance import PaperBalance
 from app.models.signal_log import SignalLog
 from app.schemas.bot import BotCreate, BotLogResponse, BotResponse, BotStatusUpdate, BotUpdate, SignalLogResponse
 from app.services.database import get_db
+from app.api.routes.webhook import _process_webhook_signal
 
-router = APIRouter(prefix="/bots", tags=["bots"])
+router = APIRouter(prefix="/bots", tags=["bots"], dependencies=[Depends(get_current_authorized_user)])
 
 
 # ─── Helpers ─────────────────────────────────────────────────
@@ -72,7 +76,12 @@ async def _validate_paper_balance(
 
 
 async def _validate_bot_account(data: BotCreate, user_id: uuid.UUID, db: AsyncSession):
-    """Valida que el bot tenga una cuenta válida (real o paper)."""
+    """Valida que el bot tenga una cuenta válida (real o paper).
+    
+    Los bots de solo alertas no requieren cuenta.
+    """
+    if data.alerts_only:
+        return
     if data.paper_balance_id:
         return await _validate_paper_balance(data.paper_balance_id, user_id, db)
     elif data.exchange_account_id:
@@ -135,12 +144,34 @@ async def create_bot(
         leverage=data.leverage,
         initial_sl_percentage=data.initial_sl_percentage,
         signal_confirmation_minutes=data.signal_confirmation_minutes,
-        status="paused",    # siempre empieza pausado
+        webhook_enabled=data.webhook_enabled,
+        indicator_enabled=data.indicator_enabled,
+        ai_signal_mode=data.ai_signal_mode,
+        ai_optimal_config_enabled=data.ai_optimal_config_enabled,
+        auto_timeframe=data.auto_timeframe,
+        ai_signal_config=data.ai_signal_config,
+        trigger_indicator=data.trigger_indicator,
+        trigger_timeframe=data.trigger_timeframe,
+        trigger_min_grade=data.trigger_min_grade,
+        trigger_timing=data.trigger_timing,
+        trigger_interval_minutes=data.trigger_interval_minutes,
+        min_confirm_candles=data.min_confirm_candles,
+        ict_config=data.ict_config,
+        conflict_config=data.conflict_config,
+        alerts_only=data.alerts_only,
+        status="paused",    # seguro: requiere activación explícita
         **_bot_to_db_fields(data),
     )
     db.add(bot)
     await db.commit()
     await db.refresh(bot)
+
+    # Sync: add to AI watchlist if bot is in AI mode (skip alert-only bots)
+    if bot.ai_signal_mode and not bot.alerts_only:
+        normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', bot.symbol).replace('/', '')
+        db.add(AIWatchlistItem(user_id=user_id, symbol=normalized, timeframe=bot.timeframe))
+        await db.commit()
+
     return bot
 
 
@@ -171,6 +202,11 @@ async def update_bot(
     # Validar nueva cuenta (real o paper)
     await _validate_bot_account(data, user_id, db)
 
+    # Capture old values for watchlist sync
+    old_symbol = bot.symbol
+    old_timeframe = bot.timeframe
+    old_ai_mode = bot.ai_signal_mode
+
     bot.exchange_account_id = data.exchange_account_id
     bot.paper_balance_id = data.paper_balance_id
     bot.bot_name = data.bot_name
@@ -182,13 +218,99 @@ async def update_bot(
     bot.initial_sl_percentage = data.initial_sl_percentage
     bot.signal_confirmation_minutes = data.signal_confirmation_minutes
     bot.ai_signal_mode   = data.ai_signal_mode
-    bot.ai_signal_config = data.ai_signal_config
+    bot.ai_optimal_config_enabled = data.ai_optimal_config_enabled
+    bot.auto_timeframe     = data.auto_timeframe
+    bot.webhook_enabled    = data.webhook_enabled
+    bot.indicator_enabled  = data.indicator_enabled
+    bot.trigger_indicator  = data.trigger_indicator
+    bot.trigger_timeframe  = data.trigger_timeframe
+    bot.trigger_min_grade  = data.trigger_min_grade
+    bot.trigger_timing     = data.trigger_timing
+    bot.trigger_interval_minutes = data.trigger_interval_minutes
+    bot.min_confirm_candles = data.min_confirm_candles
+    bot.ict_config         = data.ict_config
+    bot.conflict_config    = data.conflict_config
+    bot.alerts_only        = data.alerts_only
+    # Deep-merge ai_signal_config so runtime state (circuit_breaker_state) is preserved
+    merged_config = dict(bot.ai_signal_config or {})
+    if data.ai_signal_config:
+        for k, v in data.ai_signal_config.items():
+            if isinstance(v, dict) and isinstance(merged_config.get(k), dict):
+                merged_config[k] = {**merged_config[k], **v}
+            else:
+                merged_config[k] = v
+    bot.ai_signal_config = merged_config
     for field, value in _bot_to_db_fields(data).items():
         setattr(bot, field, value)
 
     await db.commit()
     await db.refresh(bot)
+
+    # Sync AI watchlist on symbol/timeframe/ai_mode changes (skip alert-only bots)
+    if (old_ai_mode or data.ai_signal_mode) and not data.alerts_only:
+        old_normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', old_symbol).replace('/', '')
+        new_normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', data.symbol).replace('/', '')
+
+        if old_ai_mode and not data.ai_signal_mode:
+            # AI mode disabled: remove old entry
+            await db.execute(
+                delete(AIWatchlistItem).where(
+                    AIWatchlistItem.user_id == user_id,
+                    AIWatchlistItem.symbol == old_normalized,
+                    AIWatchlistItem.timeframe == old_timeframe,
+                )
+            )
+            await db.commit()
+        elif not old_ai_mode and data.ai_signal_mode:
+            # AI mode enabled: add new entry
+            db.add(AIWatchlistItem(user_id=user_id, symbol=new_normalized, timeframe=data.timeframe))
+            await db.commit()
+        elif old_ai_mode and data.ai_signal_mode:
+            # AI mode still on: check if symbol/timeframe changed
+            if old_normalized != new_normalized or old_timeframe != data.timeframe:
+                await db.execute(
+                    delete(AIWatchlistItem).where(
+                        AIWatchlistItem.user_id == user_id,
+                        AIWatchlistItem.symbol == old_normalized,
+                        AIWatchlistItem.timeframe == old_timeframe,
+                    )
+                )
+                db.add(AIWatchlistItem(user_id=user_id, symbol=new_normalized, timeframe=data.timeframe))
+                await db.commit()
+
     return bot
+
+
+@router.post("/{bot_id}/test-webhook")
+async def test_bot_webhook(
+    bot_id: uuid.UUID,
+    request: Request,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Envía una señal de prueba al webhook del bot sin ejecutar trades."""
+    bot = await _get_bot_or_404(bot_id, user_id, db)
+
+    if not getattr(bot, "webhook_enabled", True):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "El webhook no está habilitado para este bot",
+        )
+
+    from app.utils.crypto import decrypt
+    try:
+        secret = decrypt(bot.webhook_secret)
+    except Exception:
+        secret = bot.webhook_secret
+
+    test_payload = {
+        "secret": secret,
+        "action": "long",
+        "price": 12345.67,
+        "test": True,
+    }
+
+    return await _process_webhook_signal(bot_id, test_payload, request, db)
 
 
 @router.patch("/{bot_id}/status", response_model=BotResponse)
@@ -201,16 +323,32 @@ async def update_bot_status(
     bot = await _get_bot_or_404(bot_id, user_id, db)
 
     if data.status == "active":
-        # Verificar que no haya conflicto antes de activar
+        # Verificar posible conflicto antes de activar (mismo símbolo + timeframe + cuenta)
         conflict = await has_active_bot_conflict(
-            db, bot.symbol, bot.exchange_account_id, exclude_bot_id=bot.id
+            db, bot.symbol, bot.exchange_account_id, exclude_bot_id=bot.id, timeframe=bot.timeframe
         )
         if conflict:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"Ya existe un bot activo para {bot.symbol} en esta cuenta "
-                f"({conflict.bot_name}). Paúsalo primero.",
+            # Se emite un aviso en lugar de bloquear, permitiendo múltiples temporalidades
+            logger.warning(
+                f"[BOT ACTIVATE] Advertencia: {bot.bot_name} se activa aunque ya existe "
+                f"{conflict.bot_name} activo para {bot.symbol}/{bot.timeframe} en la misma cuenta."
             )
+
+        # AI bots require the symbol to be in the scanner watchlist
+        if bot.ai_signal_mode:
+            import re
+            from app.models.ai_scan import AIWatchlistItem
+            # Normalize: "BTC/USDT:USDT" → "BTCUSDT", "XRP/USDT:USDT" → "XRPUSDT"
+            normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', bot.symbol).replace('/', '')
+            wl_result = await db.execute(
+                select(AIWatchlistItem).where(AIWatchlistItem.symbol == normalized).limit(1)
+            )
+            if not wl_result.scalar_one_or_none():
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"El símbolo {bot.symbol} no está en el scanner IA. "
+                    f"Añádelo primero en la página IA Engine.",
+                )
 
     bot.status = data.status
     await db.commit()
@@ -239,6 +377,17 @@ async def delete_bot(
             "El bot tiene una posición abierta. Ciérrala antes de eliminar el bot.",
         )
 
+    # Sync: remove from AI watchlist if bot was in AI mode
+    if bot.ai_signal_mode:
+        normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', bot.symbol).replace('/', '')
+        await db.execute(
+            delete(AIWatchlistItem).where(
+                AIWatchlistItem.user_id == user_id,
+                AIWatchlistItem.symbol == normalized,
+                AIWatchlistItem.timeframe == bot.timeframe,
+            )
+        )
+
     await db.delete(bot)
     await db.commit()
 
@@ -260,7 +409,7 @@ async def get_bot_logs(
     return result.scalars().all()
 
 
-VALID_TIMEFRAMES = {"1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "6h", "12h", "1d", "1w"}
+from app.core.constants import VALID_TIMEFRAMES_SET, validate_timeframe
 
 @router.get("/{bot_id}/candles")
 async def get_bot_candles(
@@ -279,15 +428,17 @@ async def get_bot_candles(
     bot = await _get_bot_or_404(bot_id, user_id, db)
 
     # Timeframe: parámetro de query > configuración del bot
-    tf = timeframe if timeframe in VALID_TIMEFRAMES else bot.timeframe
-    if tf not in VALID_TIMEFRAMES:
+    tf = timeframe if timeframe in VALID_TIMEFRAMES_SET else bot.timeframe
+    if tf not in VALID_TIMEFRAMES_SET:
         tf = "1h"  # fallback seguro
 
     # Determinar qué exchange usar para obtener velas
+    # Velas OHLCV son datos públicos; si el bot no tiene cuenta asignada
+    # (p. ej. modo solo alertas), usamos Binance como fuente por defecto.
     if bot.is_paper_trading:
         # Para paper trading, usar Binance como fuente de precios (más estable)
         exchange_name = "binance"
-    else:
+    elif bot.exchange_account_id:
         # Para trading real, usar el exchange de la cuenta
         acc_result = await db.execute(
             select(ExchangeAccount).where(ExchangeAccount.id == bot.exchange_account_id)
@@ -295,11 +446,14 @@ async def get_bot_candles(
         account = acc_result.scalar_one_or_none()
         if not account:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Cuenta de exchange no encontrada")
-        
+
         exchange_name = account.exchange
         if exchange_name == "bitunix":
             # Bitunix no tiene soporte CCXT nativo; usamos BingX como proxy de precio
             exchange_name = "bingx"
+    else:
+        # Bots sin cuenta asignada (alerts_only u otros) usan fuente pública
+        exchange_name = "binance"
 
     client = getattr(ccxt, exchange_name)({"options": {"defaultType": "swap"}})
     try:
@@ -331,3 +485,40 @@ async def get_bot_signals(
         .limit(limit)
     )
     return result.scalars().all()
+
+
+@router.post("/emergency-stop", status_code=status.HTTP_200_OK)
+async def emergency_stop_all_bots(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Kill-switch global: pausa TODOS los bots activos del usuario inmediatamente."""
+    from sqlalchemy import update
+    from app.models.bot_config import BotConfig
+
+    bots = (
+        await db.execute(
+            select(BotConfig)
+            .where(BotConfig.user_id == user_id, BotConfig.status == "active")
+        )
+    ).scalars().all()
+
+    for bot in bots:
+        bot.status = "paused"
+        cfg = bot.ai_signal_config or {}
+        autonomy = cfg.get("autonomy_state", {})
+        autonomy["paused_by"] = "emergency_stop"
+        autonomy["paused_at"] = datetime.now(timezone.utc).isoformat()
+        autonomy["auto_resume_after"] = (
+            datetime.now(timezone.utc) + timedelta(hours=2)
+        ).isoformat()
+        cfg["autonomy_state"] = autonomy
+        bot.ai_signal_config = cfg
+
+    await db.commit()
+    paused = len(bots)
+
+    return {
+        "message": f"Emergency stop executed — {paused} bot(s) paused",
+        "paused_bots": paused,
+    }

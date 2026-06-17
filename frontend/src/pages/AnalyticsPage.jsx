@@ -829,8 +829,13 @@ function PeriodComparison({ summary }) {
 
 const SOURCE_OPTIONS = [
   { value: '', label: 'Todos' },
-  { value: 'bot', label: 'Bots' },
-  { value: 'manual', label: 'Manual' },
+  { value: 'bot', label: 'Bot (sin clasificar)' },
+  { value: 'bot_int', label: 'Bot int. (señales internas)' },
+  { value: 'bot_ext', label: 'Bot ext. (señales externas por webhook)' },
+  { value: 'ai_bot', label: 'Bot IA' },
+  { value: 'app_manual', label: 'Manual' },
+  { value: 'paper', label: 'Paper' },
+  { value: 'manual', label: 'BingX Manual' },
 ]
 
 export default function AnalyticsPage() {

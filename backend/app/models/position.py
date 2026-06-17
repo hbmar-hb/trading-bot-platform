@@ -48,6 +48,9 @@ class Position(Base):
     exchange_sl_order_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
     exchange_position_id: Mapped[str | None] = mapped_column(String(100), nullable=True)
 
+    # ─── Origen ──────────────────────────────────────────────
+    source: Mapped[str] = mapped_column(String(20), nullable=False, default="bot")  # 'bot_int' | 'bot_ext' | 'ai_bot' | 'app_manual' | 'paper' | 'manual'
+
     # ─── Estado ──────────────────────────────────────────────
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="open", index=True)
 

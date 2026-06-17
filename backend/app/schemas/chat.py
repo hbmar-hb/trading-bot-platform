@@ -45,5 +45,18 @@ class ChatMessageResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ChatMentionResponse(BaseModel):
+    id: uuid.UUID
+    room_id: uuid.UUID
+    message_id: uuid.UUID
+    user_id: uuid.UUID
+    mentioned_by: uuid.UUID
+    mentioned_by_username: str
+    is_read: bool
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ChatGifSearch(BaseModel):
     q: str

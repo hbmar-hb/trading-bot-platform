@@ -3,20 +3,22 @@ Chat API: salas, mensajes y GIFs.
 Roles:
   admin     — crea/elimina cualquier canal; crea canales privados; gestiona miembros
   moderator — crea/elimina canales públicos
-  user      — solo lee/escribe en canales a los que tiene acceso
+  rol1      — no tiene acceso al chat
 """
+import re
 import uuid
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import desc, select
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user, get_current_user_id
-from app.models.chat import ChatMessage, ChatRoom, ChatRoomMember
+from app.api.dependencies import get_current_moderator_user
+from app.models.chat import ChatMention, ChatMessage, ChatRoom, ChatRoomMember
 from app.models.user import User
 from app.schemas.chat import (
     ChatGifSearch,
+    ChatMentionResponse,
     ChatMessageCreate,
     ChatMessageResponse,
     ChatRoomCreate,
@@ -25,6 +27,9 @@ from app.schemas.chat import (
 )
 from app.services.database import get_db
 from config.settings import settings
+
+
+_MENTION_RE = re.compile(r"@([a-zA-Z0-9_]+)")
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -48,7 +53,7 @@ async def _assert_room_access(room: ChatRoom, user: User, db: AsyncSession) -> N
 
 @router.get("/rooms", response_model=list[ChatRoomResponse])
 async def list_rooms(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(ChatRoom).order_by(ChatRoom.created_at.desc()))
@@ -69,7 +74,7 @@ async def list_rooms(
 @router.post("/rooms", response_model=ChatRoomResponse, status_code=status.HTTP_201_CREATED)
 async def create_room(
     data: ChatRoomCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     if current_user.role not in ("admin", "moderator"):
@@ -109,7 +114,7 @@ async def create_room(
 @router.delete("/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_room(
     room_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, room_id)
@@ -136,7 +141,7 @@ async def delete_room(
 async def add_member(
     room_id: uuid.UUID,
     data: ChatRoomMemberAdd,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     if current_user.role != "admin":
@@ -164,7 +169,7 @@ async def add_member(
 async def remove_member(
     room_id: uuid.UUID,
     user_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     if current_user.role != "admin":
@@ -186,7 +191,7 @@ async def remove_member(
 async def list_messages(
     room_id: uuid.UUID,
     limit: int = 50,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, room_id)
@@ -223,7 +228,7 @@ async def list_messages(
 @router.post("/messages", response_model=ChatMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
     data: ChatMessageCreate,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_moderator_user),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, data.room_id)
@@ -241,6 +246,9 @@ async def send_message(
     await db.commit()
     await db.refresh(msg)
 
+    await _create_mentions(db, msg.room_id, msg.id, msg.content, current_user.id)
+    await db.commit()
+
     return {
         "id": msg.id,
         "room_id": msg.room_id,
@@ -251,6 +259,83 @@ async def send_message(
         "created_at": msg.created_at,
         "updated_at": msg.updated_at,
     }
+
+
+async def _create_mentions(db: AsyncSession, room_id: uuid.UUID, message_id: uuid.UUID, content: str, mentioned_by: uuid.UUID) -> None:
+    """Detecta @username en el contenido y crea registros de mencion."""
+    usernames = set(_MENTION_RE.findall(content))
+    if not usernames:
+        return
+
+    result = await db.execute(select(User).where(User.username.in_(usernames)))
+    users = result.scalars().all()
+    for u in users:
+        if u.id == mentioned_by:
+            continue
+        db.add(ChatMention(
+            room_id=room_id,
+            message_id=message_id,
+            user_id=u.id,
+            mentioned_by=mentioned_by,
+        ))
+
+
+# ── Menciones ─────────────────────────────────────────────────────────────────
+
+@router.get("/mentions", response_model=list[ChatMentionResponse])
+async def list_mentions(
+    current_user: User = Depends(get_current_moderator_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(ChatMention, User.username)
+        .join(User, ChatMention.mentioned_by == User.id)
+        .where(ChatMention.user_id == current_user.id)
+        .where(ChatMention.is_read == False)
+        .order_by(desc(ChatMention.created_at))
+    )
+    return [
+        {
+            "id": m.id,
+            "room_id": m.room_id,
+            "message_id": m.message_id,
+            "user_id": m.user_id,
+            "mentioned_by": m.mentioned_by,
+            "mentioned_by_username": username,
+            "is_read": m.is_read,
+            "created_at": m.created_at,
+        }
+        for m, username in result.all()
+    ]
+
+
+@router.post("/mentions/{mention_id}/read", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_mention_read(
+    mention_id: uuid.UUID,
+    current_user: User = Depends(get_current_moderator_user),
+    db: AsyncSession = Depends(get_db),
+):
+    mention = await db.get(ChatMention, mention_id)
+    if not mention or mention.user_id != current_user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Mencion no encontrada")
+    mention.is_read = True
+    await db.commit()
+
+
+@router.post("/rooms/{room_id}/mentions/read", status_code=status.HTTP_204_NO_CONTENT)
+async def mark_room_mentions_read(
+    room_id: uuid.UUID,
+    current_user: User = Depends(get_current_moderator_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await db.execute(
+        ChatMention.__table__.update()
+        .where(ChatMention.user_id == current_user.id)
+        .where(ChatMention.room_id == room_id)
+        .where(ChatMention.is_read == False)
+        .values(is_read=True)
+    )
+    await db.commit()
 
 
 @router.get("/gifs")

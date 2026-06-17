@@ -40,7 +40,7 @@ export function useUnifiedPositions() {
     // PnL: si hay precio live siempre recalcular (más fresco que el valor en DB)
     // Nota: BingX usa mark price internamente; aquí usamos last price → diferencia ~0.01–0.1%
     let unrealizedPnl = parseFloat(pos.unrealized_pnl || 0)
-    if (price && pos.source !== 'paper' && entry > 0 && qty > 0) {
+    if (price && entry > 0 && qty > 0) {
       unrealizedPnl = pos.side === 'long'
         ? (price - entry) * qty
         : (entry - price) * qty
@@ -68,6 +68,9 @@ export function useUnifiedPositions() {
     // Contadores por tipo (sin solapamientos)
     counts: {
       bot: positions.filter(p => p.source === 'bot' && p.status !== 'pending_limit').length,
+      bot_int: positions.filter(p => p.source === 'bot_int' && p.status !== 'pending_limit').length,
+      bot_ext: positions.filter(p => p.source === 'bot_ext' && p.status !== 'pending_limit').length,
+      ai_bot: positions.filter(p => p.source === 'ai_bot' && p.status !== 'pending_limit').length,
       app_manual: positions.filter(p => p.source === 'app_manual' && p.status !== 'pending_limit').length,
       paper: positions.filter(p => p.source === 'paper').length,
       manual: positions.filter(p => p.source === 'manual' && p.status !== 'pending_limit').length,

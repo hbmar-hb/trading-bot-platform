@@ -9,8 +9,13 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.services.database import Base
 from app.models.base import TimestampMixin
+from app.utils.crypto import encrypt
 
 BotStatus = Literal["active", "paused", "disabled"]
+
+def _encrypt_webhook_secret() -> str:
+    """Genera y encripta un nuevo webhook secret."""
+    return encrypt(secrets.token_hex(32))
 PositionSizingType = Literal["percentage", "fixed"]
 
 
@@ -38,6 +43,9 @@ class BotConfig(TimestampMixin, Base):
     bot_name: Mapped[str] = mapped_column(String(100), nullable=False)
     symbol: Mapped[str] = mapped_column(String(50), nullable=False)
     timeframe: Mapped[str] = mapped_column(String(10), nullable=False)  # '1h', '4h', '1d'
+    auto_timeframe: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # When auto_timeframe=True, the bot queries historical performance
+    # and uses the best timeframe for this ticker instead of the fixed one.
 
     # ─── Configuración de capital ────────────────────────────
     position_sizing_type: Mapped[str] = mapped_column(
@@ -71,7 +79,24 @@ class BotConfig(TimestampMixin, Base):
 
     # ─── Webhook ─────────────────────────────────────────────
     webhook_secret: Mapped[str] = mapped_column(
-        String(64), nullable=False, default=lambda: secrets.token_hex(32)
+        String(500), nullable=False, default=lambda: _encrypt_webhook_secret()
+    )
+
+    # ─── Telegram Notifications ──────────────────────────────
+    # Chat ID para notificaciones de este bot (grupo/canal de Telegram)
+    telegram_chat_id: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None
+    )
+    # Topic ID para grupos con topics/forums (opcional)
+    telegram_thread_id: Mapped[int | None] = mapped_column(
+        Integer, nullable=True, default=None
+    )
+
+    # ─── Modo solo alertas ───────────────────────────────────
+    # Si True, el bot solo recibe webhooks y notifica a Telegram.
+    # No ejecuta trades ni requiere cuenta de exchange/paper.
+    alerts_only: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
     )
 
     # ─── Confirmación de señal ───────────────────────────────
@@ -101,7 +126,7 @@ class BotConfig(TimestampMixin, Base):
     # ─── Auto-Optimización ───────────────────────────────────
     # Toggle de auto-optimización
     auto_optimize_enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
+        Boolean, nullable=False, default=True
     )
     # Configuración personalizable del algoritmo
     auto_optimize_config: Mapped[dict] = mapped_column(
@@ -129,20 +154,74 @@ class BotConfig(TimestampMixin, Base):
 
     # ─── AI Signal Mode ──────────────────────────────────────
     # Cuando True, el bot auto-ejecuta señales del AI Confluence Scanner
-    # (filtro: quality_tier=STRONG + anti_fake_status=CLEAR)
+    # (filtro configurable: por defecto quality_tier=STRONG + anti_fake_status=CLEAR)
     ai_signal_mode: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
+    )
+    # Cuando True, aplica automáticamente la config óptima por ticker
+    # calculada desde estadísticas históricas de señales AI
+    ai_optimal_config_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
     )
     ai_signal_config: Mapped[dict] = mapped_column(
         JSONB, nullable=False,
         default=lambda: {
-            "min_score": 60,
-            "require_clear": True,
-            "max_concurrent": 1,
+            "min_score": 55,
+            "require_clear": False,
+            "max_concurrent": 2,
+            "allowed_tiers": ["STRONG", "MODERATE"],
+            "allowed_statuses": ["CLEAR", "CAUTION"],
+            "sizing_multipliers": {
+                "STRONG": 1.0,
+                "MODERATE": 1.0,
+                "WEAK": 1.0,
+                "CLEAR": 1.0,
+                "CAUTION": 1.0,
+            },
+            "circuit_breaker_thresholds": {
+                "STRONG": {"consecutive_sl": 3},
+                "MODERATE": {"consecutive_sl": 2},
+                "WEAK": {"consecutive_sl": 1},
+            },
+            "circuit_breaker_state": {},
+            "portfolio_limits": {
+                "max_total_exposure_pct": 50.0,
+                "max_symbol_exposure_pct": 30.0,
+                "max_directional_exposure_pct": 40.0,
+                "alt_correlation_threshold": 3,
+            },
+            "timeframe_fallback_enabled": False,
+            # V2.1 Confluence Engine — configurable gates per bot
+            "confluence": {
+                "require_htf_alignment": False,
+                "require_liquidity_sweep": {
+                    "enabled": False,
+                    "lookback_candles": 20,
+                    "htf_alternative": True,
+                    "timeframes": ["15m", "1h"],
+                },
+                "pd_gate_strictness": 0.75,
+                "asia_gate_enabled": False,
+                "killzone_gate_mode": "disabled",
+                "cdc_map": {
+                    "15m": "5m", "30m": "5m",
+                    "1h": "15m", "2h": "15m",
+                    "4h": "1h", "6h": "1h", "8h": "1h", "12h": "4h",
+                    "1d": "4h", "3d": "1d", "1w": "1d",
+                },
+            },
         }
     )
 
-    # ─── ICT Scan ────────────────────────────────────────────
+    # ─── Dynamic Risk Manager Config ─────────────────────────
+    # Overrides defaults in app/services/dynamic_risk_manager.py
+    # emergency_brake thresholds, scale_out levels, time_decay schedule,
+    # exposure_caps and slippage_multipliers per symbol.
+    dynamic_risk_config: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, default=None
+    )
+
+    # ─── ICT Scan (legacy) ───────────────────────────────────
     # Activa el motor Python ICT en lugar de esperar webhooks externos
     ict_scan_enabled: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False
@@ -159,6 +238,69 @@ class BotConfig(TimestampMixin, Base):
             "candles_limit": 200,
         }
     )
+
+    # ─── Fuentes de señal activas ───────────────────────────
+    # Ahora un bot puede tener múltiples fuentes simultáneamente
+    webhook_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+    indicator_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
+
+    # ─── Conflict Resolution Config ─────────────────────────
+    # Configuración simplificada de gestión de conflictos
+    conflict_config: Mapped[dict] = mapped_column(
+        JSONB, nullable=False,
+        default=lambda: {
+            "same_direction": "reject",
+            "opposite_direction": {
+                "ia": "close_and_open",
+                "webhook": "close_and_open",
+                "indicator": "close_and_open",
+            },
+            "auto_evaluate_profit": True,
+        }
+    )
+
+    # ─── Alert Trigger ───────────────────────────────────────
+    # Indicador que activa el bot: "ict" | None (desactivado)
+    trigger_indicator: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, default=None
+    )
+    # Timeframe del scan (si None, usa bot.timeframe)
+    trigger_timeframe: Mapped[str | None] = mapped_column(
+        String(10), nullable=True, default=None
+    )
+    # Grade mínimo de señal para disparar: "A+" | "A" | "A-"
+    trigger_min_grade: Mapped[str] = mapped_column(
+        String(5), nullable=False, default="A"
+    )
+    # Cuándo evaluar: "candle_close" | "intracandle"
+    trigger_timing: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="candle_close"
+    )
+    # Intervalo en minutos para modo intracandle
+    trigger_interval_minutes: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=5
+    )
+    # Velas de confirmación antes de disparar (anti-falsas)
+    min_confirm_candles: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1
+    )
+
+    # ─── Fundamental Gate ────────────────────────────────────
+    fundamental_gate_enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True
+    )
+    fundamental_sensitivity: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="normal"
+    )  # "strict" | "normal" | "relaxed"
+
+    # ─── Monte Carlo Validation ──────────────────────────────
+    montecarlo_config: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True, default=None
+    )  # {enabled, min_score, n_trades_lookback, simulation_type}
 
     # ─── Relaciones ──────────────────────────────────────────
     user: Mapped["User"] = relationship(back_populates="bots")

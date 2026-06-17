@@ -36,6 +36,7 @@ class AISignal(Base):
     quality_score:    Mapped[float | None] = mapped_column(Float,      nullable=True)
     quality_tier:     Mapped[str | None]   = mapped_column(String(10), nullable=True)
     anti_fake_status: Mapped[str | None]   = mapped_column(String(10), nullable=True)
+    success_probability: Mapped[float | None] = mapped_column(Float, nullable=True)
     red_flags:   Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
     green_flags: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
 
@@ -44,6 +45,10 @@ class AISignal(Base):
     pnl_pct:      Mapped[float|None] = mapped_column(Float,   nullable=True)
     outcome_bars: Mapped[int|None]   = mapped_column(Integer, nullable=True)
     resolved_at:  Mapped[datetime|None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    # Realistic outcome — filled by the realistic outcome engine
+    realistic_outcome: Mapped[str|None] = mapped_column(String(20), nullable=True, index=True)
+    realistic_pnl_pct: Mapped[float|None] = mapped_column(Float, nullable=True)
 
     signal_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     created_at:  Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,

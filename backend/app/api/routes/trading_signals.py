@@ -6,12 +6,12 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_user_id, require_non_rol1_role
 from app.services.database import get_db
 from app.models.trading_signal import TradingSignal
 from app.schemas.trading_signal import TradingSignalResponse, TradingSignalList
 
-router = APIRouter(prefix="/trading-signals", tags=["trading-signals"])
+router = APIRouter(prefix="/trading-signals", tags=["trading-signals"], dependencies=[Depends(require_non_rol1_role)])
 
 
 @router.get("", response_model=TradingSignalList)

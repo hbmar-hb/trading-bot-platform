@@ -1,12 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Activity, AlertCircle, ArrowRight, Shield, ShieldAlert, ShieldCheck, Smartphone, TrendingDown, TrendingUp, User } from 'lucide-react'
+import { Activity, AlertCircle, AlertOctagon, ArrowRight, PieChart, Shield, ShieldAlert, ShieldCheck, Smartphone, TrendingDown, TrendingUp, User } from 'lucide-react'
+import { cn } from '@/utils/cn'
 import { useUnifiedPositions } from '@/hooks/useUnifiedPositions'
 import usePositionStore from '@/store/positionStore'
 import useBalanceStore  from '@/store/balanceStore'
 import useBotStore      from '@/store/botStore'
 import { botsService }  from '@/services/bots'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
+import { killSwitchService } from '@/services/killSwitch'
+import useUiStore from '@/store/uiStore'
+import { useAuth } from '@/hooks/useAuth'
+import { isAdmin } from '@/constants/roles'
 import BotStatusBadge   from '@/components/Common/BotStatusBadge'
 import LoadingSpinner   from '@/components/Common/LoadingSpinner'
 import PnlChart         from '@/components/Common/PnlChart'
@@ -172,10 +177,13 @@ function ExchangeAccountsWidget() {
 // Badge para tipo de posición
 function SourceBadge({ source }) {
   const configs = {
-    bot:        { icon: Activity,  label: 'Bot',   className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-    app_manual: { icon: Smartphone,label: 'App',   className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
-    paper:      { icon: Activity,  label: 'Paper', className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
-    manual:     { icon: User,      label: 'BingX', className: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
+    bot:        { icon: Activity,  label: 'Bot (sin clasificar)', className: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
+    bot_int:    { icon: Activity,  label: 'Bot int.', className: 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400' },
+    bot_ext:    { icon: Activity,  label: 'Bot ext.', className: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
+    ai_bot:     { icon: Activity,  label: 'Bot IA',   className: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
+    app_manual: { icon: Smartphone,label: 'App',      className: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400' },
+    paper:      { icon: Activity,  label: 'Paper',    className: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400' },
+    manual:     { icon: User,      label: 'BingX',    className: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
   }
   const config = configs[source] || configs.manual
   const Icon = config.icon
@@ -242,6 +250,89 @@ function PositionRow({ position }) {
           </p>
         )}
       </div>
+    </div>
+  )
+}
+
+function KillSwitchButton() {
+  const addNotification = useUiStore(s => s.addNotification)
+  const { user } = useAuth()
+
+  if (!isAdmin(user)) return null
+
+  return (
+    <button
+      onClick={async () => {
+        if (!confirm('🚨 KILL SWITCH\n\n¿Estás seguro de que quieres cerrar TODAS las posiciones abiertas y pausar todos los bots?\n\nEsta acción no se puede deshacer.')) return
+        try {
+          const { data } = await killSwitchService.trigger()
+          addNotification({
+            type: 'error',
+            title: 'Kill Switch activado',
+            message: `Cerrando posiciones... Task ID: ${data.task_id}`,
+          })
+        } catch (e) {
+          addNotification({
+            type: 'error',
+            title: 'Error en Kill Switch',
+            message: e.response?.data?.detail || e.message,
+          })
+        }
+      }}
+      className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold bg-red-600 hover:bg-red-700 text-white transition-colors shadow-sm"
+    >
+      <AlertOctagon size={18} />
+      Kill Switch
+    </button>
+  )
+}
+
+function PortfolioWidget() {
+  const [data, setData] = useState(null)
+  useEffect(() => {
+    import('@/services/aiService').then(({ aiService }) => {
+      aiService.portfolioSummary()
+        .then(r => setData(r.data))
+        .catch(() => setData(null))
+    })
+  }, [])
+
+  if (!data) return null
+
+  return (
+    <div className="card">
+      <div className="flex items-center gap-2 mb-3">
+        <PieChart size={16} className="text-violet-500" />
+        <h2 className="font-semibold text-slate-900 dark:text-white text-sm">Portfolio</h2>
+      </div>
+      <div className="grid grid-cols-3 gap-2 text-center mb-3">
+        <div>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">LONG</p>
+          <p className="text-xs font-mono font-semibold text-emerald-500">${data.total_long}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">SHORT</p>
+          <p className="text-xs font-mono font-semibold text-red-500">${data.total_short}</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">NET</p>
+          <p className={cn('text-xs font-mono font-semibold', data.net_exposure >= 0 ? 'text-emerald-500' : 'text-red-500')}>
+            ${Math.abs(data.net_exposure)}
+          </p>
+        </div>
+      </div>
+      {data.by_symbol.length > 0 && (
+        <div className="space-y-1">
+          {data.by_symbol.map(s => (
+            <div key={s.symbol} className="flex items-center justify-between text-xs">
+              <span className="font-mono text-slate-600 dark:text-slate-300">{s.symbol}</span>
+              <span className={cn('font-mono font-medium', s.net >= 0 ? 'text-emerald-400' : 'text-red-400')}>
+                {s.net >= 0 ? '+' : ''}${s.net}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -315,14 +406,21 @@ export default function DashboardPage() {
 
   // Subtext de posiciones
   const posSubParts = []
+  if (counts.ai_bot)      posSubParts.push(`${counts.ai_bot} IA`)
+  if (counts.bot_int)     posSubParts.push(`${counts.bot_int} int.`)
+  if (counts.bot_ext)     posSubParts.push(`${counts.bot_ext} ext.`)
   if (counts.bot)         posSubParts.push(`${counts.bot} bots`)
   if (counts.app_manual)  posSubParts.push(`${counts.app_manual} app`)
+  if (counts.paper)       posSubParts.push(`${counts.paper} paper`)
   if (counts.manual)      posSubParts.push(`${counts.manual} BingX`)
   if (counts.pending_limit) posSubParts.push(`${counts.pending_limit} límite`)
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold text-slate-900 dark:text-white">Dashboard</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl font-bold text-slate-900 dark:text-white">Dashboard</h1>
+        <KillSwitchButton />
+      </div>
 
       {/* Stats */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -375,9 +473,10 @@ export default function DashboardPage() {
           )}
         </div>
 
-        {/* Columna derecha: Cuentas + Bots */}
+        {/* Columna derecha: Cuentas + Portfolio + Bots */}
         <div className="space-y-6">
           <ExchangeAccountsWidget />
+          <PortfolioWidget />
 
           {/* Bots */}
           <div className="card">

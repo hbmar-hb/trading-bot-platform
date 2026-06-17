@@ -1,8 +1,19 @@
 import { useEffect, useRef } from 'react'
 import { DEFAULT_ICT_CONFIG } from './ICTConfigPanel'
-import { hexToRgba } from './colorHelpers'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function hexToRgba(hex, alpha) {
+  if (!hex || hex === 'transparent') return 'transparent'
+  if (hex.startsWith('rgba(') || hex.startsWith('rgb(')) return hex
+  const h = hex.startsWith('#') ? hex.slice(1) : hex
+  if (h.length < 6) return hex
+  const r = parseInt(h.slice(0, 2), 16)
+  const g = parseInt(h.slice(2, 4), 16)
+  const b = parseInt(h.slice(4, 6), 16)
+  const a = alpha !== undefined ? alpha : (h.length >= 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1)
+  return `rgba(${r},${g},${b},${a.toFixed(3)})`
+}
 
 function applyDash(ctx, style) {
   if (style === 'dashed') ctx.setLineDash([6, 3])
@@ -418,11 +429,7 @@ export default function ICTCanvas({ chartRef, seriesRef, data, config, signal, h
           if (hx == null || hx < -20 || hx > w + 20) continue
           const hy = toY(hs.entry_price)
           if (hy == null) continue
-          const outcome = hs.outcome?.toUpperCase()
-          const color = outcome === 'SL' || outcome === 'STOP' ? histSlColor
-            : outcome === 'OPEN' || outcome === 'PENDING' ? histOpenColor
-            : outcome?.startsWith('TP') ? histTpColor
-            : '#94a3b8'
+          const color = hs.outcome === 'SL' ? histSlColor : (hs.outcome === 'OPEN' ? histOpenColor : histTpColor)
           const SZ  = 5
           const OFF = 16
           const arrowY = isLong ? hy + OFF : hy - OFF
@@ -529,13 +536,12 @@ export default function ICTCanvas({ chartRef, seriesRef, data, config, signal, h
     chart.subscribeCrosshairMove(scheduleDraw)
 
     let ptrDown = false
-    const onPtrDown = () => { ptrDown = true }
-    const onPtrMove = () => { if (ptrDown) scheduleDraw() }
-    const onPtrUp   = () => { ptrDown = false; scheduleDraw() }
-    canvas.addEventListener('pointerdown', onPtrDown)
-    canvas.addEventListener('pointermove', onPtrMove)
-    canvas.addEventListener('pointerup',   onPtrUp)
-    canvas.addEventListener('pointerleave', onPtrUp)
+    const onDocDown = () => { ptrDown = true }
+    const onDocMove = () => { if (ptrDown) scheduleDraw() }
+    const onDocUp   = () => { ptrDown = false; scheduleDraw() }
+    document.addEventListener('pointerdown', onDocDown)
+    document.addEventListener('pointermove', onDocMove)
+    document.addEventListener('pointerup',   onDocUp)
 
     const ro = new ResizeObserver(scheduleDraw)
     if (canvas.parentElement) ro.observe(canvas.parentElement)
@@ -548,10 +554,9 @@ export default function ICTCanvas({ chartRef, seriesRef, data, config, signal, h
       timeScale.unsubscribeVisibleTimeRangeChange(scheduleDraw)
       timeScale.unsubscribeSizeChange(scheduleDraw)
       chart.unsubscribeCrosshairMove(scheduleDraw)
-      canvas.removeEventListener('pointerdown', onPtrDown)
-      canvas.removeEventListener('pointermove', onPtrMove)
-      canvas.removeEventListener('pointerup',   onPtrUp)
-      canvas.removeEventListener('pointerleave', onPtrUp)
+      document.removeEventListener('pointerdown', onDocDown)
+      document.removeEventListener('pointermove', onDocMove)
+      document.removeEventListener('pointerup',   onDocUp)
       ro.disconnect()
       const c = canvasRef.current
       if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height)

@@ -18,8 +18,8 @@ class User(TimestampMixin, Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    # Rol: user | admin
-    role: Mapped[str] = mapped_column(String(20), default="user", nullable=False)
+    # Rol: rol1 | moderator | admin
+    role: Mapped[str] = mapped_column(String(20), default="rol1", nullable=False)
 
     # Email verificado
     email_verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
@@ -33,6 +33,8 @@ class User(TimestampMixin, Base):
 
     # Telegram notifications
     telegram_chat_id: Mapped[str | None] = mapped_column(String(100), nullable=True, default=None)
+    telegram_username: Mapped[str | None] = mapped_column(String(50), nullable=True, default=None)
+    telegram_link_code: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None, unique=True)
     notify_on_open: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_on_partial: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     notify_on_close: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

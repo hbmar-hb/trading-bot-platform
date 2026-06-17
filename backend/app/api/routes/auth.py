@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import io
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -6,12 +7,13 @@ from datetime import datetime, timedelta, timezone
 import pyotp
 import qrcode
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
 from app.schemas.auth import (
@@ -24,6 +26,7 @@ from app.schemas.auth import (
     RegisterRequest,
     ResendVerificationRequest,
     ResetPasswordRequest,
+    TelegramLinkResponse,
     TokenResponse,
     TwoFactorLoginRequest,
     TwoFactorSetupResponse,
@@ -32,12 +35,15 @@ from app.schemas.auth import (
     UserResponse,
     VerifyEmailRequest,
 )
-from app.core.rate_limiter import login_limiter, register_limiter
+from app.core.rate_limiter import login_limiter, register_limiter, two_factor_limiter
 from app.services.cache import (
+    blacklist_access_token_sync,
+    consume_temp_token,
     delete_email_verification_token,
     delete_password_reset_token,
     get_email_verification_user,
     get_password_reset_user,
+    is_temp_token_consumed,
     set_email_verification_token,
     set_password_reset_token,
 )
@@ -52,26 +58,48 @@ pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # ─── Helpers ─────────────────────────────────────────────────
 
-def _create_access_token(user_id: uuid.UUID) -> str:
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=settings.access_token_expire_minutes
-    )
+def _create_access_token(user_id: uuid.UUID, two_factor_verified: bool = False) -> str:
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=settings.access_token_expire_minutes)
+    jti = str(uuid.uuid4())
     return jwt.encode(
-        {"sub": str(user_id), "exp": expire, "type": "access"},
+        {
+            "sub": str(user_id),
+            "jti": jti,
+            "exp": expire,
+            "iat": now,
+            "type": "access",
+            "iss": settings.jwt_issuer,
+            "aud": settings.jwt_audience,
+            "two_factor_verified": two_factor_verified,
+        },
         settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
-    )
+    ), jti
 
 
 def _create_refresh_token_value() -> str:
     return str(uuid.uuid4())
 
 
+def _hash_refresh_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
 def _create_temp_token(user_id: uuid.UUID) -> str:
     """Token de corta duración para el paso intermedio de 2FA (5 min)."""
-    expire = datetime.now(timezone.utc) + timedelta(minutes=5)
+    now = datetime.now(timezone.utc)
+    expire = now + timedelta(minutes=5)
     return jwt.encode(
-        {"sub": str(user_id), "exp": expire, "type": "2fa_pending"},
+        {
+            "sub": str(user_id),
+            "jti": str(uuid.uuid4()),
+            "exp": expire,
+            "iat": now,
+            "type": "2fa_pending",
+            "iss": settings.jwt_issuer,
+            "aud": settings.jwt_audience,
+        },
         settings.jwt_secret_key,
         algorithm=settings.jwt_algorithm,
     )
@@ -79,9 +107,13 @@ def _create_temp_token(user_id: uuid.UUID) -> str:
 
 def _decode_temp_token(token: str) -> uuid.UUID:
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm], audience=settings.jwt_audience)
         if payload.get("type") != "2fa_pending":
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token inválido")
+        if payload.get("iss") != settings.jwt_issuer:
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token inválido")
+        if is_temp_token_consumed(token):
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token 2FA ya utilizado")
         return uuid.UUID(payload["sub"])
     except JWTError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token 2FA expirado o inválido")
@@ -101,13 +133,14 @@ async def _issue_tokens(db: AsyncSession, user: User) -> TokenResponse:
     refresh_value = _create_refresh_token_value()
     db.add(RefreshToken(
         user_id=user.id,
-        token=refresh_value,
+        token=_hash_refresh_token(refresh_value),
         expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
     ))
     await db.commit()
 
+    access_token, _jti = _create_access_token(user.id, two_factor_verified=True)
     return TokenResponse(
-        access_token=_create_access_token(user.id),
+        access_token=access_token,
         refresh_token=refresh_value,
     )
 
@@ -150,6 +183,8 @@ async def login_2fa(data: TwoFactorLoginRequest, db: AsyncSession = Depends(get_
     """Segundo paso del login cuando 2FA está activo."""
     user_id = _decode_temp_token(data.temp_token)
 
+    two_factor_limiter.check(str(user_id))
+
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
@@ -160,25 +195,104 @@ async def login_2fa(data: TwoFactorLoginRequest, db: AsyncSession = Depends(get_
     if not totp.verify(data.totp_code, valid_window=1):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Código 2FA inválido")
 
+    # Marcar temp_token como consumido (single-use)
+    consume_temp_token(data.temp_token)
+
     return await _issue_tokens(db, user)
 
 
 # ─── Refresh ─────────────────────────────────────────────────
 
-@router.post("/refresh", response_model=AccessTokenResponse)
+@router.post("/refresh", response_model=TokenResponse)
 async def refresh_token(data: RefreshTokenRequest, db: AsyncSession = Depends(get_db)):
+    token_hash = _hash_refresh_token(data.refresh_token)
     result = await db.execute(
-        select(RefreshToken).where(RefreshToken.token == data.refresh_token)
+        select(RefreshToken).where(RefreshToken.token == token_hash)
     )
     token_record = result.scalar_one_or_none()
 
-    if not token_record or not token_record.is_valid:
+    if not token_record:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token inválido o expirado")
 
+    # Token reuse detection: si ya fue revocado, comprometemos toda la sesión
+    if token_record.revoked:
+        all_tokens = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == token_record.user_id,
+                RefreshToken.revoked == False,  # noqa: E712
+            )
+        )
+        for t in all_tokens.scalars():
+            t.revoked = True
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            "Refresh token reutilizado. Sesión comprometida. Inicia sesión de nuevo.",
+        )
+
+    if token_record.expires_at <= datetime.now(timezone.utc):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Refresh token expirado")
+
     token_record.revoked = True
+
+    # Crear nuevo refresh token
+    new_refresh_value = _create_refresh_token_value()
+    db.add(RefreshToken(
+        user_id=token_record.user_id,
+        token=_hash_refresh_token(new_refresh_value),
+        expires_at=datetime.now(timezone.utc) + timedelta(days=settings.refresh_token_expire_days),
+    ))
     await db.commit()
 
-    return AccessTokenResponse(access_token=_create_access_token(token_record.user_id))
+    # Si el usuario tiene 2FA activo, el access token debe reflejarlo
+    result = await db.execute(select(User).where(User.id == token_record.user_id))
+    user = result.scalar_one_or_none()
+    two_factor_verified = bool(user and user.totp_enabled)
+
+    access_token, _jti = _create_access_token(token_record.user_id, two_factor_verified=two_factor_verified)
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=new_refresh_value,
+    )
+
+
+# ─── Logout ──────────────────────────────────────────────────
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    credentials: HTTPAuthorizationCredentials = Depends(HTTPBearer()),
+    db: AsyncSession = Depends(get_db),
+):
+    """Revoca el access token actual (blacklist) y todos los refresh tokens del usuario."""
+    from app.services.cache import blacklist_access_token_sync
+    from jose import jwt as _jwt
+
+    token = credentials.credentials
+    try:
+        payload = _jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm], audience=settings.jwt_audience)
+        jti = payload.get("jti")
+        exp = payload.get("exp")
+        user_id = uuid.UUID(payload.get("sub"))
+
+        # Blacklist del access token (TTL = tiempo restante de vida)
+        if jti and exp:
+            now = datetime.now(timezone.utc).timestamp()
+            ttl = max(1, int(exp - now))
+            blacklist_access_token_sync(jti, ttl)
+
+        # Revocar todos los refresh tokens del usuario
+        old_tokens = await db.execute(
+            select(RefreshToken).where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked == False,  # noqa: E712
+            )
+        )
+        for t in old_tokens.scalars():
+            t.revoked = True
+        await db.commit()
+    except Exception:
+        # Incluso si el token está corrupto, limpiamos localStorage del cliente
+        pass
 
 
 # ─── Perfil ──────────────────────────────────────────────────
@@ -186,6 +300,7 @@ async def refresh_token(data: RefreshTokenRequest, db: AsyncSession = Depends(ge
 @router.get("/me", response_model=UserResponse)
 async def get_me(
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -199,6 +314,7 @@ async def get_me(
 async def update_me(
     data: UserProfileUpdateRequest,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -208,6 +324,12 @@ async def update_me(
 
     if data.telegram_chat_id is not None:
         user.telegram_chat_id = data.telegram_chat_id.strip() if data.telegram_chat_id.strip() else None
+    if data.telegram_username is not None:
+        # Normalizar: quitar @ inicial y espacios
+        username = data.telegram_username.strip().lstrip("@").lower()
+        user.telegram_username = username if username else None
+        # Si cambia el username, invalidar el código anterior para forzar re-vinculación
+        user.telegram_link_code = None
     if data.notify_on_open is not None:
         user.notify_on_open = data.notify_on_open
     if data.notify_on_partial is not None:
@@ -230,9 +352,38 @@ async def update_me(
     return user
 
 
+@router.post("/telegram-link", response_model=TelegramLinkResponse)
+async def generate_telegram_link(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Genera un enlace deep-link para que el usuario vincule su cuenta de Telegram."""
+    if not settings.telegram_bot_username:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "El bot de Telegram no está configurado. Contacta con el administrador.",
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    # Generar código único de vinculación
+    link_code = uuid.uuid4().hex
+    user.telegram_link_code = link_code
+    await db.commit()
+    await db.refresh(user)
+
+    deep_link = f"https://t.me/{settings.telegram_bot_username}?start={link_code}"
+    return TelegramLinkResponse(link=deep_link, username=user.telegram_username)
+
+
 @router.post("/test-telegram", status_code=status.HTTP_204_NO_CONTENT)
 async def test_telegram(
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Envía un mensaje de prueba al chat de Telegram del usuario."""
@@ -255,6 +406,7 @@ async def test_telegram(
 async def change_password(
     data: ChangePasswordRequest,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).where(User.id == user_id))
@@ -268,11 +420,20 @@ async def change_password(
     await db.commit()
 
 
+def _verify_current_password(user: User, password: str | None) -> None:
+    if not password:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Se requiere la contraseña actual")
+    if not pwd_context.verify(password, user.hashed_password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Contraseña actual incorrecta")
+
+
 # ─── 2FA Setup ───────────────────────────────────────────────
 
 @router.post("/2fa/setup", response_model=TwoFactorSetupResponse)
 async def setup_2fa(
+    data: TwoFactorVerifyRequest,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Genera un nuevo secret TOTP y devuelve el QR para escanearlo."""
@@ -280,6 +441,8 @@ async def setup_2fa(
     user = result.scalar_one_or_none()
     if not user:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
+
+    _verify_current_password(user, data.current_password)
 
     secret = pyotp.random_base32()
     totp = pyotp.TOTP(secret)
@@ -302,6 +465,7 @@ async def setup_2fa(
 async def verify_2fa(
     data: TwoFactorVerifyRequest,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Confirma el código TOTP y activa el 2FA."""
@@ -310,6 +474,8 @@ async def verify_2fa(
 
     if not user or not user.totp_secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Primero genera el QR con /2fa/setup")
+
+    _verify_current_password(user, data.current_password)
 
     totp = pyotp.TOTP(user.totp_secret)
     if not totp.verify(data.totp_code, valid_window=1):
@@ -323,14 +489,17 @@ async def verify_2fa(
 async def disable_2fa(
     data: TwoFactorVerifyRequest,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    _authorized: User = Depends(get_current_authorized_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Desactiva el 2FA — requiere código TOTP válido para confirmar."""
+    """Desactiva el 2FA — requiere contraseña actual y código TOTP válido para confirmar."""
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
 
     if not user or not user.totp_enabled or not user.totp_secret:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "El 2FA no está activo")
+
+    _verify_current_password(user, data.current_password)
 
     totp = pyotp.TOTP(user.totp_secret)
     if not totp.verify(data.totp_code, valid_window=1):
@@ -406,6 +575,7 @@ async def reset_password(data: ResetPasswordRequest, db: AsyncSession = Depends(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Usuario no encontrado")
 
     user.hashed_password = pwd_context.hash(data.new_password)
+    user.must_change_password = False
     delete_password_reset_token(data.token)
     await db.commit()
     return None

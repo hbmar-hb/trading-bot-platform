@@ -40,19 +40,21 @@ def create_exchange(account: ExchangeAccount, testnet: bool = False) -> BaseExch
             )
 
 
-def create_paper_exchange(paper_balance: PaperBalance) -> PaperExchange:
+def create_paper_exchange(paper_balance: PaperBalance, bot_id: str | None = None) -> PaperExchange:
     """
     Devuelve un cliente de Paper Trading.
     
     Args:
         paper_balance: Instancia de PaperBalance con la configuración
+        bot_id: UUID del bot que ejecuta la orden (opcional)
         
     Returns:
         PaperExchange configurado con el balance inicial
     """
     return PaperExchange(
-        account_id=str(paper_balance.id),
-        initial_balance=paper_balance.initial_balance
+        account_id=paper_balance.account_id,
+        initial_balance=paper_balance.initial_balance,
+        bot_id=bot_id,
     )
 
 

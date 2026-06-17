@@ -420,16 +420,14 @@ export default function DrawingTools({ chartRef, candleSeriesRef, isDark, symbol
     const chart  = chartRef.current
     const series = candleSeriesRef.current
     if (!canvas || !chart || !series) return
-    const dpr = window.devicePixelRatio || 1
     const ctx = canvas.getContext('2d')
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.clearRect(0, 0, canvas.offsetWidth, canvas.offsetHeight)
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
     const toXY = (time, price) => ({
       x: time  != null ? chart.timeScale().timeToCoordinate(time)  : null,
       y: price != null ? series.priceToCoordinate(price) : null,
     })
     const all = [...drawingsRef.current, ...(inProgressRef.current ? [inProgressRef.current] : [])]
-    for (const d of all) renderDrawing(ctx, d, toXY, canvas.offsetWidth, canvas.offsetHeight, isDark)
+    for (const d of all) renderDrawing(ctx, d, toXY, canvas.width, canvas.height, isDark)
   }, [chartRef, candleSeriesRef, isDark])
 
   const scheduleRender = useCallback(() => {
@@ -466,18 +464,13 @@ export default function DrawingTools({ chartRef, candleSeriesRef, isDark, symbol
     return () => window.removeEventListener('mousemove', onMove)
   }, [scheduleRender])
 
-  // ── Canvas resize (Retina-aware) ──────────────────────────────────────────────
+  // ── Canvas resize ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const ro = new ResizeObserver(() => {
-      const dpr = window.devicePixelRatio || 1
-      const w = canvas.offsetWidth
-      const h = canvas.offsetHeight
-      canvas.width        = Math.round(w * dpr)
-      canvas.height       = Math.round(h * dpr)
-      canvas.style.width  = w + 'px'
-      canvas.style.height = h + 'px'
+      canvas.width  = canvas.offsetWidth
+      canvas.height = canvas.offsetHeight
       scheduleRender()
     })
     ro.observe(canvas)

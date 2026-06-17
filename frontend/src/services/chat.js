@@ -9,4 +9,7 @@ export const chatService = {
   searchGifs:   (q)                  => api.get(`/chat/gifs?q=${encodeURIComponent(q)}`),
   addMember:    (roomId, userId)     => api.post(`/chat/rooms/${roomId}/members`, { user_id: userId }),
   removeMember: (roomId, userId)     => api.delete(`/chat/rooms/${roomId}/members/${userId}`),
+  listMentions: ()                   => api.get('/chat/mentions'),
+  markMentionRead: (id)              => api.post(`/chat/mentions/${id}/read`),
+  markRoomMentionsRead: (roomId)     => api.post(`/chat/rooms/${roomId}/mentions/read`),
 }

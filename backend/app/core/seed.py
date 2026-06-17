@@ -2,9 +2,10 @@
 Crea el usuario admin por defecto si la DB está vacía.
 Solo se ejecuta en ENV=development (via lifespan en main.py).
 
-Credenciales por defecto: admin / Admin1234
+Se genera una contraseña aleatoria segura por única vez.
 CAMBIA LA CONTRASEÑA INMEDIATAMENTE tras el primer login.
 """
+import secrets
 import uuid
 
 from passlib.context import CryptContext
@@ -16,7 +17,12 @@ from app.services.database import AsyncSessionLocal
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "Admin1234"   # Mínimo para pasar el validator: 8 chars, 1 upper, 1 digit
+
+
+def _generate_secure_password(length: int = 16) -> str:
+    """Genera una contraseña aleatoria alfanumérica segura."""
+    alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
 async def seed_first_user_if_empty() -> None:
@@ -25,12 +31,14 @@ async def seed_first_user_if_empty() -> None:
         if result.scalar_one_or_none() is not None:
             return  # Ya hay usuarios, no hacer nada
 
+        password = _generate_secure_password()
         user = User(
             id=uuid.uuid4(),
             username=DEFAULT_USERNAME,
             email="admin@tradingbot.local",
-            hashed_password=pwd_context.hash(DEFAULT_PASSWORD),
+            hashed_password=pwd_context.hash(password),
             is_active=True,
+            role="admin",
         )
         db.add(user)
         await db.commit()
@@ -38,6 +46,6 @@ async def seed_first_user_if_empty() -> None:
         print("=" * 60)
         print("⚠️  USUARIO ADMIN CREADO POR DEFECTO")
         print(f"   Usuario:    {DEFAULT_USERNAME}")
-        print(f"   Contraseña: {DEFAULT_PASSWORD}")
+        print(f"   Contraseña: {password}")
         print("   CAMBIA LA CONTRASEÑA INMEDIATAMENTE")
         print("=" * 60)

@@ -11,13 +11,15 @@ from app.services.database import Base
 class AIWatchlistItem(Base):
     __tablename__ = "ai_watchlist"
 
-    id:        Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    user_id:   Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
-    symbol:    Mapped[str]       = mapped_column(String(30), nullable=False)
-    timeframe: Mapped[str]       = mapped_column(String(10), nullable=False, default="1h")
+    id:                 Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id:            Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False, index=True)
+    symbol:             Mapped[str]       = mapped_column(String(30), nullable=False)
+    timeframe:          Mapped[str]       = mapped_column(String(10), nullable=False, default="1h")
+    # When timeframe="auto", this holds the last resolved best timeframe from the scanner.
+    resolved_timeframe: Mapped[str | None] = mapped_column(String(10), nullable=True)
 
     __table_args__ = (
-        UniqueConstraint("user_id", "symbol", name="uq_ai_watchlist_user_symbol"),
+        UniqueConstraint("user_id", "symbol", "timeframe", name="uq_ai_watchlist_user_symbol_tf"),
     )
 
 

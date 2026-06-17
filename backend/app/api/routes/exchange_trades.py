@@ -6,11 +6,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.exchanges.factory import create_exchange
+from app.models.bot_config import BotConfig
 from app.models.exchange_account import ExchangeAccount
 from app.models.exchange_trade import ExchangeTrade
 from app.models.position import Position
@@ -21,7 +22,7 @@ from app.schemas.exchange_trade import (
 )
 from app.services.database import get_db
 
-router = APIRouter(prefix="/exchange-trades", tags=["exchange-trades"])
+router = APIRouter(prefix="/exchange-trades", tags=["exchange-trades"], dependencies=[Depends(get_current_authorized_user)])
 
 
 @router.post("/sync/{account_id}", response_model=ExchangeTradeSyncResult)
@@ -190,7 +191,7 @@ async def sync_trades(
 async def list_trades(
     account_id: uuid.UUID | None = Query(None),
     bot_id: uuid.UUID | None = Query(None),
-    source: str | None = Query(None, regex="^(bot|manual)$"),
+    source: str | None = Query(None, regex="^(bot|bot_int|bot_ext|ai_bot|app_manual|paper|manual)$"),
     symbol: str | None = Query(None),
     days: int = Query(30, ge=1, le=365),
     limit: int = Query(100, ge=1, le=500),
@@ -201,8 +202,11 @@ async def list_trades(
     Lista trades importados del exchange con filtros.
     
     Filters:
-    - source='bot': Solo trades ejecutados por el bot
-    - source='manual': Solo trades manuales del usuario
+    - source='bot_int': Solo trades de bots con señales internas
+    - source='bot_ext': Solo trades de bots con señales externas (webhook)
+    - source='ai_bot': Solo trades de bots IA
+    - source='app_manual': Solo trades manuales desde la app
+    - source='manual': Solo trades manuales del exchange
     - source=None: Todos los trades
     """
     # Calcular fecha de inicio como días calendario (consistente con frontend)
@@ -221,7 +225,11 @@ async def list_trades(
         query = query.where(ExchangeTrade.exchange_account_id == account_id)
     if bot_id:
         query = query.where(ExchangeTrade.bot_id == bot_id)
-    if source:
+    if source == "paper":
+        query = query.join(BotConfig, ExchangeTrade.bot_id == BotConfig.id).where(
+            BotConfig.paper_balance_id.is_not(None)
+        )
+    elif source:
         query = query.where(ExchangeTrade.source == source)
     if symbol:
         query = query.where(ExchangeTrade.symbol.ilike(f"%{symbol}%"))
@@ -261,12 +269,15 @@ async def get_trade_stats(
     
     # Stats por source
     stats = {
-        "bot": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
+        "bot_int": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
+        "bot_ext": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
+        "ai_bot": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
+        "app_manual": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
         "manual": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
         "total": {"count": 0, "total_pnl": 0.0, "winners": 0, "losers": 0},
     }
     
-    for source in ["bot", "manual"]:
+    for source in ["bot_int", "bot_ext", "ai_bot", "app_manual", "manual"]:
         source_query = base_query.where(ExchangeTrade.source == source)
         
         result = await db.execute(source_query)
@@ -340,6 +351,13 @@ async def import_csv_trades(
     for pos in positions:
         key = (pos.symbol, account.exchange)
         positions_by_symbol.setdefault(key, []).append(pos)
+
+    # Fallback legacy: bots con ai_signal_mode=true pero posiciones con source='bot'
+    bot_ai_mode_result = await db.execute(
+        select(BotConfig.id, BotConfig.ai_signal_mode)
+        .where(BotConfig.user_id == user_id)
+    )
+    bot_ai_mode = {row[0]: row[1] for row in bot_ai_mode_result.all()}
 
     # Leer bytes del archivo subido
     raw_bytes = await file.read()
@@ -515,7 +533,7 @@ async def import_csv_trades(
                 skipped += 1
                 continue
 
-            # Clasificar source (bot vs manual)
+            # Clasificar source usando el source guardado en la posición
             source = "manual"
             position_id = None
             bot_id = None
@@ -523,7 +541,12 @@ async def import_csv_trades(
             for pos in positions_by_symbol.get(pos_key, []):
                 if pos.opened_at and pos.opened_at <= closed_at:
                     if pos.closed_at is None or closed_at <= pos.closed_at:
-                        source = "bot"
+                        # Usar source de la posición (bot_int / bot_ext / ai_bot / app_manual)
+                        # Fallback a "bot" para datos antiguos
+                        source = pos.source if pos.source and pos.source not in ("bot", "paper", "manual") else "bot"
+                        # Fallback legacy: posiciones antiguas con source='bot' de bots IA
+                        if source == "bot" and pos.bot_id and bot_ai_mode.get(pos.bot_id):
+                            source = "ai_bot"
                         position_id = pos.id
                         bot_id = pos.bot_id
                         break

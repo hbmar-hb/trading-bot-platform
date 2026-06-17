@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.exchanges.factory import create_exchange
 from app.models.bot_config import BotConfig
 from app.models.position import Position
@@ -16,7 +16,7 @@ from app.schemas.position import PositionResponse
 from app.services.cache import async_redis, publish_position_update
 from app.services.database import get_db
 
-router = APIRouter(prefix="/positions", tags=["positions"])
+router = APIRouter(prefix="/positions", tags=["positions"], dependencies=[Depends(get_current_authorized_user)])
 
 
 async def _verify_position_ownership(
@@ -65,7 +65,7 @@ class UnifiedPositionResponse(BaseModel):
     """Posición unificada - puede ser de bot, paper o manual (externa)."""
     # Identificación
     id: str | None = None  # UUID para posiciones de bot/paper, None para manuales
-    source: str  # "bot", "paper", "manual"
+    source: str  # "bot_int" | "bot_ext" | "ai_bot" | "app_manual" | "paper" | "manual"
     
     # Datos de la posición
     symbol: str
@@ -93,6 +93,11 @@ class UnifiedPositionResponse(BaseModel):
     is_external: bool = False
     account_id: str | None = None
     extra_config: dict | None = None
+    # Configuración de riesgo del bot (solo para posiciones con bot)
+    trailing_config: dict | None = None
+    breakeven_config: dict | None = None
+    dynamic_sl_config: dict | None = None
+    use_roi_percentage: bool | None = None
     
     class Config:
         from_attributes = True
@@ -111,7 +116,12 @@ async def list_unified_positions(
     - Posiciones manuales abiertas directamente en el exchange
     
     Cada posición tiene un campo 'source' que indica su origen:
-    - "bot": Abierta por un bot de la plataforma
+    - "bot_int": Abierta por bot con señal interna (indicador)
+    - "bot_ext": Abierta por bot con señal externa (webhook)
+    - "ai_bot": Abierta por bot IA
+    - "app_manual": Abierta manualmente desde la app
+    - "paper": Paper trading
+    - "manual": Abierta directamente en el exchange
     - "paper": Simulación de paper trading
     - "manual": Abierta manualmente en el exchange (BingX, etc.)
     """
@@ -139,10 +149,44 @@ async def list_unified_positions(
             .order_by(Position.opened_at.desc())
         )
         
-        for position, bot, account in result_bots.all():
-            # Detectar si es manual app (prefijo [MANUAL]) o bot real
-            is_app_manual = bot.bot_name.startswith("[MANUAL]")
-            source = "app_manual" if is_app_manual else "bot"
+        # Precios actuales de Redis para calcular PnL en tiempo real
+        bot_rows = result_bots.all()
+        bot_symbols = list({r[0].symbol for r in bot_rows})
+        if bot_symbols:
+            price_keys = [f"price:{s}" for s in bot_symbols]
+            price_vals = await async_redis.mget(*price_keys)
+            price_map = {s: float(v) for s, v in zip(bot_symbols, price_vals) if v is not None}
+        else:
+            price_map = {}
+        
+        for position, bot, account in bot_rows:
+            # Usar source guardado en la posición (nuevo: bot_int / bot_ext / ai_bot / app_manual)
+            # Fallback para datos antiguos que aún tengan source="bot"
+            if bot.bot_name.startswith("[MANUAL]"):
+                source = "app_manual"
+            elif position.source and position.source not in ("bot", "manual"):
+                source = position.source
+            elif position.source == "bot":
+                # Datos antiguos sin distinción int/ext
+                source = "bot"
+            elif getattr(bot, "ai_signal_mode", False):
+                # Fallback legacy: bot con ai_signal_mode pero posición sin source ai_bot
+                source = "ai_bot"
+            else:
+                # Default
+                source = "bot_ext"
+            
+            # Calcular PnL en tiempo real con precio actual de Redis
+            current_price = price_map.get(position.symbol)
+            if current_price:
+                entry = float(position.entry_price)
+                qty = float(position.quantity)
+                if position.side == "long":
+                    live_pnl = (current_price - entry) * qty
+                else:
+                    live_pnl = (entry - current_price) * qty
+            else:
+                live_pnl = float(position.unrealized_pnl)
             
             unified_positions.append(UnifiedPositionResponse(
                 id=str(position.id),
@@ -154,7 +198,7 @@ async def list_unified_positions(
                 leverage=position.leverage,
                 current_sl_price=float(position.current_sl_price) if position.current_sl_price else None,
                 current_tp_prices=position.current_tp_prices or [],
-                unrealized_pnl=float(position.unrealized_pnl),
+                unrealized_pnl=live_pnl,
                 realized_pnl=float(position.realized_pnl) if position.realized_pnl else None,
                 status=position.status,
                 opened_at=position.opened_at,
@@ -164,6 +208,10 @@ async def list_unified_positions(
                 is_external=False,
                 account_id=str(bot.exchange_account_id) if bot.exchange_account_id else None,
                 extra_config=position.extra_config,
+                trailing_config=bot.trailing_config or None,
+                breakeven_config=bot.breakeven_config or None,
+                dynamic_sl_config=bot.dynamic_sl_config or None,
+                use_roi_percentage=bot.use_roi_percentage,
             ))
         
         logger.info(f"[UNIFIED POSITIONS] {len(unified_positions)} posiciones de bots")
@@ -183,7 +231,26 @@ async def list_unified_positions(
             .order_by(Position.opened_at.desc())
         )
         
-        for position, bot, paper_balance in result_paper.all():
+        paper_rows = result_paper.all()
+        paper_symbols = list({r[0].symbol for r in paper_rows})
+        for s in paper_symbols:
+            if s not in price_map:
+                val = await async_redis.get(f"price:{s}")
+                if val:
+                    price_map[s] = float(val)
+        
+        for position, bot, paper_balance in paper_rows:
+            current_price = price_map.get(position.symbol)
+            if current_price:
+                entry = float(position.entry_price)
+                qty = float(position.quantity)
+                if position.side == "long":
+                    live_pnl = (current_price - entry) * qty
+                else:
+                    live_pnl = (entry - current_price) * qty
+            else:
+                live_pnl = float(position.unrealized_pnl)
+            
             unified_positions.append(UnifiedPositionResponse(
                 id=str(position.id),
                 source="paper",
@@ -194,7 +261,7 @@ async def list_unified_positions(
                 leverage=position.leverage,
                 current_sl_price=float(position.current_sl_price) if position.current_sl_price else None,
                 current_tp_prices=position.current_tp_prices or [],
-                unrealized_pnl=float(position.unrealized_pnl),
+                unrealized_pnl=live_pnl,
                 realized_pnl=float(position.realized_pnl) if position.realized_pnl else None,
                 status=position.status,
                 opened_at=position.opened_at,
@@ -202,6 +269,10 @@ async def list_unified_positions(
                 bot_name=f"{bot.bot_name} ({paper_balance.label})",
                 exchange_position_id=position.exchange_order_id,
                 is_external=False,
+                trailing_config=bot.trailing_config or None,
+                breakeven_config=bot.breakeven_config or None,
+                dynamic_sl_config=bot.dynamic_sl_config or None,
+                use_roi_percentage=bot.use_roi_percentage,
             ))
         
         logger.info(f"[UNIFIED POSITIONS] Total tras paper: {len(unified_positions)}")
@@ -250,12 +321,12 @@ async def list_unified_positions(
                         seen_position_ids.add(pos.exchange_position_id)
                         unified_positions.append(UnifiedPositionResponse(
                             id=None,
-                            source="manual",
+                            source="orphan",
                             symbol=pos.symbol,
                             side=pos.side,
                             entry_price=float(pos.entry_price or 0),
                             quantity=float(pos.quantity or 0),
-                            leverage=None,
+                            leverage=pos.leverage,
                             current_sl_price=None,
                             current_tp_prices=[],
                             unrealized_pnl=float(pos.unrealized_pnl or 0),
@@ -308,7 +379,39 @@ async def list_unified_positions(
                         except Exception:
                             pass
         
-        logger.info(f"[UNIFIED POSITIONS] Total final: {len(unified_positions)}")
+        # Deduplicar posiciones del mismo bot en el mismo par+lado
+        # (protección contra duplicados históricos, ej. bug de paper trading)
+        deduped = {}
+        duplicates_found = 0
+        for p in unified_positions:
+            # Solo deduplicar posiciones con bot (tienen bot_name)
+            key = None
+            if p.bot_name and p.source != "manual":
+                key = (p.symbol, p.bot_name, p.side)
+            if key:
+                existing = deduped.get(key)
+                if existing:
+                    # Quedarse con la más reciente; si no hay opened_at, mantener la actual
+                    if p.opened_at and existing.opened_at:
+                        if p.opened_at > existing.opened_at:
+                            deduped[key] = p
+                            duplicates_found += 1
+                    else:
+                        # Sin fecha: preferir la que tenga leverage (más completa)
+                        if p.leverage and not existing.leverage:
+                            deduped[key] = p
+                            duplicates_found += 1
+                else:
+                    deduped[key] = p
+            else:
+                # Posiciones manuales/external: usar índice único para no perder ninguna
+                deduped[id(p)] = p
+        
+        if duplicates_found:
+            logger.warning(f"[UNIFIED POSITIONS] {duplicates_found} posiciones duplicadas omitidas (misma bot+par+lado)")
+        
+        unified_positions = list(deduped.values())
+        logger.info(f"[UNIFIED POSITIONS] Total final tras dedup: {len(unified_positions)}")
         
         # Guardar en Redis los símbolos de posiciones manuales externas
         # para que el price_monitor también los vigile.
@@ -356,13 +459,28 @@ async def get_position(
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
+    from app.models.bot_config import BotConfig
+
     result = await db.execute(select(Position).where(Position.id == position_id))
     position = result.scalar_one_or_none()
     if not position:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Posición no encontrada")
 
     await _verify_position_ownership(position, user_id, db)
-    return position
+
+    # Cargar config de riesgo del bot para mostrar en el frontend
+    bot = None
+    if position.bot_id:
+        bot_result = await db.execute(select(BotConfig).where(BotConfig.id == position.bot_id))
+        bot = bot_result.scalar_one_or_none()
+
+    response = PositionResponse.model_validate(position)
+    if bot:
+        response.trailing_config = bot.trailing_config or None
+        response.breakeven_config = bot.breakeven_config or None
+        response.dynamic_sl_config = bot.dynamic_sl_config or None
+        response.use_roi_percentage = bot.use_roi_percentage
+    return response
 
 
 class UpdateSLRequest(BaseModel):
@@ -393,18 +511,26 @@ async def update_stop_loss(
     )
     bot = bot_result.scalar_one()
     
-    if bot.exchange_account_id:
-        # Exchange real - cargar cuenta directamente
-        from app.models.exchange_account import ExchangeAccount
-        account_result = await db.execute(
-            select(ExchangeAccount).where(ExchangeAccount.id == bot.exchange_account_id)
+    if bot.is_paper_trading:
+        # Paper trading — solo actualizar DB, no hay exchange
+        position.current_sl_price = Decimal(str(data.sl_price))
+        await db.commit()
+        await db.refresh(position)
+        await publish_position_update(
+            str(user_id),
+            {"position_id": str(position_id), "status": position.status, "current_sl_price": float(position.current_sl_price)}
         )
-        account = account_result.scalar_one()
-        exchange = create_exchange(account)
-    else:
-        # Paper trading - no hay SL real que actualizar
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "No se puede actualizar SL en paper trading")
-    
+        logger.info(f"[PAPER] SL actualizado para posición {position_id}: {data.sl_price}")
+        return position
+
+    # Exchange real
+    from app.models.exchange_account import ExchangeAccount
+    account_result = await db.execute(
+        select(ExchangeAccount).where(ExchangeAccount.id == bot.exchange_account_id)
+    )
+    account = account_result.scalar_one()
+    exchange = create_exchange(account)
+
     try:
         # Actualizar SL en el exchange (cancelar y recrear)
         if position.exchange_sl_order_id:
@@ -423,7 +549,7 @@ async def update_stop_loss(
                 quantity=position.quantity,
                 sl_price=Decimal(str(data.sl_price)),
             )
-        
+
         # Actualizar en DB
         position.current_sl_price = Decimal(str(data.sl_price))
         await db.commit()
@@ -432,10 +558,10 @@ async def update_stop_loss(
             str(user_id),
             {"position_id": str(position_id), "status": position.status, "current_sl_price": float(position.current_sl_price)}
         )
-        
+
         logger.info(f"SL actualizado para posición {position_id}: {data.sl_price}")
         return position
-        
+
     except Exception as e:
         logger.error(f"Error actualizando SL: {e}")
         err_str = str(e)
@@ -464,6 +590,109 @@ async def update_stop_loss(
         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, err_str)
     finally:
         await exchange.close()
+
+
+class UpdateTPRequest(BaseModel):
+    tp_levels: list[dict]   # [{level, price, close_percent, hit}]
+
+
+@router.patch("/{position_id}/tp", response_model=PositionResponse)
+async def update_take_profits(
+    position_id: uuid.UUID,
+    data: UpdateTPRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Actualiza los niveles de TP de una posición abierta."""
+    from loguru import logger
+
+    result = await db.execute(select(Position).where(Position.id == position_id))
+    position = result.scalar_one_or_none()
+    if not position:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Posición no encontrada")
+
+    await _verify_position_ownership(position, user_id, db)
+
+    # TPs son internos (el engine los monitoriza y ejecuta cierre parcial)
+    # — válido para paper y real por igual
+    position.current_tp_prices = data.tp_levels
+    await db.commit()
+    await db.refresh(position)
+    await publish_position_update(
+        str(user_id),
+        {"position_id": str(position_id), "status": position.status, "current_tp_prices": data.tp_levels}
+    )
+    logger.info(f"TPs actualizados para posición {position_id}: {len(data.tp_levels)} niveles")
+    return position
+
+
+class UpdateStrategyRequest(BaseModel):
+    take_profits: list[dict] | None = None          # reemplaza todos los TPs del bot
+    trailing_config: dict | None = None
+    breakeven_config: dict | None = None
+    dynamic_sl_config: dict | None = None
+
+
+@router.patch("/{position_id}/strategy")
+async def update_position_strategy(
+    position_id: uuid.UUID,
+    data: UpdateStrategyRequest,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """Actualiza la estrategia activa (TPs, trailing, breakeven, dynamic SL) en caliente."""
+    from loguru import logger
+    from app.core.risk_manager import calculate_tp_price as _calc_tp
+    from decimal import Decimal
+
+    result = await db.execute(select(Position).where(Position.id == position_id))
+    position = result.scalar_one_or_none()
+    if not position:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Posición no encontrada")
+
+    await _verify_position_ownership(position, user_id, db)
+
+    bot_result = await db.execute(select(BotConfig).where(BotConfig.id == position.bot_id))
+    bot = bot_result.scalar_one_or_none()
+    if not bot:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Bot no encontrado")
+
+    # Actualizar config en el bot (el engine lo lee en el siguiente ciclo)
+    if data.trailing_config is not None:
+        bot.trailing_config = data.trailing_config
+    if data.breakeven_config is not None:
+        bot.breakeven_config = data.breakeven_config
+    if data.dynamic_sl_config is not None:
+        bot.dynamic_sl_config = data.dynamic_sl_config
+
+    # Si se envían TPs nuevos, recalcular precios y actualizar la posición
+    if data.take_profits is not None:
+        bot.take_profits = data.take_profits
+        entry = Decimal(str(position.entry_price))
+        side = position.side
+        tp_records = []
+        for i, tp_cfg in enumerate(data.take_profits):
+            tp_price = _calc_tp(
+                entry, side,
+                Decimal(str(tp_cfg["profit_percent"])),
+                bot.leverage,
+                bot.use_roi_percentage,
+            )
+            tp_records.append({
+                "level": i + 1,
+                "price": float(tp_price),
+                "close_percent": tp_cfg["close_percent"],
+                "hit": False,
+            })
+        position.current_tp_prices = tp_records
+
+    await db.commit()
+    logger.info(f"Estrategia actualizada para posición {position_id}")
+    await publish_position_update(
+        str(user_id),
+        {"position_id": str(position_id), "status": position.status, "strategy_updated": True}
+    )
+    return {"status": "ok", "position_id": str(position_id)}
 
 
 @router.get("/external/{account_id}")
@@ -701,6 +930,12 @@ async def partial_close_position(
             )
 
         fill_price = order.fill_price if order else position.entry_price
+        if not fill_price or fill_price <= 0:
+            logger.warning(
+                f"[PARTIAL CLOSE] fill_price inválido ({fill_price}) para {position.symbol}, "
+                f"usando entry_price como fallback"
+            )
+            fill_price = position.entry_price
         partial_pnl = (
             (fill_price - position.entry_price) * close_quantity
             if position.side == "long"
@@ -848,6 +1083,12 @@ async def close_position(
                 side=position.side,
                 pnl=float(realized_pnl),
                 chat_id=user.telegram_chat_id,
+                source="ai_bot" if position.source == "ai_bot" else "bot",
+                entry_price=float(position.entry_price) if position.entry_price else None,
+                exit_price=float(fill_price) if fill_price else None,
+                quantity=float(position.quantity) if position.quantity else None,
+                leverage=int(position.leverage) if position.leverage else None,
+                timeframe=bot.timeframe,
             )
 
         logger.info(f"Posición {position_id} cerrada completamente")

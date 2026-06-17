@@ -17,12 +17,18 @@ class PositionResponse(BaseModel):
     current_sl_price: Decimal | None
     current_tp_prices: list
     extra_config: dict | None
+    source: str = 'bot'
     unrealized_pnl: Decimal
     realized_pnl: Decimal | None
     status: str
     exchange_order_id: str | None
     opened_at: datetime
     closed_at: datetime | None
+    # Configuración de riesgo del bot (solo en detalle)
+    trailing_config: dict | None = None
+    breakeven_config: dict | None = None
+    dynamic_sl_config: dict | None = None
+    use_roi_percentage: bool | None = None
 
     model_config = {"from_attributes": True}
 

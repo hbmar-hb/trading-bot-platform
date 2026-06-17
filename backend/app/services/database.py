@@ -19,9 +19,11 @@ class Base(DeclarativeBase):
 async_engine = create_async_engine(
     settings.database_url,
     echo=settings.debug,
-    pool_size=10,
-    max_overflow=20,
+    pool_size=20,
+    max_overflow=30,
     pool_pre_ping=True,
+    pool_recycle=300,
+    connect_args={"statement_cache_size": 0},  # required for PgBouncer transaction pooling
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -41,6 +43,24 @@ async def get_db() -> AsyncSession:
             raise
 
 
+async def managed_async_session(fn):
+    """Run an async callable inside a managed async session with automatic cleanup.
+    Use this in Celery tasks or background jobs instead of manual session handling.
+    
+    Args:
+        fn: Async callable that accepts an AsyncSession and returns a value.
+    """
+    async with AsyncSessionLocal_task() as session:
+        try:
+            async with session.begin():
+                return await fn(session)
+        except Exception:
+            await session.rollback()
+            raise
+        finally:
+            await session.close()
+
+
 # ─────────────────────────────────────────────────────────────
 # Async engine (NullPool) — Celery tasks only
 # NullPool creates a fresh connection per session and closes it
@@ -52,6 +72,7 @@ async_engine_task = create_async_engine(
     settings.database_url,
     echo=False,
     poolclass=NullPool,
+    connect_args={"statement_cache_size": 0},  # required for PgBouncer transaction pooling
 )
 
 AsyncSessionLocal_task = async_sessionmaker(
@@ -66,9 +87,10 @@ AsyncSessionLocal_task = async_sessionmaker(
 # ─────────────────────────────────────────────────────────────
 sync_engine = create_engine(
     settings.database_url_sync,
-    pool_size=5,
-    max_overflow=10,
+    pool_size=20,
+    max_overflow=30,
     pool_pre_ping=True,
+    pool_recycle=300,
 )
 
 SessionLocal = sessionmaker(

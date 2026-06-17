@@ -6,6 +6,7 @@ export const authService = {
   refresh:            (data) => api.post('/auth/refresh', data),
   me:                 ()     => api.get('/auth/me'),
   updateMe:           (data) => api.patch('/auth/me', data),
+  generateTelegramLink: () => api.post('/auth/telegram-link'),
   testTelegram:       ()     => api.post('/auth/test-telegram'),
   changePassword:     (data) => api.post('/auth/change-password', data),
   setup2fa:           ()     => api.post('/auth/2fa/setup'),

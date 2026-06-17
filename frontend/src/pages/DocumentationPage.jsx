@@ -827,7 +827,7 @@ const SECTIONS = [
           <div className="card p-4 border-l-4 border-emerald-500">
             <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">📊 Señal interna — Indicador</h4>
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              El sistema escanea usando el motor ICT / SMC interno. Dispara cuando detecta confluencia A/A+.
+              El sistema escanea usando el motor ICT o Quantum Gold interno. Dispara cuando detecta confluencia A/A+.
               Configurable: temporalidad del scan, tipos de señal, timing (cierre de vela o intracandle).
             </p>
           </div>
@@ -865,10 +865,10 @@ const SECTIONS = [
     icon: Layers,
     content: (
       <>
-        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Indicadores internos — ICT / SMC</h2>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Indicadores internos — ICT &amp; Quantum Gold</h2>
         <p className="text-sm text-slate-600 dark:text-slate-400 mb-4">
-          La plataforma incluye el motor de señal ICT / SMC propio que puedes usar tanto para visualizar en el gráfico
-          como para activar bots automáticamente. Tiene su propia configuración en dos lugares distintos.
+          La plataforma incluye dos motores de señal propios que puedes usar tanto para visualizar en el gráfico
+          como para activar bots automáticamente. Cada uno tiene su propia configuración en dos lugares distintos.
         </p>
 
         <div className="rounded-lg bg-blue-500/8 border border-blue-500/20 px-4 py-3 mb-5 text-sm">
@@ -884,7 +884,7 @@ const SECTIONS = [
         <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-3">Cómo configurar el indicador en el gráfico</h3>
         <ol className="list-decimal list-inside space-y-1.5 text-sm text-slate-600 dark:text-slate-400 mb-5">
           <li>Ve a <strong>Gráfico</strong> y selecciona el par y temporalidad.</li>
-          <li>En la barra de indicadores (parte superior), activa <strong>ICT / SMC</strong> con el toggle.</li>
+          <li>En la barra de indicadores (parte superior), activa <strong>ICT</strong> o <strong>⚡ Quantum Gold</strong> con el toggle.</li>
           <li>Haz clic en el icono <strong>⚙</strong> del badge del indicador (esquina superior izquierda del chart) para abrir el Panel.</li>
           <li>Ajusta los parámetros — los cambios se aplican en tiempo real sobre el gráfico.</li>
           <li>La configuración se guarda automáticamente en el navegador para esa sesión.</li>
@@ -894,7 +894,7 @@ const SECTIONS = [
         <ol className="list-decimal list-inside space-y-1.5 text-sm text-slate-600 dark:text-slate-400 mb-5">
           <li>Ve a <strong>Bots → Editar bot</strong>.</li>
           <li>En la pestaña <strong>Activación</strong>, activa el toggle <strong>Indicador interno</strong>.</li>
-          <li>Elige el indicador <strong>ICT / SMC</strong> en el desplegable.</li>
+          <li>Elige el indicador (ICT o Quantum Gold) en el desplegable.</li>
           <li>Aparecerá la sección <strong>Parámetros del indicador</strong> con todos los ajustes configurables.</li>
           <li>Guarda el bot — el escáner usará exactamente esos parámetros.</li>
         </ol>
@@ -936,7 +936,118 @@ const SECTIONS = [
           </div>
         </div>
 
+        <div>
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-3 flex items-center gap-2">
+            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-yellow-500/20 text-yellow-400">⚡ QUANTUM GOLD</span>
+            Parámetros del motor Quantum Gold
+          </h3>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mb-3">
+            Motor multi-indicador porteado desde Pine Script v5 (QUANTUM CONFLUENCIAS - XAUUSD).
+            Requiere la confluencia de <strong>todos</strong> los filtros simultáneamente: tendencia macro, ribbon EMA alineado,
+            Supertrend, RSI en zona, y un trigger de entrada. Optimizado para 1h+ en XAUUSD.
+          </p>
 
+          <div className="space-y-4">
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">EMA Ribbon</p>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs border-collapse">
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {[
+                      ['EMA Rápida (fast)','9','EMA de corto plazo. Con EMA media y lenta forma el ribbon de dirección.'],
+                      ['EMA Media (mid)','21','EMA de medio plazo.'],
+                      ['EMA Lenta (slow)','50','EMA de largo plazo. Para señal LONG se necesita E9 > E21 > E50.'],
+                      ['EMA Tendencia (trend)','200','Define la tendencia macro. El precio debe estar por encima (LONG) o por debajo (SHORT).'],
+                    ].map(([p,d,desc]) => (
+                      <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-12">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">RSI — Zonas de señal</p>
+              <table className="w-full text-xs border-collapse">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['RSI zona LONG (mín–máx)','45–75','El RSI debe estar en esta franja para activar señales largas. Ensancha si ves pocas señales en HTF.'],
+                    ['RSI zona SHORT (mín–máx)','25–55','Franja RSI para señales cortas.'],
+                  ].map(([p,d,desc]) => (
+                    <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-16">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">Supertrend</p>
+              <table className="w-full text-xs border-collapse">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Período ATR','10','ATR para calcular las bandas del Supertrend. Menor = más sensible a cambios de tendencia.'],
+                    ['Factor','3.0','Multiplicador de ATR para las bandas. Menor = más señales pero más falsas; mayor = menos señales pero más fiables.'],
+                  ].map(([p,d,desc]) => (
+                    <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-12">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">Bollinger Bands + Squeeze</p>
+              <table className="w-full text-xs border-collapse">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Período BB','20','Velas para calcular la media y desviación de las bandas.'],
+                    ['Desv. std.','2.0','Ancho de las bandas en desviaciones estándar. 2.0 es estándar.'],
+                    ['Umbral squeeze (%)','0.9','Ancho de banda (%) por debajo del cual se considera compresión. El trigger A+ (BB breakout) requiere salir de este estado.'],
+                  ].map(([p,d,desc]) => (
+                    <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-12">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">Filtros</p>
+              <table className="w-full text-xs border-collapse">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Filtro de tendencia','OFF (1h+)','Si está ON, exige además que EMA50 > EMA200. Bloquea señales en mercados volátiles. Desactívalo para 1h o superior.'],
+                    ['Solo sesión LON/NY','OFF (1h+)','Si está ON, ignora velas fuera de Londres (08-17h UTC) y NY (13:30-21h UTC). Actívalo en LTF (5m/15m).'],
+                    ['ATR mínimo ($)','3.0','Volatilidad mínima para que el motor genere señales. Evita entrar en mercados planos. Para 1h XAUUSD, 3-5 es adecuado.'],
+                    ['Volumen mínimo (× SMA)','1.0','Múltiplo del volumen medio que debe superar la vela actual. 1.0 = desactivado. Sube a 1.3-1.5 para LTF.'],
+                  ].map(([p,d,desc]) => (
+                    <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-20">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div>
+              <p className="text-[11px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wide mb-2">SL / TP</p>
+              <table className="w-full text-xs border-collapse">
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Stop Loss (× ATR)','1.0','SL = precio entrada ± (ATR × este valor). R:R se calcula automáticamente.'],
+                    ['Take Profit (× ATR)','2.0','TP1 = precio entrada ± (ATR × este valor). TP2 = × 1.5 de este valor.'],
+                  ].map(([p,d,desc]) => (
+                    <tr key={p}><td className="py-1.5 pr-4 font-medium text-slate-700 dark:text-slate-300 w-44">{p}</td><td className="py-1.5 pr-4 text-blue-500 font-mono w-12">{d}</td><td className="py-1.5 text-slate-500 dark:text-slate-400">{desc}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="rounded-lg bg-yellow-900/20 border border-yellow-700/30 px-3 py-2.5 text-xs space-y-1">
+              <p className="font-semibold text-yellow-400">Grades Quantum Gold:</p>
+              <p className="text-slate-400"><strong className="text-yellow-300">A+</strong> — BB squeeze breakout: la banda rompe tras un período de compresión. Señal de mayor calidad.</p>
+              <p className="text-slate-400"><strong className="text-yellow-300">A</strong> — Cruce EMA 9/21: el ribbon cambia de dirección. Señal de entrada a tendencia.</p>
+              <p className="text-slate-400"><strong className="text-yellow-300">A-</strong> — Cruce RSI 50: el RSI cruza la línea neutral. Confirmación de momentum. Más frecuente.</p>
+              <p className="text-slate-400 mt-1">En todos los casos la dirección (LONG/SHORT) la decide la confluencia de todos los filtros, no el grade.</p>
+            </div>
+          </div>
+        </div>
       </>
     ),
   },

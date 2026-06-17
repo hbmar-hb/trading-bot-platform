@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from loguru import logger
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_user_id, require_non_rol1_role
 from app.core.conflict_validator import has_active_bot_conflict
 from app.models.bot_config import BotConfig
 from app.models.exchange_trade import ExchangeTrade
@@ -29,7 +29,7 @@ from app.models.position import Position
 from app.models.signal_log import SignalLog
 from app.services.database import get_db
 
-router = APIRouter(prefix="/optimizer", tags=["optimizer"])
+router = APIRouter(prefix="/optimizer", tags=["optimizer"], dependencies=[Depends(require_non_rol1_role)])
 
 MIN_TRADES = 3  # Mínimo de trades para sugerencias fiables (reducido de 5 a 3)
 
@@ -69,7 +69,7 @@ async def get_optimizer(
         select(ExchangeTrade).where(
             ExchangeTrade.user_id == user_id,
             ExchangeTrade.bot_id == bot_id,
-            ExchangeTrade.source == "bot",
+            ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
             ExchangeTrade.closed_at.is_not(None),
             ExchangeTrade.realized_pnl.is_not(None),
         ).order_by(ExchangeTrade.closed_at.desc())
@@ -677,7 +677,7 @@ async def apply_optimizer_suggestions(
     trades_result = await db.execute(
         select(ExchangeTrade).where(
             ExchangeTrade.bot_id == bot_id,
-            ExchangeTrade.source == "bot",
+            ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
             ExchangeTrade.closed_at.is_not(None),
         )
     )
@@ -1162,7 +1162,7 @@ async def get_auto_optimize_status(
     trades_result = await db.execute(
         select(ExchangeTrade).where(
             ExchangeTrade.bot_id == bot_id,
-            ExchangeTrade.source == "bot",
+            ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
             ExchangeTrade.closed_at.is_not(None),
         )
     )
@@ -1278,7 +1278,7 @@ async def toggle_auto_optimize(
         trades_result = await db.execute(
             select(ExchangeTrade).where(
                 ExchangeTrade.bot_id == bot_id,
-                ExchangeTrade.source == "bot",
+                ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
                 ExchangeTrade.closed_at.is_not(None),
             )
         )
@@ -1331,14 +1331,22 @@ async def _run_auto_optimize_for_bot(bot: BotConfig, db: AsyncSession, dry_run: 
     # 1. Verificar si está habilitado
     if not bot.auto_optimize_enabled:
         return {"status": "disabled", "message": "Auto-optimización desactivada"}
-    
+
+    # 2. Los bots IA usan ai_optimal_config_enabled, no el optimizador general
+    if getattr(bot, "ai_signal_mode", False):
+        return {
+            "status": "skipped",
+            "reason": "ai_bot_uses_optimal_config",
+            "message": "Bot IA usa AI Optimal Config en lugar del optimizador general",
+        }
+
     config = bot.auto_optimize_config or {}
     
     # 2. Obtener trades del bot
     trades_result = await db.execute(
         select(ExchangeTrade).where(
             ExchangeTrade.bot_id == bot.id,
-            ExchangeTrade.source == "bot",
+            ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
             ExchangeTrade.closed_at.is_not(None),
             ExchangeTrade.realized_pnl.is_not(None),
         ).order_by(ExchangeTrade.closed_at)
@@ -1574,24 +1582,38 @@ async def _run_auto_optimize_for_bot(bot: BotConfig, db: AsyncSession, dry_run: 
             else:
                 setattr(bot, key, value)
         
-        # Reactivar el bot si estaba activo (validando conflictos)
+        # Reactivar el bot si estaba activo (advertir si hay conflicto de mismo símbolo/timeframe/cuenta)
         if was_active:
             conflict = await has_active_bot_conflict(
-                db, bot.symbol, bot.exchange_account_id, exclude_bot_id=bot.id
+                db, bot.symbol, bot.exchange_account_id, exclude_bot_id=bot.id, timeframe=bot.timeframe
             )
             if conflict:
                 logger.warning(
-                    f"[AUTO-OPTIMIZE] Bot {bot.bot_name} NO reactivado: "
-                    f"conflicto con {conflict.bot_name} para {bot.symbol}"
+                    f"[AUTO-OPTIMIZE] Advertencia: {bot.bot_name} se reactiva aunque existe "
+                    f"{conflict.bot_name} activo para {bot.symbol}/{bot.timeframe}"
                 )
-                bot.status = "paused"
-            else:
-                bot.status = "active"
-                logger.info(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} reactivado con nuevos parámetros")
+            bot.status = "active"
+            logger.info(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} reactivado con nuevos parámetros")
     except Exception as e:
         logger.error(f"[AUTO-OPTIMIZE] Error aplicando cambios a {bot.bot_name}: {e}")
         if was_active:
             logger.warning(f"[AUTO-OPTIMIZE] Bot {bot.bot_name} permanece pausado por error")
+            cfg = bot.ai_signal_config or {}
+            autonomy = cfg.get("autonomy_state", {})
+            autonomy["paused_by"] = "optimizer_error"
+            autonomy["paused_at"] = datetime.now(timezone.utc).isoformat()
+            cfg["autonomy_state"] = autonomy
+            bot.ai_signal_config = cfg
+    
+    # Si quedó pausado por conflicto, marcar para auto-retry
+    if was_active and bot.status == "paused":
+        cfg = bot.ai_signal_config or {}
+        autonomy = cfg.get("autonomy_state", {})
+        if autonomy.get("paused_by") not in ("optimizer_error", "emergency_stop", "kill_switch"):
+            autonomy["paused_by"] = "optimizer_conflict"
+            autonomy["paused_at"] = datetime.now(timezone.utc).isoformat()
+            cfg["autonomy_state"] = autonomy
+            bot.ai_signal_config = cfg
     
     # 12. Actualizar tracking
     now = datetime.now(timezone.utc)
@@ -1845,7 +1867,7 @@ async def get_optimizer_db_global(
         trades_result = await db.execute(
             select(ExchangeTrade).where(
                 ExchangeTrade.bot_id == bot.id,
-                ExchangeTrade.source == "bot",
+                ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
                 ExchangeTrade.closed_at.is_not(None),
             )
         )
@@ -1986,7 +2008,7 @@ async def get_optimizer_db_symbols(
         trades_result = await db.execute(
             select(ExchangeTrade).where(
                 ExchangeTrade.bot_id == bot.id,
-                ExchangeTrade.source == "bot",
+                ExchangeTrade.source.in_(["bot", "bot_int", "bot_ext", "ai_bot", "app_manual"]),
                 ExchangeTrade.closed_at.is_not(None),
             )
         )

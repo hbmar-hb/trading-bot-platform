@@ -16,6 +16,9 @@ export const manualTradeService = {
   getExternalPositions: (exchangeAccountId = null) =>
     api.get('/manual-trade/external-positions', exchangeAccountId ? { params: { exchange_account_id: exchangeAccountId } } : {}),
 
+  checkConflicts: (symbol, params = {}) =>
+    api.get('/manual-trade/check-conflicts', { params: { symbol, ...params } }),
+
   adoptPosition: (data) =>
     api.post('/manual-trade/adopt', data),
 }

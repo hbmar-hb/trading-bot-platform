@@ -11,6 +11,7 @@ Características:
 - Fees simulados (configurables)
 - Slippage simulado (opcional)
 """
+import asyncio
 import random
 import uuid
 from datetime import datetime, timezone
@@ -21,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.exchanges.base import BalanceInfo, BaseExchange, OpenPosition, OrderResult
-from app.services.database import AsyncSessionLocal
+from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 class PaperExchange(BaseExchange):
@@ -31,16 +32,19 @@ class PaperExchange(BaseExchange):
     No requiere API keys. Las operaciones se guardan en la base de datos local.
     """
 
-    def __init__(self, account_id: str, initial_balance: Decimal = Decimal("10000")):
+    def __init__(self, account_id: str, initial_balance: Decimal = Decimal("10000"), bot_id: str | None = None):
         """
         Args:
             account_id: ID de la cuenta paper en la base de datos
             initial_balance: Balance inicial en USDT (default: 10000)
+            bot_id: UUID del bot que ejecuta la orden (para guardar en posiciones)
         """
         self.account_id = account_id
+        self.bot_id = bot_id
         self._initial_balance = initial_balance
         self._fee_rate = Decimal("0.0005")  # 0.05% fee por operación (taker)
         self._slippage = Decimal("0.0001")  # 0.01% slippage simulado
+        self._leverage = 1  # Se actualiza vía set_leverage() antes de cada trade
 
     # ── Conectividad ──────────────────────────────────────────
 
@@ -52,25 +56,56 @@ class PaperExchange(BaseExchange):
 
     async def get_equity(self) -> BalanceInfo:
         """Obtiene el balance de la cuenta paper."""
-        async with AsyncSessionLocal() as db:
-            balance = await self._get_or_create_balance(db)
-            
-            # Calcular unrealized PnL de posiciones abiertas
-            positions = await self._get_open_positions(db)
-            unrealized_pnl = Decimal("0")
-            
-            for pos in positions:
-                current_price = await self._get_market_price(pos.symbol)
-                if pos.side == "long":
-                    unrealized_pnl += (current_price - pos.entry_price) * pos.quantity
-                else:
-                    unrealized_pnl += (pos.entry_price - current_price) * pos.quantity
-            
-            return BalanceInfo(
-                total_equity=balance.available_balance + unrealized_pnl,
-                available_balance=balance.available_balance,
-                unrealized_pnl=unrealized_pnl,
-            )
+        try:
+            async with AsyncSessionLocal() as db:
+                balance = await self._get_or_create_balance(db)
+
+                # Calcular unrealized PnL de posiciones abiertas
+                positions = await self._get_open_positions(db)
+                unrealized_pnl = Decimal("0")
+
+                for pos in positions:
+                    current_price = await self._get_market_price(pos.symbol)
+                    if pos.side == "long":
+                        unrealized_pnl += (current_price - pos.entry_price) * pos.quantity
+                    else:
+                        unrealized_pnl += (pos.entry_price - current_price) * pos.quantity
+
+                return BalanceInfo(
+                    total_equity=balance.available_balance + unrealized_pnl,
+                    available_balance=balance.available_balance,
+                    unrealized_pnl=unrealized_pnl,
+                )
+        except RuntimeError as exc:
+            # Celery forked workers may inherit event-loop bound objects
+            # (Redis, asyncpg connections) from the parent process.
+            if "attached to a different loop" in str(exc) or "different loop" in str(exc):
+                logger.warning(
+                    f"[PAPER] get_equity loop mismatch for account {self.account_id}: {exc}. "
+                    "Returning available balance as fallback."
+                )
+                # Fallback: query balance synchronously to avoid the broken loop
+                from app.services.database import SessionLocal
+                from sqlalchemy import select
+                from app.models.paper_balance import PaperBalance
+
+                def _sync_balance():
+                    with SessionLocal() as db_sync:
+                        result = db_sync.execute(
+                            select(PaperBalance).where(PaperBalance.account_id == self.account_id)
+                        )
+                        bal = result.scalar_one_or_none()
+                        if bal:
+                            return Decimal(str(bal.available_balance))
+                        return self._initial_balance
+
+                available = await asyncio.to_thread(_sync_balance)
+                return BalanceInfo(
+                    total_equity=available,
+                    available_balance=available,
+                    unrealized_pnl=Decimal("0"),
+                )
+            raise
 
     # ── Precio ────────────────────────────────────────────────
 
@@ -81,7 +116,8 @@ class PaperExchange(BaseExchange):
     # ── Apalancamiento ────────────────────────────────────────
 
     async def set_leverage(self, symbol: str, leverage: int, side: str | None = None) -> None:
-        """Paper trading: no hace nada, el leverage se maneja en el cálculo de posición."""
+        """Paper trading: almacena leverage para usarlo en el cálculo de margen."""
+        self._leverage = leverage
         logger.debug(f"[PAPER] Set leverage {symbol} x{leverage} (simulado)")
 
     # ── Órdenes de entrada ────────────────────────────────────
@@ -191,6 +227,7 @@ class PaperExchange(BaseExchange):
                     quantity=p.quantity,
                     unrealized_pnl=Decimal("0"),  # Se calcula en tiempo real
                     exchange_position_id=f"paper_{p.id}",
+                    leverage=p.leverage,
                 )
                 for p in db_positions
             ]
@@ -243,10 +280,13 @@ class PaperExchange(BaseExchange):
                 market_price = await self._get_market_price(symbol)
                 entry_price = self._apply_slippage(market_price, side, "open")
             
-            # Calcular margen requerido (sin apalancamiento para simplificar)
+            # Calcular margen requerido respetando el apalancamiento real del bot
             notional = entry_price * quantity
             fee = notional * self._fee_rate
-            required = notional + fee
+            # FIX FASE 1C: El margen real es notional / leverage
+            # Antes: required = notional + fee (ignoraba leverage completamente)
+            leverage = getattr(self, '_leverage', 1) or 1
+            required = (notional / Decimal(leverage)) + fee
             
             if balance.available_balance < required:
                 raise ValueError(
@@ -257,23 +297,10 @@ class PaperExchange(BaseExchange):
             # Descontar del balance
             balance.available_balance -= required
             
-            # Crear posición
-            from app.models.position import Position
-            position = Position(
-                bot_id=self.account_id,  # Usamos account_id como bot_id temporal
-                exchange="paper",
-                symbol=symbol,
-                side=side,
-                entry_price=entry_price,
-                quantity=quantity,
-                status="open",
-                opened_at=datetime.now(timezone.utc),
-            )
-            db.add(position)
             await db.commit()
             
             logger.info(
-                f"[PAPER] Abierta posición {side} {symbol} qty={quantity} "
+                f"[PAPER] Posición creada {side} {symbol} qty={quantity} "
                 f"@ {entry_price} fee={fee:.2f}"
             )
             
@@ -298,19 +325,52 @@ class PaperExchange(BaseExchange):
             return price - slippage  # Venta más barato
 
     async def _get_or_create_balance(self, db: AsyncSession):
-        """Obtiene el balance de la cuenta paper por su ID."""
+        """Obtiene o crea el balance de la cuenta paper."""
         from app.models.paper_balance import PaperBalance
-        from uuid import UUID
+        import uuid as _uuid
         
+        # 1. Buscar por account_id (string)
         result = await db.execute(
-            select(PaperBalance).where(PaperBalance.id == UUID(self.account_id))
+            select(PaperBalance).where(PaperBalance.account_id == self.account_id)
         )
         balance = result.scalar_one_or_none()
         
+        # 2. Fallback: buscar por id (UUID) — útil cuando account_id es el UUID
         if not balance:
-            raise ValueError(f"PaperBalance no encontrado: {self.account_id}")
+            try:
+                uid = _uuid.UUID(self.account_id)
+                result = await db.execute(
+                    select(PaperBalance).where(PaperBalance.id == uid)
+                )
+                balance = result.scalar_one_or_none()
+            except ValueError:
+                pass
+        
+        if not balance:
+            balance = PaperBalance(
+                account_id=self.account_id,
+                available_balance=self._initial_balance,
+                total_equity=self._initial_balance,
+            )
+            db.add(balance)
+            await db.commit()
+            logger.info(f"[PAPER] Creada cuenta con balance inicial {self._initial_balance}")
         
         return balance
+
+    async def _paper_balance_uuid(self, db: AsyncSession) -> uuid.UUID:
+        """Convierte account_id a UUID para queries con BotConfig.paper_balance_id."""
+        try:
+            return uuid.UUID(self.account_id)
+        except ValueError:
+            from app.models.paper_balance import PaperBalance
+            result = await db.execute(
+                select(PaperBalance).where(PaperBalance.account_id == self.account_id)
+            )
+            pb = result.scalar_one_or_none()
+            if pb:
+                return pb.id
+            raise ValueError(f"Cannot resolve paper_balance UUID for account_id={self.account_id}")
 
     async def _get_open_positions(self, db: AsyncSession):
         """Obtiene posiciones abiertas de esta cuenta paper."""
@@ -323,7 +383,7 @@ class PaperExchange(BaseExchange):
             .where(
                 Position.exchange == "paper",
                 Position.status == "open",
-                BotConfig.paper_balance_id == self.account_id,
+                BotConfig.paper_balance_id == await self._paper_balance_uuid(db),
             )
         )
         return result.scalars().all()
@@ -341,7 +401,7 @@ class PaperExchange(BaseExchange):
                 Position.symbol == symbol,
                 Position.side == side,
                 Position.status == "open",
-                BotConfig.paper_balance_id == self.account_id,
+                BotConfig.paper_balance_id == await self._paper_balance_uuid(db),
             )
         )
         return result.scalar_one_or_none()

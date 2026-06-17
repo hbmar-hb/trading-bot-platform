@@ -23,12 +23,15 @@ from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 
 
 def _run_async(coro):
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        return loop.run_until_complete(coro)
-    finally:
-        loop.close()
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    if loop.is_closed():
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    return loop.run_until_complete(coro)
 
 
 @shared_task(
@@ -173,6 +176,15 @@ async def _activate_limit_position(
     user_result = await db.execute(select(User).where(User.id == bot.user_id))
     user = user_result.scalar_one_or_none()
     if user and user.telegram_chat_id and user.notify_on_open:
+        # Extract TP prices from position if available
+        tp1 = None
+        tp2 = None
+        tps = position.current_tp_prices or []
+        for tp in tps:
+            if tp.get("level") == 1:
+                tp1 = tp.get("price")
+            elif tp.get("level") == 2:
+                tp2 = tp.get("price")
         trade_opened.delay(
             bot_name=bot.bot_name,
             symbol=position.symbol,
@@ -180,7 +192,13 @@ async def _activate_limit_position(
             entry=float(fill_price),
             sl=float(sl_price) if sl_price else 0.0,
             chat_id=user.telegram_chat_id,
-            is_limit=False,  # Ahora es una posición abierta real
+            is_limit=False,
+            tp1=float(tp1) if tp1 else None,
+            tp2=float(tp2) if tp2 else None,
+            trailing_config=bot.trailing_config,
+            breakeven_config=bot.breakeven_config,
+            dynamic_sl_config=bot.dynamic_sl_config,
+            timeframe=bot.timeframe,
         )
 
     logger.info(

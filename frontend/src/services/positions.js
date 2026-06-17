@@ -6,7 +6,8 @@ export const positionsService = {
   unified: (includeManual = true) => api.get('/positions/unified', { params: { include_manual: includeManual } }),
   get:     (id)     => api.get(`/positions/${id}`),
   updateSL: (id, data) => api.patch(`/positions/${id}/sl`, data),
-  updateTP: (id, tpPrices) => api.patch(`/positions/${id}/tp`, { tp_prices: tpPrices }),
+  updateTP: (id, data) => api.patch(`/positions/${id}/tp`, data),
+  updateStrategy: (id, data) => api.patch(`/positions/${id}/strategy`, data),
   partialClose: (id, percentage) => api.post(`/positions/${id}/partial-close`, null, { params: { percentage } }),
   close:   (id)     => api.post(`/positions/${id}/close`),
   getCandles: (id, timeframe = '15m', limit = 100) => 

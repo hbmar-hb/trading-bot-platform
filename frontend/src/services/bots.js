@@ -7,4 +7,5 @@ export const botsService = {
   update:       (id, data)  => api.put(`/bots/${id}`, data),
   setStatus:    (id, status)=> api.patch(`/bots/${id}/status`, { status }),
   delete:       (id)        => api.delete(`/bots/${id}`),
+  testWebhook:  (id)        => api.post(`/bots/${id}/test-webhook`),
 }

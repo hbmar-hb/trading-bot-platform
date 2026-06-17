@@ -173,7 +173,7 @@ function TradeChartView({ trade, onClose }) {
             <div className="bg-slate-50 dark:bg-gray-800 rounded-lg p-3">
               <p className="text-xs text-slate-500 mb-1">ROI</p>
               <p className={`font-mono font-bold ${isProfit ? 'text-green-400' : 'text-red-400'}`}>
-                {trade.roi_percent ? `${isProfit ? '+' : ''}${trade.roi_percent.toFixed(2)}%` : '—'}
+                {trade.roi_percent ? `${isProfit ? '+' : ''}${parseFloat(trade.roi_percent).toFixed(2)}%` : '—'}
               </p>
             </div>
             <div className="bg-slate-50 dark:bg-gray-800 rounded-lg p-3">
@@ -190,7 +190,7 @@ function TradeChartView({ trade, onClose }) {
             </div>
             <div className="flex justify-between">
               <span>Valor posición:</span>
-              <span className="font-mono">${trade.position_value ? trade.position_value.toFixed(2) : '—'}</span>
+              <span className="font-mono">${trade.position_value ? parseFloat(trade.position_value).toFixed(2) : '—'}</span>
             </div>
             {trade.bot_name && (
               <div className="flex justify-between">

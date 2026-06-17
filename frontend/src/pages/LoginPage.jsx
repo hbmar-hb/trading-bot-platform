@@ -93,7 +93,7 @@ export default function LoginPage() {
               <input
                 type="text" value={username}
                 onChange={e => setUsername(e.target.value)}
-                className="input w-full" placeholder="admin"
+                className="input w-full" placeholder=""
                 autoFocus required
               />
             </div>

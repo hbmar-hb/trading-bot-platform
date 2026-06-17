@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Palette, ShieldCheck, ShieldOff, Send } from 'lucide-react'
+import { Palette, ShieldCheck, ShieldOff, Send, MessageSquare } from 'lucide-react'
 import { authService } from '@/services/auth'
 import useAuthStore from '@/store/authStore'
 
@@ -48,6 +48,64 @@ function Toggle({ label, checked, onChange, disabled }) {
   )
 }
 
+/* ─── Helpers de color ───────────────────────────────────── */
+function getLuminance(hexColor) {
+  const hex = hexColor.replace('#', '')
+  const r = parseInt(hex.substr(0, 2), 16) / 255
+  const g = parseInt(hex.substr(2, 2), 16) / 255
+  const b = parseInt(hex.substr(4, 2), 16) / 255
+  const rs = r <= 0.03928 ? r / 12.92 : Math.pow((r + 0.055) / 1.055, 2.4)
+  const gs = g <= 0.03928 ? g / 12.92 : Math.pow((g + 0.055) / 1.055, 2.4)
+  const bs = b <= 0.03928 ? b / 12.92 : Math.pow((b + 0.055) / 1.055, 2.4)
+  return 0.2126 * rs + 0.7152 * gs + 0.0722 * bs
+}
+
+function isLightColor(hexColor) {
+  return getLuminance(hexColor) > 0.5
+}
+
+function getAdaptiveColors(bgColor, fontColor) {
+  const light = isLightColor(bgColor)
+  let text = fontColor
+  if (!text || text === '#e2e8f0') {
+    text = light ? '#0f172a' : '#f8fafc'
+  }
+  const textLum = getLuminance(text)
+  const bgLum = getLuminance(bgColor)
+  if (Math.abs(textLum - bgLum) < 0.3) {
+    text = light ? '#0f172a' : '#f8fafc'
+  }
+
+  return {
+    text,
+    textMuted: light ? '#475569' : '#94a3b8',
+    border: light ? 'rgba(15, 23, 42, 0.2)' : 'rgba(248, 250, 252, 0.12)',
+    borderStrong: light ? 'rgba(15, 23, 42, 0.35)' : 'rgba(248, 250, 252, 0.25)',
+    surface: light ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.25)',
+    surfaceHover: light ? 'rgba(255, 255, 255, 0.9)' : 'rgba(255, 255, 255, 0.12)',
+    inputBg: light ? 'rgba(15, 23, 42, 0.06)' : 'rgba(248, 250, 252, 0.08)',
+    inputBorder: light ? 'rgba(15, 23, 42, 0.25)' : 'rgba(248, 250, 252, 0.15)',
+    placeholder: light ? 'rgba(15, 23, 42, 0.45)' : 'rgba(248, 250, 252, 0.45)',
+    shapeColor: light ? 'rgba(15, 23, 42, 0.08)' : 'rgba(248, 250, 252, 0.06)',
+    shadow: light
+      ? '0 1px 3px rgba(15, 23, 42, 0.1), 0 1px 2px rgba(15, 23, 42, 0.06)'
+      : '0 1px 3px rgba(0, 0, 0, 0.3), 0 1px 2px rgba(0, 0, 0, 0.2)',
+    isLight: light,
+  }
+}
+
+/* ─── TEMAS PREDEFINIDOS ─────────────────────────────────── */
+const PRESET_THEMES = [
+  { name: 'Midnight',  bg: '#0f172a', shape: 'none',    font: 'Inter',     size: 14, text: '#e2e8f0' },
+  { name: 'Dark Pro',  bg: '#1e293b', shape: 'bubbles', font: 'Inter',     size: 14, text: '#f1f5f9' },
+  { name: 'Slate',     bg: '#334155', shape: 'dots',    font: 'Roboto',    size: 14, text: '#cbd5e1' },
+  { name: 'Light Pro', bg: '#f8fafc', shape: 'none',    font: 'Inter',     size: 14, text: '#0f172a' },
+  { name: 'Paper',     bg: '#ffffff', shape: 'waves',   font: 'Open Sans', size: 15, text: '#1e293b' },
+  { name: 'Cream',     bg: '#fffbeb', shape: 'dots',    font: 'Lato',      size: 14, text: '#451a03' },
+  { name: 'Mint',      bg: '#f0fdf4', shape: 'bubbles', font: 'Inter',     size: 14, text: '#14532d' },
+  { name: 'Ocean',     bg: '#eff6ff', shape: 'waves',   font: 'Roboto',    size: 14, text: '#1e3a8a' },
+]
+
 /* ─── Sección Personalización del Chat ────────────────────── */
 function ChatPersonalizationSection({ user, onUpdated }) {
   const [bgColor, setBgColor]     = useState(user?.chat_bg_color || '#1f2937')
@@ -61,8 +119,10 @@ function ChatPersonalizationSection({ user, onUpdated }) {
   const COLORS = [
     '#ffffff', '#f8fafc', '#f1f5f9', '#e2e8f0', '#cbd5e1',
     '#94a3b8', '#64748b', '#475569', '#334155', '#1e293b',
-    '#fef2f2', '#fff7ed', '#fefce8', '#f0fdf4', '#eff6ff',
-    '#faf5ff', '#fdf2f8', '#fff1f2', '#ecfeff', '#f0f9ff',
+    '#0f172a', '#020617', '#fef2f2', '#fff7ed', '#fefce8', 
+    '#f0fdf4', '#eff6ff', '#faf5ff', '#fdf2f8', '#fff1f2', 
+    '#ecfeff', '#f0f9ff', '#1e3a8a', '#14532d', '#7f1d1d', 
+    '#713f12', '#831843', '#312e81',
   ]
 
   const SHAPES = [
@@ -79,6 +139,24 @@ function ChatPersonalizationSection({ user, onUpdated }) {
     { label: 'Lato', value: 'Lato' },
     { label: 'Mono', value: 'JetBrains Mono' },
   ]
+
+  // Previsualización
+  const preview = getAdaptiveColors(bgColor, fontColor)
+  
+  const BG_SHAPES_PREVIEW = {
+    none: 'none',
+    bubbles: `radial-gradient(circle at 20% 30%, ${preview.shapeColor} 0%, transparent 20%), radial-gradient(circle at 80% 70%, ${preview.shapeColor} 0%, transparent 25%)`,
+    dots: `radial-gradient(circle, ${preview.shapeColor} 1px, transparent 1px)`,
+    waves: `repeating-linear-gradient(45deg, ${preview.shapeColor} 0px, ${preview.shapeColor} 2px, transparent 2px, transparent 10px)`,
+  }
+
+  const applyTheme = (theme) => {
+    setBgColor(theme.bg)
+    setBgShape(theme.shape)
+    setFontFamily(theme.font)
+    setFontSize(theme.size)
+    setFontColor(theme.text)
+  }
 
   const handleSave = async (e) => {
     e.preventDefault()
@@ -99,8 +177,48 @@ function ChatPersonalizationSection({ user, onUpdated }) {
   }
 
   return (
-    <form onSubmit={handleSave} className="space-y-4">
+    <form onSubmit={handleSave} className="space-y-5">
       {status && <Alert type={status.type} message={status.message} />}
+
+      {/* ─── TEMAS PREDEFINIDOS ─── */}
+      <Field label="Temas rápidos">
+        <div className="grid grid-cols-4 gap-2">
+          {PRESET_THEMES.map(theme => {
+            const themeIsLight = isLightColor(theme.bg)
+            const themeShapeColor = themeIsLight ? 'rgba(15,23,42,0.08)' : 'rgba(248,250,252,0.08)'
+            const shapePreview = {
+              none: 'none',
+              bubbles: `radial-gradient(circle at 20% 30%, ${themeShapeColor} 0%, transparent 20%), radial-gradient(circle at 80% 70%, ${themeShapeColor} 0%, transparent 25%)`,
+              dots: `radial-gradient(circle, ${themeShapeColor} 1px, transparent 1px)`,
+              waves: `repeating-linear-gradient(45deg, ${themeShapeColor} 0px, ${themeShapeColor} 2px, transparent 2px, transparent 10px)`,
+            }
+            
+            return (
+              <button
+                key={theme.name}
+                type="button"
+                onClick={() => applyTheme(theme)}
+                className="p-2.5 rounded-xl border-2 transition-all text-center hover:scale-105 active:scale-95"
+                style={{
+                  backgroundColor: theme.bg,
+                  borderColor: bgColor === theme.bg && bgShape === theme.shape ? '#2563eb' : 'transparent',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.1)',
+                }}
+              >
+                <div className="w-full h-6 rounded-md mb-1.5" style={{
+                  backgroundImage: shapePreview[theme.shape],
+                  backgroundSize: theme.shape === 'dots' ? '12px 12px' : 'auto',
+                }} />
+                <span className="text-xs font-semibold" style={{ 
+                  color: themeIsLight ? '#0f172a' : '#f8fafc' 
+                }}>
+                  {theme.name}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      </Field>
 
       <Field label="Color de fondo">
         <div className="flex flex-wrap gap-2">
@@ -110,16 +228,17 @@ function ChatPersonalizationSection({ user, onUpdated }) {
               type="button"
               onClick={() => setBgColor(c)}
               className={`w-8 h-8 rounded-full border-2 transition-transform hover:scale-110 ${
-                bgColor === c ? 'border-white scale-110' : 'border-transparent'
+                bgColor === c ? 'border-blue-500 scale-110' : 'border-transparent'
               }`}
               style={{ backgroundColor: c }}
+              title={c}
             />
           ))}
         </div>
       </Field>
 
       <Field label="Forma de fondo">
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {SHAPES.map(s => (
             <button
               key={s.value}
@@ -161,7 +280,7 @@ function ChatPersonalizationSection({ user, onUpdated }) {
         </Field>
         <Field label="Color de letra">
           <div className="flex flex-wrap gap-1.5">
-            {['#ffffff','#e2e8f0','#94a3b8','#475569','#0f172a','#1e3a8a','#14532d','#7f1d1d','#fbbf24','#f472b6'].map(c => (
+            {['#ffffff','#f1f5f9','#94a3b8','#475569','#0f172a','#1e3a8a','#14532d','#7f1d1d','#fbbf24','#f472b6'].map(c => (
               <button
                 key={c}
                 type="button"
@@ -173,8 +292,129 @@ function ChatPersonalizationSection({ user, onUpdated }) {
               />
             ))}
           </div>
+          {preview.isLight && (fontColor === '#e2e8f0' || !fontColor || getLuminance(fontColor) > 0.5) && (
+            <p className="text-xs text-amber-500 mt-1.5 flex items-center gap-1">
+              <span>⚠️</span> Fondo claro: se ajustará el texto para máxima legibilidad
+            </p>
+          )}
         </Field>
       </div>
+
+      {/* ─── PREVISUALIZACIÓN ─── */}
+      <Field label="Previsualización en tiempo real">
+        <div 
+          className="rounded-2xl border overflow-hidden shadow-lg"
+          style={{ 
+            backgroundColor: bgColor,
+            backgroundImage: BG_SHAPES_PREVIEW[bgShape],
+            backgroundSize: bgShape === 'dots' ? '20px 20px' : bgShape === 'waves' ? '100px 20px' : 'auto',
+            borderColor: preview.borderStrong,
+            fontFamily: FONTS.find(f => f.label === fontFamily)?.value || fontFamily,
+            fontSize: `${fontSize}px`,
+            boxShadow: preview.shadow,
+          }}
+        >
+          {/* Header */}
+          <div 
+            className="p-3 border-b flex items-center justify-between"
+            style={{ 
+              backgroundColor: preview.isLight ? 'rgba(255,255,255,0.6)' : preview.surface,
+              borderColor: preview.borderStrong,
+              color: preview.text,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            <div className="flex items-center gap-2">
+              <MessageSquare size={16} />
+              <span className="font-semibold text-sm">#trading-general</span>
+            </div>
+            <span className="text-xs font-medium" style={{ color: preview.textMuted }}>128 mensajes</span>
+          </div>
+
+          {/* Mensajes */}
+          <div className="p-4 space-y-3">
+            {/* Mensaje ajeno 1 */}
+            <div className="flex justify-start">
+              <div 
+                className="max-w-[80%] rounded-2xl px-3 py-2 rounded-bl-md"
+                style={{ 
+                  backgroundColor: preview.surface,
+                  color: preview.text,
+                  border: `1px solid ${preview.border}`,
+                  boxShadow: preview.isLight ? preview.shadow : 'none',
+                }}
+              >
+                <p className="text-xs font-bold mb-0.5" style={{ color: '#2563eb' }}>Admin</p>
+                <p className="text-sm leading-relaxed">Buenos días equipo, ¿listos para la sesión de Londres? 📈</p>
+                <p className="text-[10px] mt-1 font-medium" style={{ color: preview.textMuted }}>08:30</p>
+              </div>
+            </div>
+
+            {/* Propio */}
+            <div className="flex justify-end">
+              <div 
+                className="max-w-[80%] rounded-2xl px-3 py-2 rounded-br-md"
+                style={{ 
+                  backgroundColor: '#2563eb',
+                  color: '#ffffff',
+                  boxShadow: '0 2px 8px rgba(37, 99, 235, 0.3)',
+                }}
+              >
+                <p className="text-sm leading-relaxed">¡Listo! Tengo configuradas las alertas en BTC y EURUSD 🚀</p>
+                <p className="text-[10px] mt-1 font-medium text-blue-200">08:32</p>
+              </div>
+            </div>
+
+            {/* Mensaje ajeno 2 */}
+            <div className="flex justify-start">
+              <div 
+                className="max-w-[80%] rounded-2xl px-3 py-2 rounded-bl-md"
+                style={{ 
+                  backgroundColor: preview.surface,
+                  color: preview.text,
+                  border: `1px solid ${preview.border}`,
+                  boxShadow: preview.isLight ? preview.shadow : 'none',
+                }}
+              >
+                <p className="text-xs font-bold mb-0.5" style={{ color: '#d97706' }}>Moderador</p>
+                <p className="text-sm leading-relaxed">Perfecto, recuerden gestionar bien el riesgo hoy. Volatilidad alta.</p>
+                <p className="text-[10px] mt-1 font-medium" style={{ color: preview.textMuted }}>08:33</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Input */}
+          <div 
+            className="p-3 border-t flex gap-2"
+            style={{ 
+              backgroundColor: preview.isLight ? 'rgba(255,255,255,0.7)' : preview.surface,
+              borderColor: preview.borderStrong,
+              backdropFilter: 'blur(8px)',
+            }}
+          >
+            <div 
+              className="flex-1 px-3 py-2 rounded-xl text-sm flex items-center"
+              style={{ 
+                backgroundColor: preview.isLight ? '#ffffff' : preview.inputBg,
+                color: preview.text,
+                border: `1px solid ${preview.inputBorder}`,
+                boxShadow: preview.isLight ? 'inset 0 1px 2px rgba(15, 23, 42, 0.05)' : 'none',
+              }}
+            >
+              <span style={{ color: preview.placeholder }}>Escribe un mensaje...</span>
+            </div>
+            <div 
+              className="p-2 rounded-xl flex items-center justify-center"
+              style={{ 
+                backgroundColor: '#2563eb',
+                boxShadow: '0 2px 4px rgba(37, 99, 235, 0.3)',
+              }}
+            >
+              <Send size={16} className="text-white" />
+            </div>
+          </div>
+        </div>
+      </Field>
 
       <button type="submit" disabled={saving} className="btn-primary text-sm flex items-center gap-2">
         <Palette size={14} />
@@ -186,7 +426,7 @@ function ChatPersonalizationSection({ user, onUpdated }) {
 
 /* ─── Sección 2FA ─────────────────────────────────────────── */
 function TwoFactorSection({ user, onUpdated }) {
-  const [step, setStep]       = useState('idle')   // idle | scan | confirm | disable
+  const [step, setStep]       = useState('idle')
   const [qrImage, setQrImage] = useState('')
   const [secret, setSecret]   = useState('')
   const [code, setCode]       = useState('')
@@ -242,7 +482,6 @@ function TwoFactorSection({ user, onUpdated }) {
 
   return (
     <div className="space-y-4">
-      {/* Estado actual */}
       <div className="flex items-center gap-3">
         {enabled
           ? <ShieldCheck size={20} className="text-green-400 shrink-0" />
@@ -261,7 +500,6 @@ function TwoFactorSection({ user, onUpdated }) {
 
       {status && <Alert type={status.type} message={status.message} />}
 
-      {/* Flujo activación */}
       {!enabled && step === 'idle' && (
         <button onClick={startSetup} disabled={loading} className="btn-primary text-sm">
           {loading ? 'Generando QR…' : 'Activar 2FA'}
@@ -301,7 +539,6 @@ function TwoFactorSection({ user, onUpdated }) {
         </div>
       )}
 
-      {/* Flujo desactivación */}
       {enabled && step === 'idle' && (
         <button onClick={() => setStep('disable')} className="btn-ghost text-sm text-red-400 hover:text-red-300">
           Desactivar 2FA
@@ -335,24 +572,29 @@ function TwoFactorSection({ user, onUpdated }) {
 
 /* ─── Sección Notificaciones Telegram ─────────────────────── */
 function TelegramNotificationsSection({ user, onUpdated }) {
-  const [chatId, setChatId]     = useState(user?.telegram_chat_id || '')
+  const [username, setUsername] = useState(user?.telegram_username ? `@${user.telegram_username}` : '')
   const [notifyOpen, setNotifyOpen]       = useState(user?.notify_on_open ?? true)
   const [notifyPartial, setNotifyPartial] = useState(user?.notify_on_partial ?? true)
   const [notifyClose, setNotifyClose]     = useState(user?.notify_on_close ?? true)
+  const [link, setLink]         = useState(null)
   const [saving, setSaving]     = useState(false)
   const [status, setStatus]     = useState(null)
+
+  const isVerified = !!user?.telegram_chat_id
 
   const handleSave = async (e) => {
     e.preventDefault()
     setSaving(true); setStatus(null)
     try {
+      const cleanUsername = username.trim().replace(/^@/, '').toLowerCase() || null
       const { data } = await authService.updateMe({
-        telegram_chat_id: chatId.trim() || null,
+        telegram_username: cleanUsername,
         notify_on_open: notifyOpen,
         notify_on_partial: notifyPartial,
         notify_on_close: notifyClose,
       })
       setStatus({ type: 'success', message: 'Preferencias guardadas correctamente' })
+      setLink(null)
       onUpdated(data)
     } catch (err) {
       setStatus({ type: 'error', message: err.response?.data?.detail || 'Error al guardar' })
@@ -361,57 +603,105 @@ function TelegramNotificationsSection({ user, onUpdated }) {
     }
   }
 
-  const hasChatId = !!chatId.trim()
+  const generateLink = async () => {
+    setSaving(true); setStatus(null)
+    try {
+      // Guardar primero el username para validarlo en el webhook
+      const cleanUsername = username.trim().replace(/^@/, '').toLowerCase() || null
+      if (cleanUsername) {
+        await authService.updateMe({ telegram_username: cleanUsername })
+      }
+      const { data } = await authService.generateTelegramLink()
+      setLink(data.link)
+      setStatus({ type: 'success', message: 'Enlace generado. Ábrelo desde Telegram para vincular tu cuenta.' })
+    } catch (err) {
+      setStatus({ type: 'error', message: err.response?.data?.detail || 'Error al generar el enlace' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const hasUsername = !!username.trim()
 
   return (
     <form onSubmit={handleSave} className="space-y-4">
       {status && <Alert type={status.type} message={status.message} />}
 
-      <Field label="ID de chat de Telegram">
+      <Field label="Usuario de Telegram">
         <div className="flex gap-2">
           <input
             type="text"
-            value={chatId}
-            onChange={e => setChatId(e.target.value)}
-            placeholder="Ej: 123456789 o @tu_usuario"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            placeholder="@tu_usuario"
             className="input flex-1"
+            disabled={saving}
           />
         </div>
         <p className="text-xs text-slate-400 dark:text-gray-500 mt-1">
-          Introduce tu ID de chat de Telegram. Puedes obtenerlo hablando con{' '}
-          <a href="https://t.me/userinfobot" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">@userinfobot</a>.
+          Introduce tu usuario de Telegram (sin o con @). Te enviaremos un mensaje para capturar tu Chat ID automáticamente.
         </p>
       </Field>
+
+      {isVerified && (
+        <div className="flex items-center gap-2 text-sm text-green-400 bg-green-500/10 border border-green-500/30 rounded-lg px-4 py-3">
+          <span>✅</span>
+          <span>Cuenta de Telegram vinculada {user?.telegram_username && `(@${user.telegram_username})`}</span>
+        </div>
+      )}
+
+      {link && !isVerified && (
+        <div className="space-y-2 p-3 rounded-lg border border-blue-500/30 bg-blue-500/10">
+          <p className="text-sm text-blue-200">Pulsa el botón para abrir Telegram y vincular tu cuenta:</p>
+          <a
+            href={link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="btn-primary text-sm inline-flex items-center gap-2"
+          >
+            📱 Abrir en Telegram
+          </a>
+          <p className="text-xs text-slate-400 break-all">{link}</p>
+        </div>
+      )}
 
       <div className="space-y-3 pt-1">
         <Toggle
           label="Notificar al abrir posición"
           checked={notifyOpen}
           onChange={e => setNotifyOpen(e.target.checked)}
-          disabled={!hasChatId}
+          disabled={!isVerified}
         />
         <Toggle
           label="Notificar en take profit parcial"
           checked={notifyPartial}
           onChange={e => setNotifyPartial(e.target.checked)}
-          disabled={!hasChatId}
+          disabled={!isVerified}
         />
         <Toggle
           label="Notificar al cerrar posición"
           checked={notifyClose}
           onChange={e => setNotifyClose(e.target.checked)}
-          disabled={!hasChatId}
+          disabled={!isVerified}
         />
       </div>
 
-      <div className="flex gap-2">
+      <div className="flex flex-wrap gap-2">
         <button type="submit" disabled={saving} className="btn-primary text-sm flex items-center gap-2">
           <Send size={14} />
           {saving ? 'Guardando…' : 'Guardar preferencias'}
         </button>
         <button
           type="button"
-          disabled={!hasChatId || saving}
+          disabled={!hasUsername || saving || isVerified}
+          onClick={generateLink}
+          className="btn-ghost text-sm flex items-center gap-2 disabled:opacity-50"
+        >
+          🔗 Generar enlace de vinculación
+        </button>
+        <button
+          type="button"
+          disabled={!isVerified || saving}
           onClick={async () => {
             setSaving(true); setStatus(null)
             try {

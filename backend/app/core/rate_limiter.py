@@ -41,3 +41,4 @@ class InMemoryRateLimiter:
 # Limiters dedicados
 login_limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60)
 register_limiter = InMemoryRateLimiter(max_requests=3, window_seconds=300)
+two_factor_limiter = InMemoryRateLimiter(max_requests=5, window_seconds=60)

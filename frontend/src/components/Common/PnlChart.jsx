@@ -45,12 +45,60 @@ const PRESETS = [
   { key: 'year',  label: 'Año'         },
 ]
 
+function formatTime(time, isHourly) {
+  if (!time) return ''
+  // lightweight-charts puede devolver un string ISO o un objeto { year, month, day, hour, minute }
+  if (typeof time === 'string') {
+    const [datePart, timePart] = time.split(' ')
+    if (isHourly && timePart) return `${datePart} ${timePart}`
+    return datePart
+  }
+  const { year, month, day, hour } = time
+  const dateStr = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  if (isHourly && hour !== undefined) {
+    return `${dateStr} ${String(hour).padStart(2, '0')}:00`
+  }
+  return dateStr
+}
+
+function formatValue(value, valueMode) {
+  const n = parseFloat(value)
+  const suffix = valueMode === 'percent' ? ' %PnL' : ' USDT'
+  return `${n >= 0 ? '+' : ''}${n.toFixed(2)}${suffix}`
+}
+
+// ── Tooltip HTML flotante ─────────────────────────────────────
+
+function Tooltip({ point, title, value, time, isDark, isHourly }) {
+  if (!point || value === undefined || value === null) return null
+
+  return (
+    <div
+      className="pointer-events-none absolute z-10 rounded-md border px-2.5 py-1.5 text-xs shadow-md"
+      style={{
+        left: point.x + 12,
+        top: point.y - 12,
+        backgroundColor: isDark ? '#1f2937' : '#ffffff',
+        borderColor: isDark ? '#374151' : '#e2e8f0',
+        color: isDark ? '#e5e7eb' : '#1f2937',
+      }}
+    >
+      <div className="font-medium">{title}</div>
+      <div className="text-[10px] opacity-80">{formatTime(time, isHourly)}</div>
+      <div className={`font-mono font-semibold ${parseFloat(value) >= 0 ? 'text-green-500' : 'text-red-500'}`}>
+        {formatValue(value, 'usdt')}
+      </div>
+    </div>
+  )
+}
+
 // ── Gráfico Acumulado (área) ───────────────────────────────────
 
-function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
+function AreaChart({ data, height = 260, isDark, valueMode = 'usdt', isHourly = false }) {
   const containerRef = useRef(null)
   const chartRef     = useRef(null)
   const seriesRef    = useRef(null)
+  const [tooltip, setTooltip] = useState(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -65,7 +113,11 @@ function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
       layout: { background: { color: bgColor }, textColor },
       grid:   { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       rightPriceScale: { borderColor },
-      timeScale: { borderColor, timeVisible: true },
+      timeScale: { borderColor, timeVisible: isHourly },
+      crosshair: { mode: 1, horzLine: { visible: true }, vertLine: { visible: true } },
+      localization: {
+        priceFormatter: (price) => formatValue(price, valueMode),
+      },
     })
 
     const series = chart.addAreaSeries({
@@ -74,14 +126,31 @@ function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
       bottomColor: 'rgba(59,130,246,0.02)',
       lineWidth: 2,
       crosshairMarkerVisible: true,
-      priceFormat: valueMode === 'percent'
-        ? { type: 'price', precision: 2, minMove: 0.01 }
-        : { type: 'price', precision: 2, minMove: 0.01 },
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      lastValueVisible: false,
+      priceLineVisible: false,
     })
 
     series.createPriceLine({
       price: 0, color: isDark ? '#6b7280' : '#94a3b8',
       lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false,
+    })
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || param.point === undefined) {
+        setTooltip(null)
+        return
+      }
+      const seriesData = param.seriesData.get(series)
+      if (!seriesData) {
+        setTooltip(null)
+        return
+      }
+      setTooltip({
+        point: param.point,
+        time: param.time,
+        value: seriesData.value,
+      })
     })
 
     chartRef.current  = chart
@@ -92,7 +161,7 @@ function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
     })
     ro.observe(containerRef.current)
     return () => { ro.disconnect(); chart.remove() }
-  }, [height, isDark])
+  }, [height, isDark, valueMode, isHourly])
 
   useEffect(() => {
     if (!seriesRef.current || !data.length) return
@@ -102,15 +171,27 @@ function AreaChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
     chartRef.current?.timeScale().fitContent()
   }, [data])
 
-  return <div ref={containerRef} className="w-full" style={{ height }} />
+  return (
+    <div ref={containerRef} className="relative w-full" style={{ height }}>
+      <Tooltip
+        point={tooltip?.point}
+        time={tooltip?.time}
+        value={tooltip?.value}
+        title="PnL acumulado"
+        isDark={isDark}
+        isHourly={isHourly}
+      />
+    </div>
+  )
 }
 
 // ── Gráfico Diario (barras) ────────────────────────────────────
 
-function BarChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
+function BarChart({ data, height = 260, isDark, valueMode = 'usdt', isHourly = false }) {
   const containerRef = useRef(null)
   const chartRef     = useRef(null)
   const seriesRef    = useRef(null)
+  const [tooltip, setTooltip] = useState(null)
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -125,19 +206,40 @@ function BarChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
       layout: { background: { color: bgColor }, textColor },
       grid:   { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
       rightPriceScale: { borderColor },
-      timeScale: { borderColor, timeVisible: true },
+      timeScale: { borderColor, timeVisible: isHourly },
+      crosshair: { mode: 1, horzLine: { visible: true }, vertLine: { visible: true } },
+      localization: {
+        priceFormatter: (price) => formatValue(price, valueMode),
+      },
     })
 
     const series = chart.addHistogramSeries({
       color: 'rgba(74,222,128,0.8)',
-      priceFormat: valueMode === 'percent'
-        ? { type: 'price', precision: 2, minMove: 0.01 }
-        : { type: 'price', precision: 2, minMove: 0.01 },
+      priceFormat: { type: 'price', precision: 2, minMove: 0.01 },
+      lastValueVisible: false,
+      priceLineVisible: false,
     })
 
     series.createPriceLine({
       price: 0, color: isDark ? '#6b7280' : '#94a3b8',
       lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: false,
+    })
+
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.time || param.point === undefined) {
+        setTooltip(null)
+        return
+      }
+      const seriesData = param.seriesData.get(series)
+      if (!seriesData) {
+        setTooltip(null)
+        return
+      }
+      setTooltip({
+        point: param.point,
+        time: param.time,
+        value: seriesData.value,
+      })
     })
 
     chartRef.current  = chart
@@ -148,7 +250,7 @@ function BarChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
     })
     ro.observe(containerRef.current)
     return () => { ro.disconnect(); chart.remove() }
-  }, [height, isDark])
+  }, [height, isDark, valueMode, isHourly])
 
   useEffect(() => {
     if (!seriesRef.current || !data.length) return
@@ -165,7 +267,18 @@ function BarChart({ data, height = 260, isDark, valueMode = 'usdt' }) {
     chartRef.current?.timeScale().fitContent()
   }, [data])
 
-  return <div ref={containerRef} className="w-full" style={{ height }} />
+  return (
+    <div ref={containerRef} className="relative w-full" style={{ height }}>
+      <Tooltip
+        point={tooltip?.point}
+        time={tooltip?.time}
+        value={tooltip?.value}
+        title={isHourly ? 'PnL horario' : 'PnL diario'}
+        isDark={isDark}
+        isHourly={isHourly}
+      />
+    </div>
+  )
 }
 
 // ── PnlChart principal ────────────────────────────────────────
@@ -192,16 +305,42 @@ export default function PnlChart() {
     return () => observer.disconnect()
   }, [])
 
-  const fetchData = useCallback(async (params) => {
+  const fetchData = useCallback(async (params, isHourly = false) => {
     setLoading(true)
     try {
-      const qs = new URLSearchParams()
-      if (params.from)   qs.set('from_date', params.from)
-      if (params.to)     qs.set('to_date',   params.to)
-      if (params.symbol) qs.set('symbol',    params.symbol)
-      if (params.source) qs.set('source',    params.source)
-      const res = await api.get(`/analytics/pnl-chart?${qs}`)
-      setData(res.data)
+      if (isHourly) {
+        const qs = new URLSearchParams()
+        if (params.from)   qs.set('from_date', params.from)
+        if (params.to)     qs.set('to_date',   params.to)
+        if (params.symbol) qs.set('symbol',    params.symbol)
+        if (params.source) qs.set('source',    params.source)
+        const res = await api.get(`/analytics/hourly-distribution?${qs}`)
+
+        const baseDate = params.from || new Date().toISOString().slice(0, 10)
+        let cumulative = 0
+        const transformed = []
+        for (let hour = 0; hour < 24; hour++) {
+          const h = (res.data || []).find(d => d.hour === hour)
+          const pnl = h ? parseFloat(h.pnl || 0) : 0
+          const trades = h ? h.trades : 0
+          cumulative += pnl
+          transformed.push({
+            date: `${baseDate} ${String(hour).padStart(2, '0')}:00`,
+            daily_pnl: pnl,
+            cumulative_pnl: cumulative,
+            trade_count: trades,
+          })
+        }
+        setData(transformed)
+      } else {
+        const qs = new URLSearchParams()
+        if (params.from)   qs.set('from_date', params.from)
+        if (params.to)     qs.set('to_date',   params.to)
+        if (params.symbol) qs.set('symbol',    params.symbol)
+        if (params.source) qs.set('source',    params.source)
+        const res = await api.get(`/analytics/pnl-chart?${qs}`)
+        setData(res.data)
+      }
     } catch {
       setData([])
     } finally {
@@ -217,31 +356,31 @@ export default function PnlChart() {
   // Carga inicial
   useEffect(() => {
     const p = getPreset(preset)
-    fetchData({ ...p, symbol, source })
+    fetchData({ ...p, symbol, source }, preset === 'today')
   }, []) // eslint-disable-line
 
   const applyPreset = (key) => {
     setPreset(key)
     setFrom(''); setTo('')
     const p = getPreset(key)
-    fetchData({ ...p, symbol, source })
+    fetchData({ ...p, symbol, source }, key === 'today')
   }
 
   const applyCustomRange = () => {
     setPreset(null)
-    fetchData({ from, to, symbol, source })
+    fetchData({ from, to, symbol, source }, false)
   }
 
   const applySymbol = (s) => {
     setSymbol(s)
     const p = preset ? getPreset(preset) : { from, to }
-    fetchData({ ...p, symbol: s, source })
+    fetchData({ ...p, symbol: s, source }, preset === 'today')
   }
 
   const applySource = (s) => {
     setSource(s)
     const p = preset ? getPreset(preset) : { from, to }
-    fetchData({ ...p, symbol, source: s })
+    fetchData({ ...p, symbol, source: s }, preset === 'today')
   }
 
   // Equity para cálculo de %
@@ -268,17 +407,18 @@ export default function PnlChart() {
   const bestDay      = displayData.length ? Math.max(...displayData.map(d => parseFloat(d.daily_pnl))) : 0
   const worstDay     = displayData.length ? Math.min(...displayData.map(d => parseFloat(d.daily_pnl))) : 0
   const isPos        = totalPnl >= 0
-  const suffix       = valueMode === 'percent' ? '%' : ' USDT'
+  const suffix       = valueMode === 'percent' ? ' %PnL' : ' USDT'
   const numFmt       = (n) => `${n >= 0 ? '+' : ''}${n.toFixed(2)}${suffix}`
 
+  const isHourly = preset === 'today'
   const STATS = [
     { label: 'PnL del período',  value: numFmt(totalPnl),              color: isPos ? 'text-green-400' : 'text-red-400' },
     { label: 'Trades cerrados',  value: totalTrades,                   color: 'text-slate-700 dark:text-white' },
-    { label: 'Win rate (días)',  value: `${winDayRate}%`,              color: winDayRate >= 50 ? 'text-green-400' : 'text-red-400' },
-    { label: 'Días positivos',   value: winDays,                       color: 'text-green-400' },
-    { label: 'Días negativos',   value: lossDays,                      color: 'text-red-400' },
-    { label: 'Mejor día',        value: numFmt(bestDay),               color: 'text-blue-400' },
-    { label: 'Peor día',         value: numFmt(worstDay),              color: worstDay >= 0 ? 'text-blue-400' : 'text-red-400' },
+    { label: isHourly ? 'Win rate (horas)' : 'Win rate (días)',  value: `${winDayRate}%`,              color: winDayRate >= 50 ? 'text-green-400' : 'text-red-400' },
+    { label: isHourly ? 'Horas positivas' : 'Días positivos',   value: winDays,                       color: 'text-green-400' },
+    { label: isHourly ? 'Horas negativas' : 'Días negativos',   value: lossDays,                      color: 'text-red-400' },
+    { label: isHourly ? 'Mejor hora' : 'Mejor día',        value: numFmt(bestDay),               color: 'text-blue-400' },
+    { label: isHourly ? 'Peor hora' : 'Peor día',         value: numFmt(worstDay),              color: worstDay >= 0 ? 'text-blue-400' : 'text-red-400' },
   ]
 
   return (
@@ -291,7 +431,7 @@ export default function PnlChart() {
         <div className="flex rounded-md overflow-hidden border border-slate-300 dark:border-gray-700 shrink-0">
           {[
             { key: 'cumulative', label: 'Acumulado' },
-            { key: 'daily',      label: 'Diario'    },
+            { key: 'daily',      label: isHourly ? 'Horario' : 'Diario' },
           ].map(opt => (
             <button
               key={opt.key}
@@ -361,14 +501,18 @@ export default function PnlChart() {
         )}
 
         {/* Fuente */}
-        <div className="w-px h-4 bg-slate-300 dark:bg-gray-700 shrink-0" />
+        <div className="w-px h-4 bg-slate-300 dark:border-gray-700 shrink-0" />
         <select
           value={source} onChange={e => applySource(e.target.value)}
           className="bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-xs text-slate-700 dark:text-gray-300 rounded px-2 py-1"
         >
           <option value="">Todos</option>
-          <option value="bots">Solo bots</option>
-          <option value="manual">Solo manuales</option>
+          <option value="bot_int">Bot int. (señales internas)</option>
+          <option value="bot_ext">Bot ext. (señales externas por webhook)</option>
+          <option value="ai_bot">Bot IA</option>
+          <option value="app_manual">Manual</option>
+          <option value="paper">Paper</option>
+          <option value="manual">BingX Manual</option>
         </select>
       </div>
 
@@ -390,7 +534,7 @@ export default function PnlChart() {
         <div className="flex rounded-md overflow-hidden border border-slate-300 dark:border-gray-700">
           {[
             { key: 'usdt',    label: 'USDT' },
-            { key: 'percent', label: '% Equity' },
+            { key: 'percent', label: '%PnL' },
           ].map(opt => (
             <button
               key={opt.key}
@@ -417,9 +561,9 @@ export default function PnlChart() {
           Sin trades en este período
         </div>
       ) : chartMode === 'cumulative' ? (
-        <AreaChart data={displayData} height={260} isDark={isDark} valueMode={valueMode} />
+        <AreaChart key={`area-${isHourly ? 'hourly' : 'daily'}`} data={displayData} height={260} isDark={isDark} valueMode={valueMode} isHourly={isHourly} />
       ) : (
-        <BarChart data={displayData} height={260} isDark={isDark} valueMode={valueMode} />
+        <BarChart key={`bar-${isHourly ? 'hourly' : 'daily'}`} data={displayData} height={260} isDark={isDark} valueMode={valueMode} isHourly={isHourly} />
       )}
 
       {/* Nota UTC */}

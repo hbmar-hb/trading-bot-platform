@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id
+from app.api.dependencies import get_current_authorized_user, get_current_user_id
 from app.models.bot_config import BotConfig
 from app.models.exchange_account import ExchangeAccount
 from app.models.paper_balance import PaperBalance
@@ -26,7 +26,7 @@ from app.tasks.order_tasks import execute_signal
 from app.utils.signal_hasher import generate_signal_hash
 from datetime import datetime, timezone
 
-router = APIRouter(prefix="/manual-trade", tags=["manual-trade"])
+router = APIRouter(prefix="/manual-trade", tags=["manual-trade"], dependencies=[Depends(get_current_authorized_user)])
 
 MANUAL_BOT_PREFIX = "[MANUAL]"
 
@@ -102,7 +102,7 @@ async def _get_or_create_manual_bot(
                 {"profit_percent": float(tp["profit_percent"]), "close_percent": float(tp["close_percent"])}
                 for tp in data.take_profits
             ],
-            status="active",
+            status="paused",
         )
         # Configuraciones opcionales
         if data.trailing_config:
@@ -129,7 +129,8 @@ async def _get_or_create_manual_bot(
                 bot.breakeven_config = data.breakeven_config
             if data.dynamic_sl_config:
                 bot.dynamic_sl_config = data.dynamic_sl_config
-        bot.status = "active"
+        # Manual bots stay paused — they are position trackers, not active trading bots
+        pass
 
     await db.commit()
     await db.refresh(bot)
@@ -217,6 +218,66 @@ async def execute_manual_trade(
         bot_id=str(bot.id),
         message=f"Señal {data.action.upper()} enviada para {data.symbol}",
     )
+
+
+@router.get("/check-conflicts")
+async def check_manual_trade_conflicts(
+    symbol: str,
+    exchange_account_id: uuid.UUID | None = None,
+    paper_balance_id: uuid.UUID | None = None,
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Devuelve si hay posiciones abiertas en el símbolo/cuenta.
+    Usado por el frontend para mostrar modal de confirmación antes de abrir manual.
+    """
+    # Buscar bot manual para esta cuenta+símbolo
+    query = (
+        select(BotConfig)
+        .where(
+            BotConfig.user_id == user_id,
+            BotConfig.symbol == symbol,
+            BotConfig.bot_name.like(f"{MANUAL_BOT_PREFIX}%"),
+        )
+    )
+    if exchange_account_id:
+        query = query.where(BotConfig.exchange_account_id == exchange_account_id)
+    elif paper_balance_id:
+        query = query.where(BotConfig.paper_balance_id == paper_balance_id)
+
+    result = await db.execute(query)
+    manual_bot = result.scalar_one_or_none()
+
+    # Construir un bot dummy para usar conflict_resolver
+    from app.core.conflict_resolver import get_conflicting_positions, classify_bot_type
+    
+    class _DummyBot:
+        def __init__(self, symbol, account_id, paper_id, user_id_val):
+            self.symbol = symbol
+            self.exchange_account_id = account_id
+            self.paper_balance_id = paper_id
+            self.user_id = user_id_val
+            self.id = uuid.UUID(int=0)  # dummy ID que no coincide con ningún bot real
+    
+    dummy = _DummyBot(symbol, exchange_account_id, paper_balance_id, user_id)
+    
+    # Necesitamos session síncrona para conflict_resolver
+    from app.services.database import SessionLocal
+    with SessionLocal() as sync_db:
+        conflicting = get_conflicting_positions(sync_db, dummy)
+        conflicts = []
+        for pos, other_bot in conflicting:
+            conflicts.append({
+                "bot_name": other_bot.bot_name,
+                "side": pos.side,
+                "source": classify_bot_type(other_bot),
+            })
+    
+    return {
+        "has_conflict": len(conflicts) > 0,
+        "conflicts": conflicts,
+    }
 
 
 @router.get("/position")
@@ -365,6 +426,7 @@ async def get_external_positions(
                         "side": p.side,
                         "entry_price": float(p.entry_price),
                         "quantity": float(p.quantity),
+                        "leverage": p.leverage,
                         "unrealized_pnl": float(p.unrealized_pnl),
                         "exchange_position_id": p.exchange_position_id,
                         "exchange_account_id": str(account.id),
@@ -504,7 +566,8 @@ async def adopt_position(
             bot.breakeven_config = data.breakeven_config
         if data.dynamic_sl_config:
             bot.dynamic_sl_config = data.dynamic_sl_config
-        bot.status = "active"
+        # Manual bots stay paused — they are position trackers, not active trading bots
+        pass
 
     # Crear el registro de Position
     tp_prices = []
@@ -541,6 +604,7 @@ async def adopt_position(
         exchange_position_id=exchange_position_id,
         exchange_sl_order_id=sl_order_id,
         extra_config=extra or None,
+        source="manual",
         status="open",
         opened_at=datetime.now(timezone.utc),
         unrealized_pnl=bingx_pos.unrealized_pnl,
@@ -565,6 +629,7 @@ async def adopt_position(
             entry=float(entry_price),
             sl=float(sl_price) if sl_price else 0.0,
             chat_id=user.telegram_chat_id,
+            timeframe=bot.timeframe,
         )
 
     return {
