@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
-  BarChart3, Bot, Brain, CandlestickChart, FileText, Gauge, History, KeyRound,
+  Activity, BarChart3, Bot, Brain, CandlestickChart, FileText, Gauge, History, KeyRound,
   LogOut, Menu, MessageSquare, Moon, MousePointerClick, Settings, Sun, TrendingUp, Users, Zap,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
@@ -23,6 +23,7 @@ const links = [
   { to: '/paper-trading',      icon: FileText,     label: 'Paper'      },
   { to: '/chat',               icon: MessageSquare, label: 'Chat'      },
   { to: '/users',              icon: Users,        label: 'Usuarios',  adminOnly: true },
+  { to: '/admin-system',       icon: Activity,     label: 'Sistema',   adminOnly: true },
   { to: '/settings',           icon: Settings,     label: 'Ajustes'    },
 ]
 

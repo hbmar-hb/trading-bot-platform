@@ -14,6 +14,7 @@ import {
   TrendingUp, TrendingDown, AlertTriangle, Activity, Clock,
   BarChart3, ChevronDown, Eye, EyeOff, LineChart, X,
   Maximize2, Minimize2, CandlestickChart, AreaChart, Layers,
+  Settings,
 } from 'lucide-react'
 
 // ─── Timeframes ───────────────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ function calculateIndicators(candles) {
 
 // ─── ICT Engine importado desde frontend/src/core/ictEngine.js ─────────────
 // ─── Sub-componentes ──────────────────────────────────────────────────────────
-function IndicatorToggle({ active, onChange, color, label }) {
+function IndicatorToggle({ active, onChange, onSettings, hasSettings, color, label }) {
   return (
     <button
       onClick={() => onChange(!active)}
@@ -160,6 +161,15 @@ function IndicatorToggle({ active, onChange, color, label }) {
       <span className={`text-sm flex-1 ${active ? 'text-slate-800 dark:text-gray-100' : 'text-slate-400 dark:text-gray-500'}`}>
         {label}
       </span>
+      {active && hasSettings && (
+        <button
+          onClick={(e) => { e.stopPropagation(); onSettings?.() }}
+          className="p-0.5 text-slate-400 hover:text-blue-500 dark:text-gray-500 dark:hover:text-blue-400 rounded transition-colors"
+          title="Configuración"
+        >
+          <Settings size={12} />
+        </button>
+      )}
       {active
         ? <Eye size={12} className="text-slate-400 dark:text-gray-500 flex-shrink-0" />
         : <EyeOff size={12} className="text-slate-300 dark:text-gray-700 flex-shrink-0" />}
@@ -891,8 +901,12 @@ export default function ChartPage() {
                     active={!!activeIndicators[ind.id]}
                     onChange={(v) => {
                       setActiveIndicators(prev => ({ ...prev, [ind.id]: v }))
-                      if (v) setOpenPanels(prev => ({ ...prev, [ind.id]: true }))
                     }}
+                    onSettings={() => {
+                      setOpenPanels(prev => ({ ...prev, [ind.id]: true }))
+                      setShowIndicatorsMenu(false)
+                    }}
+                    hasSettings={!!ind.PanelComponent}
                     color="#22c55e"
                     label={ind.name}
                   />
@@ -982,28 +996,34 @@ export default function ChartPage() {
             ))}
 
             {/* Indicator Badges + Settings Panels */}
-            {indicators.map(ind => {
-              if (!activeIndicators[ind.id]) return null
-              const Badge = ind.BadgeComponent
-              const Panel = ind.PanelComponent
-              return (
-                <div key={ind.id}>
-                  {Badge && (
-                    <Badge
-                      onOpenSettings={() => setOpenPanels(prev => ({ ...prev, [ind.id]: true }))}
-                      onClose={() => setActiveIndicators(prev => ({ ...prev, [ind.id]: false }))}
-                    />
-                  )}
-                  {Panel && openPanels[ind.id] && (
-                    <Panel
-                      config={getConfig(ind.id)}
-                      onChange={(next) => setConfig(ind.id, next)}
-                      onClose={() => setOpenPanels(prev => ({ ...prev, [ind.id]: false }))}
-                    />
-                  )}
-                </div>
-              )
-            })}
+            {(() => {
+              const active = indicators.filter(ind => activeIndicators[ind.id])
+              return active.map((ind, idx) => {
+                const Badge = ind.BadgeComponent
+                const Panel = ind.PanelComponent
+                return (
+                  <div
+                    key={ind.id}
+                    className="absolute top-0 left-0 z-10"
+                    style={{ transform: `translateY(${8 + idx * 44}px)` }}
+                  >
+                    {Badge && (
+                      <Badge
+                        onOpenSettings={() => setOpenPanels(prev => ({ ...prev, [ind.id]: true }))}
+                        onClose={() => setActiveIndicators(prev => ({ ...prev, [ind.id]: false }))}
+                      />
+                    )}
+                    {Panel && openPanels[ind.id] && (
+                      <Panel
+                        config={getConfig(ind.id)}
+                        onChange={(next) => setConfig(ind.id, next)}
+                        onClose={() => setOpenPanels(prev => ({ ...prev, [ind.id]: false }))}
+                      />
+                    )}
+                  </div>
+                )
+              })
+            })()}
           </div>
 
           {/* ── Sidebar ──────────────────────────────────────────────────────── */}

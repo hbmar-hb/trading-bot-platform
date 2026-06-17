@@ -51,7 +51,7 @@ def create_paper_exchange(paper_balance: PaperBalance) -> PaperExchange:
         PaperExchange configurado con el balance inicial
     """
     return PaperExchange(
-        account_id=paper_balance.account_id,
+        account_id=str(paper_balance.id),
         initial_balance=paper_balance.initial_balance
     )
 

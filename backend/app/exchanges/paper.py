@@ -298,23 +298,17 @@ class PaperExchange(BaseExchange):
             return price - slippage  # Venta más barato
 
     async def _get_or_create_balance(self, db: AsyncSession):
-        """Obtiene o crea el balance de la cuenta paper."""
+        """Obtiene el balance de la cuenta paper por su ID."""
         from app.models.paper_balance import PaperBalance
+        from uuid import UUID
         
         result = await db.execute(
-            select(PaperBalance).where(PaperBalance.account_id == self.account_id)
+            select(PaperBalance).where(PaperBalance.id == UUID(self.account_id))
         )
         balance = result.scalar_one_or_none()
         
         if not balance:
-            balance = PaperBalance(
-                account_id=self.account_id,
-                available_balance=self._initial_balance,
-                total_equity=self._initial_balance,
-            )
-            db.add(balance)
-            await db.commit()
-            logger.info(f"[PAPER] Creada cuenta con balance inicial {self._initial_balance}")
+            raise ValueError(f"PaperBalance no encontrado: {self.account_id}")
         
         return balance
 

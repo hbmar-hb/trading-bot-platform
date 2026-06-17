@@ -2,12 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createChart } from 'lightweight-charts'
 import {
   BarChart2, Bot, Brain, CheckCircle2, Clock, Database, Filter,
-  Plus, RefreshCw, ScanLine, TrendingDown, TrendingUp,
+  Gauge, LayoutDashboard, Plus, RefreshCw, ScanLine, TrendingDown, TrendingUp,
   X, XCircle, Zap,
 } from 'lucide-react'
 import { aiService }             from '@/services/aiService'
 import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { cn } from '@/utils/cn'
+import AIDashboardTab    from '@/pages/AIDashboardTab'
+import AIEngineControlTab from '@/pages/AIEngineControlTab'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -1623,8 +1625,10 @@ export default function AIPage() {
       {/* Tab toggle */}
       <div className="flex gap-0 border-b border-slate-200 dark:border-slate-800 -mb-1">
         {[
+          { id: 'dashboard', label: 'Dashboard', icon: <LayoutDashboard size={13} /> },
           { id: 'scanner',  label: 'Scanner',  icon: <ScanLine size={13} /> },
           { id: 'backtest', label: 'Backtest', icon: <BarChart2 size={13} /> },
+          { id: 'control',  label: 'Control',  icon: <Gauge size={13} /> },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={cn(
             'flex items-center gap-1.5 px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
@@ -1640,7 +1644,11 @@ export default function AIPage() {
       {/* Global stats */}
       <StatsBar stats={stats} />
 
+      {tab === 'dashboard' && <AIDashboardTab />}
+
       {tab === 'backtest' && <BacktestTab />}
+
+      {tab === 'control' && <AIEngineControlTab />}
 
       {tab === 'scanner' && (<>
       {/* Toolbar */}

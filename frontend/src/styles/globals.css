@@ -12,6 +12,31 @@
   body {
     @apply bg-slate-100 text-slate-900 dark:bg-gray-950 dark:text-gray-100 font-sans antialiased;
   }
+
+  /* Scrollbars personalizadas */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    @apply bg-slate-300 dark:bg-gray-700 rounded-full;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    @apply bg-slate-400 dark:bg-gray-600;
+  }
+  ::-webkit-scrollbar-corner {
+    @apply bg-transparent;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 transparent;
+  }
+  .dark * {
+    scrollbar-color: #374151 transparent;
+  }
 }
 
 @layer components {
