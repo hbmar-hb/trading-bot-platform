@@ -1,13 +1,5 @@
 import { useEffect, useRef } from 'react'
-
-function hexToRgba(hex, alpha) {
-  if (!hex || !hex.startsWith('#')) return `rgba(128,128,128,${alpha})`
-  const h = hex.slice(1)
-  const r = parseInt(h.slice(0, 2), 16)
-  const g = parseInt(h.slice(2, 4), 16)
-  const b = parseInt(h.slice(4, 6), 16)
-  return `rgba(${r},${g},${b},${alpha})`
-}
+import { hexToRgba } from './colorHelpers'
 
 export default function SBTCanvas({ chartRef, seriesRef, result, config, chartVersion }) {
   const canvasRef = useRef(null)
