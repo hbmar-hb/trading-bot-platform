@@ -162,6 +162,7 @@ class WebSocketManager:
                     "position_updates",
                     "balance_updates",
                     "notification_updates",
+                    "ai_scan_updates",
                 )
                 async for message in pubsub.listen():
                     if message["type"] != "message":
@@ -198,6 +199,9 @@ class WebSocketManager:
             if user_id:
                 await self.broadcast_to_user(user_id, data)
 
+        elif msg_type == "ai_scan_update":
+            # Global admin-only stream; the /ai route already protects access.
+            await self.broadcast_to_all(data)
     # ── Utils ─────────────────────────────────────────────────
 
     def _count(self) -> int:

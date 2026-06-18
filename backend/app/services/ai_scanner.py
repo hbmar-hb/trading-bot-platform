@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 
 import ccxt.async_support as ccxt
 from loguru import logger
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ict_engine import analyze as ict_analyze
@@ -181,19 +183,33 @@ def build_signal(
 
     if adaptive_params is None and regime_info:
         try:
-            from app.services.scanner_regime_optimizer import get_adaptive_params_sync
-            adaptive_params = get_adaptive_params_sync(
-                symbol=symbol,
-                timeframe=timeframe,
-                regime=regime_info.regime,
-                regime_confidence=regime_info.confidence,
-                adx=regime_info.adx,
-                atr_percentile=regime_info.atr_percentile,
-                rel_volume=regime_info.rel_volume,
-                realized_vol=regime_info.realized_vol,
+            # In async endpoints the event loop is already running; calling the
+            # synchronous wrapper would block all other requests. Only run the
+            # sync resolver when we are in a synchronous context (Celery worker).
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is None:
+            try:
+                from app.services.scanner_regime_optimizer import get_adaptive_params_sync
+                adaptive_params = get_adaptive_params_sync(
+                    symbol=symbol,
+                    timeframe=timeframe,
+                    regime=regime_info.regime,
+                    regime_confidence=regime_info.confidence,
+                    adx=regime_info.adx,
+                    atr_percentile=regime_info.atr_percentile,
+                    rel_volume=regime_info.rel_volume,
+                    realized_vol=regime_info.realized_vol,
+                )
+            except Exception:
+                pass  # Never block signal because optimizer failed
+        else:
+            logger.debug(
+                f"[build_signal] Skipping sync adaptive resolver for {symbol}/{timeframe}: "
+                "already inside an event loop"
             )
-        except Exception:
-            pass  # Never block signal because optimizer failed
 
     result = analyze_confluence(
         closed,
@@ -415,6 +431,76 @@ def record_shadow_for_signal(signal_id: str, result_dict: dict) -> None:
             pass
 
 
+async def persist_signal_async(db: AsyncSession, sig: AISignal) -> AISignal:
+    """Persist a signal, returning an existing row if the same candle already exists.
+
+    The natural key used for deduplication matches the one in ai_scan_task.py:
+    (ticker, timeframe, direction, signal_time).
+    """
+    stmt = (
+        select(AISignal)
+        .where(
+            AISignal.ticker == sig.ticker,
+            AISignal.timeframe == sig.timeframe,
+            AISignal.direction == sig.direction,
+            AISignal.signal_time == sig.signal_time,
+        )
+        .limit(1)
+    )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
+    if existing:
+        logger.info(
+            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
+        )
+        return existing
+
+    db.add(sig)
+    try:
+        await db.commit()
+        await db.refresh(sig)
+        return sig
+    except IntegrityError:
+        await db.rollback()
+        logger.warning(
+            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
+        )
+        existing = (await db.execute(stmt)).scalar_one()
+        return existing
+
+
+def persist_signal_sync(db, sig: AISignal) -> AISignal:
+    """Synchronous version of persist_signal_async for Celery/sync tasks."""
+    stmt = (
+        select(AISignal)
+        .where(
+            AISignal.ticker == sig.ticker,
+            AISignal.timeframe == sig.timeframe,
+            AISignal.direction == sig.direction,
+            AISignal.signal_time == sig.signal_time,
+        )
+        .limit(1)
+    )
+    existing = db.execute(stmt).scalar_one_or_none()
+    if existing:
+        logger.info(
+            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
+        )
+        return existing
+
+    db.add(sig)
+    try:
+        db.commit()
+        db.refresh(sig)
+        return sig
+    except IntegrityError:
+        db.rollback()
+        logger.warning(
+            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
+        )
+        existing = db.execute(stmt).scalar_one()
+        return existing
+
+
 async def fetch_ohlcv(
     symbol: str,
     timeframe: str,
@@ -423,7 +509,11 @@ async def fetch_ohlcv(
     sem = _sem or asyncio.Semaphore(_DEFAULT_CONCURRENCY)
     ccxt_sym = to_ccxt(symbol)
     async with sem:
-        exchange = ccxt.binance({"options": {"defaultType": "swap"}})
+        exchange = ccxt.binance({
+            "timeout": 10000,
+            "enableRateLimit": True,
+            "options": {"defaultType": "swap"},
+        })
         try:
             for attempt in range(3):
                 try:

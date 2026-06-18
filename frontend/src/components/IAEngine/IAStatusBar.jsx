@@ -23,6 +23,15 @@ export default function IAStatusBar({
 
   const circuitOpen = false // Could be wired to aiService.circuitBreaker() later
 
+  const ageText = useMemo(() => {
+    if (!lastScan) return ''
+    const mins = Math.floor((Date.now() - lastScan.getTime()) / 60000)
+    if (mins < 1) return ' — justo ahora'
+    if (mins < 60) return ` — hace ${mins}m`
+    const hours = Math.floor(mins / 60)
+    return ` — hace ${hours}h ${mins % 60}m`
+  }, [lastScan])
+
   return (
     <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-4 space-y-3">
       <div className="flex items-center gap-4 flex-wrap">
@@ -43,7 +52,7 @@ export default function IAStatusBar({
         {/* Last scan + countdown */}
         {!isScanning && lastScan && (
           <span className="text-xs text-slate-500 dark:text-slate-400">
-            Último scan: {lastScan.toLocaleTimeString()}
+            Último scan: {lastScan.toLocaleTimeString()}{ageText}
           </span>
         )}
         {autoRefresh && countdown != null && (

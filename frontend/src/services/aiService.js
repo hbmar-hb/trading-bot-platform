@@ -69,4 +69,8 @@ export const aiService = {
 
   // Engine Control — unified evaluated signals, charts, autonomy evidence
   engineControl: (days = 30) => api.get('/ai/engine-control', { params: { days } }),
+
+  // Scanner Live — persisted events + on-demand local LLM tip
+  liveScanEvents: (limit = 500) => api.get('/ai/live-scan/events', { params: { limit } }),
+  liveTip:        (event)       => api.post('/ai/live-tip', event),
 }

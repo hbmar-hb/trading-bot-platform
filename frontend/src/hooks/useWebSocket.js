@@ -3,6 +3,7 @@ import { BASE_URL } from '@/services/api'
 import useBalanceStore  from '@/store/balanceStore'
 import usePositionStore from '@/store/positionStore'
 import useUiStore       from '@/store/uiStore'
+import { useAiLiveStore } from '@/store/aiLiveStore'
 
 // Derivar URL WebSocket del host actual para que funcione en cualquier dominio
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}`
@@ -17,6 +18,7 @@ export function useWebSocket() {
   const { updatePrice, updatePosition } = usePositionStore()
   const { updateBalance }               = useBalanceStore()
   const { addNotification }             = useUiStore()
+  const { addEvent }                    = useAiLiveStore()
 
   useEffect(() => {
     if (!token) return
@@ -69,6 +71,9 @@ export function useWebSocket() {
           title: msg.title || 'Notificacion',
           message: msg.message || '',
         })
+        break
+      case 'ai_scan_update':
+        addEvent(msg)
         break
     }
   }

@@ -18,7 +18,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from app.services.database import AsyncSessionLocal_task
 from app.models.scanner_regime_config import ScannerRegimeConfig
 from app.models.ai_signal import AISignal
-from app.services.llm_client import generate_structured, LLMError
+from app.services.llm_client import generate_structured_async, LLMError
 
 
 _CACHE_TTL_MINUTES = 240  # 4 hours
@@ -140,7 +140,7 @@ async def _generate_via_llm(
     )
 
     logger.info(f"[ScannerRegimeOptimizer] Calling LLM for {symbol}/{timeframe}/{regime}")
-    parsed, response = generate_structured(prompt, AdaptiveScannerParams, max_tokens=800)
+    parsed, response = await generate_structured_async(prompt, AdaptiveScannerParams, max_tokens=800)
 
     meta = {
         "model_used": response.model_used,

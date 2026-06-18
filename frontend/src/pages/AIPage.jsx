@@ -15,6 +15,7 @@ import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { cn } from '@/utils/cn'
 const AIDashboardTab = lazy(() => import('./AIDashboardTab'))
 const AIEngineControlTab = lazy(() => import('./AIEngineControlTab'))
+const IALiveScannerTab = lazy(() => import('@/components/IAEngine/IALiveScannerTab'))
 import SignalDiagnosisModal from '@/components/Analytics/SignalDiagnosisModal'
 import useAuthStore from '@/store/authStore'
 import IAMissionControlTab from '@/components/IAEngine/IAMissionControlTab'
@@ -2777,7 +2778,7 @@ function SymbolPicker({ watchlist, onAdd }) {
 
 // ── Laboratorio / Simulado tab ────────────────────────────────────────────────
 
-function LaboratorioTab({ stats }) {
+function LaboratorioTab({ stats, lastScan }) {
   const [sub, setSub] = useState('dashboard')
 
   return (
@@ -2814,7 +2815,7 @@ function LaboratorioTab({ stats }) {
         ))}
       </div>
 
-      <StatsBar stats={stats} />
+      <StatsBar stats={stats} lastScan={lastScan} />
 
       {sub === 'dashboard' && (
         <Suspense fallback={
@@ -2836,11 +2837,17 @@ function LaboratorioTab({ stats }) {
 
 // ── Stats Bar ─────────────────────────────────────────────────────────────────
 
-function StatsBar({ stats }) {
+function StatsBar({ stats, lastScan }) {
   if (!stats) return null
 
   // DB health: how stale is the last background scan?
-  const lastScanAt   = stats.last_scan_at ? new Date(stats.last_scan_at) : null
+  // Use the most recent timestamp between the DB metric and the local manual scan,
+  // so a scan just triggered by the user is immediately reflected.
+  const dbLastScan   = stats.last_scan_at ? new Date(stats.last_scan_at) : null
+  const localLastScan = lastScan instanceof Date ? lastScan : null
+  const lastScanAt   = dbLastScan && localLastScan
+    ? (dbLastScan > localLastScan ? dbLastScan : localLastScan)
+    : (dbLastScan || localLastScan)
   const ageMin       = lastScanAt ? Math.floor((Date.now() - lastScanAt.getTime()) / 60000) : null
   const scanHealth   = ageMin == null ? 'unknown' : ageMin <= 7 ? 'ok' : ageMin <= 20 ? 'warn' : 'stale'
   const healthColor  = { ok: 'bg-green-500', warn: 'bg-yellow-400', stale: 'bg-red-500', unknown: 'bg-slate-400' }
@@ -3448,12 +3455,27 @@ export default function AIPage() {
 
   const refreshStats = useCallback(() => {
     aiService.stats()
-      .then(r => setStats(!Array.isArray(r.data) ? r.data : null))
+      .then(r => {
+        const s = !Array.isArray(r.data) ? r.data : null
+        setStats(s)
+        if (s?.last_scan_at) {
+          const d = new Date(s.last_scan_at)
+          setLastScan(d)
+          saveLS(LAST_SCAN_KEY, d.toISOString())
+        }
+      })
       .catch(() => {})
     aiService.statsByTicker()
       .then(r => { if (r.data && typeof r.data === 'object') setTickerStats(r.data) })
       .catch(() => {})
   }, [])
+
+  // Refrescar stats (y la hora del último scan de Celery) cada minuto
+  useEffect(() => {
+    refreshStats()
+    const id = setInterval(refreshStats, 60000)
+    return () => clearInterval(id)
+  }, [refreshStats])
 
   useEffect(() => {
     if (!autoRefresh || !nextScan) { setCountdown(null); return }
@@ -3468,8 +3490,11 @@ export default function AIPage() {
     try {
       const res  = await aiService.analyze(symbol, timeframe)
       const data = res.data ?? {}
-      setResults(r => ({ ...r, [symbol]: { ...data, symbol, timeframe, scannedAt: new Date() } }))
-      if (data.status === 'SIGNAL') refreshStats()
+      const now = new Date()
+      setResults(r => ({ ...r, [symbol]: { ...data, symbol, timeframe, scannedAt: now } }))
+      setLastScan(now)
+      saveLS(LAST_SCAN_KEY, now.toISOString())
+      refreshStats()
     } catch {
       setResults(r => ({ ...r, [symbol]: { symbol, timeframe, status: 'ERROR', scannedAt: new Date() } }))
     } finally {
@@ -3606,6 +3631,7 @@ export default function AIPage() {
           { id: 'operativa',   label: 'Operativa',            icon: <Zap size={13} /> },
           { id: 'real',        label: 'Rendimiento real',     icon: <TrendingUp size={13} /> },
           { id: 'laboratorio', label: 'Laboratorio / Simulado', icon: <BarChart2 size={13} /> },
+          { id: 'live',        label: 'Scanner Live',         icon: <ScanLine size={13} /> },
           { id: 'control',     label: 'Control del motor',    icon: <SlidersHorizontal size={13} /> },
         ].map(t => (
           <button key={t.id} onClick={() => setTab(t.id)} className={cn(
@@ -3619,7 +3645,7 @@ export default function AIPage() {
         ))}
       </div>
 
-      {tab === 'laboratorio' && <LaboratorioTab stats={stats} />}
+      {tab === 'laboratorio' && <LaboratorioTab stats={stats} lastScan={lastScan} />}
 
       {tab === 'real'       && <RealPerformanceTab />}
 
@@ -3631,6 +3657,17 @@ export default function AIPage() {
           </div>
         }>
           <AIEngineControlTab />
+        </Suspense>
+      )}
+
+      {tab === 'live' && (
+        <Suspense fallback={
+          <div className="py-20 text-center">
+            <div className="animate-spin inline-block w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full" />
+            <p className="text-sm text-slate-400 mt-3">Cargando Scanner Live…</p>
+          </div>
+        }>
+          <IALiveScannerTab />
         </Suspense>
       )}
 

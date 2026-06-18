@@ -12,8 +12,44 @@ from app.models.user import User
 from app.services.cache import is_access_token_blacklisted
 from app.services.database import get_db
 from config.settings import settings
+from loguru import logger
 
 security = HTTPBearer()
+
+
+def _verify_token(token: str) -> dict:
+    """Decode and validate the access token, logging the exact failure reason."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Token inválido o expirado",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        payload = jwt.decode(
+            token,
+            settings.jwt_secret_key,
+            algorithms=[settings.jwt_algorithm],
+            audience=settings.jwt_audience,
+        )
+    except JWTError as exc:
+        logger.warning(f"[auth] JWT decode failed: {exc}")
+        raise credentials_exception
+
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+
+    if user_id is None or payload.get("type") != "access":
+        logger.warning(f"[auth] JWT missing sub or invalid type: {payload.get('type')}")
+        raise credentials_exception
+
+    token_issuer = payload.get("iss")
+    if token_issuer != settings.jwt_issuer:
+        logger.warning(
+            f"[auth] JWT issuer mismatch: token={token_issuer!r} expected={settings.jwt_issuer!r}"
+        )
+        raise credentials_exception
+
+    return payload
 
 
 async def get_current_user_id(
@@ -28,29 +64,25 @@ async def get_current_user_id(
             ...
     """
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token inválido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
+    try:
         return uuid.UUID(user_id)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
 
 async def get_current_user(
@@ -61,29 +93,35 @@ async def get_current_user(
     from sqlalchemy import select
 
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token invalido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm], audience=settings.jwt_audience)
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
         user_uuid = uuid.UUID(user_id)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user:
-        raise credentials_exception
+        logger.warning(f"[auth] User not found for id={user_uuid}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     return user
 
 
@@ -95,29 +133,35 @@ async def get_current_moderator_user(
     from sqlalchemy import select
 
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token invalido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     try:
-        payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm], audience=settings.jwt_audience)
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
         user_uuid = uuid.UUID(user_id)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user:
-        raise credentials_exception
+        logger.warning(f"[auth] User not found for id={user_uuid}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if user.role not in ("admin", "moderator"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -137,34 +181,35 @@ async def get_current_admin_user(
     from sqlalchemy import select
 
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token invalido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
+    try:
         user_uuid = uuid.UUID(user_id)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user:
-        raise credentials_exception
+        logger.warning(f"[auth] User not found for id={user_uuid}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if user.role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -184,34 +229,35 @@ async def get_current_authorized_user(
     from sqlalchemy import select
 
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token invalido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
+    try:
         user_uuid = uuid.UUID(user_id)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user:
-        raise credentials_exception
+        logger.warning(f"[auth] User not found for id={user_uuid}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token invalido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
     if user.role not in ("rol1", "moderator", "admin"):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -271,35 +317,36 @@ async def require_2fa_if_enabled(
     from sqlalchemy import select
 
     token = credentials.credentials
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Token inválido o expirado",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    try:
-        payload = jwt.decode(
-            token,
-            settings.jwt_secret_key,
-            algorithms=[settings.jwt_algorithm],
-            audience=settings.jwt_audience,
+    payload = _verify_token(token)
+    user_id: str | None = payload.get("sub")
+    jti: str | None = payload.get("jti")
+    if jti and await is_access_token_blacklisted(jti):
+        logger.warning(f"[auth] JWT blacklisted jti={jti}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
         )
-        user_id: str | None = payload.get("sub")
-        jti: str | None = payload.get("jti")
-        if user_id is None or payload.get("type") != "access":
-            raise credentials_exception
-        if payload.get("iss") != settings.jwt_issuer:
-            raise credentials_exception
-        if jti and await is_access_token_blacklisted(jti):
-            raise credentials_exception
+    try:
         user_uuid = uuid.UUID(user_id)
-        two_factor_verified = payload.get("two_factor_verified", False)
-    except (JWTError, ValueError):
-        raise credentials_exception
+    except ValueError as exc:
+        logger.warning(f"[auth] Invalid user_id UUID: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    two_factor_verified = payload.get("two_factor_verified", False)
 
     result = await db.execute(select(User).where(User.id == user_uuid))
     user = result.scalar_one_or_none()
     if not user or not user.is_active:
-        raise credentials_exception
+        logger.warning(f"[auth] User not found or inactive for id={user_uuid}")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Token inválido o expirado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     if user.totp_enabled and not two_factor_verified:
         raise HTTPException(

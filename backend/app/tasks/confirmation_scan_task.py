@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.core.constants import TF_FALLBACK_CHAIN, cdc_for
 from app.models.ai_scan import AIWatchlistItem, AILatestScan
 from app.models.ai_signal import AISignal
-from app.services.ai_scanner import build_signal, fetch_ohlcv, htf_for, signal_to_dict, to_ccxt
+from app.services.ai_scanner import build_signal, fetch_ohlcv, htf_for, signal_to_dict, to_ccxt, persist_signal_sync
 from app.services.cache import sync_redis
 from app.services.confirmation_scanner import (
     check_ltf_cdc,
@@ -144,9 +144,7 @@ def _run_confirmation_scan() -> dict:
                     remove_from_watchlist(sync_redis, sym, direction, tf)
                     continue
 
-                db.add(sig)
-                db.commit()
-                db.refresh(sig)
+                sig = persist_signal_sync(db, sig)
                 promoted += 1
                 logger.info(
                     f"[CONFIRMATION SCAN] {sym}/{tf}: PROMOTED → signal {sig.id} "

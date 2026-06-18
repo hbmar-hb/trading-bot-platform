@@ -150,11 +150,12 @@ celery_app.conf.update(
             "task": "app.tasks.ai_drift_monitor_task.monitor_feature_drift",
             "schedule": 14400.0,  # 4 horas
         },
-        # AI watchlist scanner: escanea todos los pares del watchlist cada 10 minutos
-        # Persiste resultados en ai_latest_scans para que el dashboard esté siempre actualizado
+        # AI watchlist scanner: escanea todos los pares del watchlist cada 15 minutos
+        # Persiste resultados en ai_latest_scans para que el dashboard esté siempre actualizado.
+        # El intervalo es 15 min porque un scan completo de ~120 pares puede tardar >10 min.
         "ai-scan-watchlists": {
             "task": "app.tasks.ai_scan_task.scan_all_watchlists",
-            "schedule": 600.0,
+            "schedule": 900.0,
         },
         # SMC Confirmation Entry scanner: revisa watchlist cada 5 minutos
         # Promueve setups a AISignal cuando el LTF (5m) confirma CDC

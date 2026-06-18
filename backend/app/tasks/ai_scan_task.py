@@ -21,11 +21,33 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import IntegrityError
 
 from app.services.database import SessionLocal
+from app.services.cache import sync_redis
 from app.models.ai_scan import AIWatchlistItem, AILatestScan
 from app.services.ai_scanner import (
     build_signal, fetch_ohlcv, htf_for, signal_to_dict,
 )
+from app.services.scan_event_publisher import (
+    publish_scan_event_sync, new_scan_id,
+)
 from app.core.constants import TF_FALLBACK_CHAIN
+
+_SCAN_LOCK_KEY = "lock:ai_scan_watchlists"
+_SCAN_LOCK_TTL_SECONDS = 1800  # 30 min — safety release if worker crashes
+
+
+def _acquire_scan_lock() -> bool:
+    """Try to acquire a Redis lock so only one scan runs at a time."""
+    acquired = sync_redis.set(
+        _SCAN_LOCK_KEY,
+        datetime.now(timezone.utc).isoformat(),
+        nx=True,
+        ex=_SCAN_LOCK_TTL_SECONDS,
+    )
+    return bool(acquired)
+
+
+def _release_scan_lock() -> None:
+    sync_redis.delete(_SCAN_LOCK_KEY)
 
 
 @shared_task(
@@ -36,11 +58,38 @@ from app.core.constants import TF_FALLBACK_CHAIN
 )
 def scan_all_watchlists(self):
     """Scan every (symbol, timeframe) pair from user watchlists."""
+    if not _acquire_scan_lock():
+        logger.info("[AI SCAN] Another scan is already running; skipping this beat.")
+        return {"status": "skipped", "reason": "another_scan_running"}
+
+    start = datetime.now(timezone.utc)
+    scan_id = new_scan_id()
+    publish_scan_event_sync(
+        source="celery",
+        scan_id=scan_id,
+        symbol="_ALL_",
+        timeframe="_ALL_",
+        status="SCAN_START",
+        message=f"Scan started at {start.isoformat()}",
+    )
     try:
-        return _run_scan()
+        result = _run_scan(scan_id)
+        elapsed = (datetime.now(timezone.utc) - start).total_seconds()
+        logger.info(f"[AI SCAN] Completed in {elapsed:.1f}s")
+        publish_scan_event_sync(
+            source="celery",
+            scan_id=scan_id,
+            symbol="_ALL_",
+            timeframe="_ALL_",
+            status="SCAN_END",
+            message=f"Scan completed: {result.get('scanned', 0)} pairs, {result.get('signals', 0)} signals",
+        )
+        return result
     except Exception as exc:
         logger.error(f"[AI SCAN] Fatal error: {exc}", exc_info=True)
         raise self.retry(exc=exc, countdown=60)
+    finally:
+        _release_scan_lock()
 
 
 def _run_async(coro):
@@ -56,7 +105,7 @@ def _run_async(coro):
     return loop.run_until_complete(coro)
 
 
-def _run_scan() -> dict:
+def _run_scan(scan_id: str) -> dict:
     # ── 1. Read watchlist (sync DB) ───────────────────────────
     from app.services.auto_timeframe import resolve_best_timeframe_sync
 
@@ -68,17 +117,19 @@ def _run_scan() -> dict:
     if not rows:
         return {"status": "no_watchlist_items"}
 
-    # Resolve "auto" timeframes to the best historical TF per ticker
+    # Resolve "auto" timeframes to the best historical TF per ticker.
+    # Load the ORM objects so that resolved_timeframe is actually persisted.
     resolved_pairs: list[tuple[str, str]] = []
     with SessionLocal() as db:
-        for row in rows:
-            sym = row.symbol
-            tf = row.timeframe
+        items = db.execute(select(AIWatchlistItem)).scalars().all()
+        for item in items:
+            sym = item.symbol
+            tf = item.timeframe
             if tf == "auto":
                 resolved_tf = resolve_best_timeframe_sync(sym, db)
-                row.resolved_timeframe = resolved_tf
+                item.resolved_timeframe = resolved_tf
                 resolved_pairs.append((sym, resolved_tf))
-                logger.info(f"[AI SCAN] Resolved auto timeframe: {sym} → {resolved_tf} (user={row.user_id})")
+                logger.info(f"[AI SCAN] Resolved auto timeframe: {sym} → {resolved_tf} (user={item.user_id})")
             else:
                 resolved_pairs.append((sym, tf))
         db.commit()
@@ -117,6 +168,20 @@ def _run_scan() -> dict:
     signals = 0
     no_signal_pairs: list[tuple[str, str]] = []
     pairs_scanned: set[tuple[str, str]] = set()
+
+    def _emit(status, symbol, timeframe, **kwargs):
+        """Publish a lightweight scan event to the live stream."""
+        try:
+            publish_scan_event_sync(
+                source="celery",
+                scan_id=scan_id,
+                symbol=symbol,
+                timeframe=timeframe,
+                status=status,
+                **kwargs,
+            )
+        except Exception:
+            pass
 
     with SessionLocal() as db:
         for (sym, tf), (_, ohlcv) in zip(pairs, ltf_fetches):
@@ -199,6 +264,27 @@ def _run_scan() -> dict:
                     )
                 sig.features = feat
 
+                _emit(
+                    "SIGNAL",
+                    sym,
+                    tf,
+                    direction=sig.direction,
+                    score=sig.score,
+                    confidence=sig.confidence,
+                    quality_tier=sig.quality_tier,
+                    anti_fake_status=sig.anti_fake_status,
+                    success_probability=sig.success_probability,
+                    regime=sig.features.get("market_regime"),
+                    regime_confidence=sig.features.get("regime_confidence"),
+                    features_preview={
+                        "entry_type": sig.features.get("entry_type"),
+                        "ltf_cdc_confirmed": sig.features.get("ltf_cdc_confirmed"),
+                        "htf_bias": sig.features.get("htf_bias"),
+                        "macro_caution": sig.features.get("macro_caution"),
+                        "market_quality": sig.features.get("market_quality"),
+                    },
+                )
+
                 # Connect backtest engine to training: inject rolling historical metrics
                 try:
                     from app.services.backtest_metrics_service import get_backtest_metrics_sync
@@ -262,6 +348,20 @@ def _run_scan() -> dict:
                 elif "circuit_breaker" in ctx:
                     reason = "circuit_breaker"
                 logger.info(f"[AI SCAN] {sym}/{tf}: NO_SIGNAL — {reason}")
+                _emit(
+                    "NO_SIGNAL",
+                    sym,
+                    tf,
+                    rejection_reason=reason,
+                    rejection_context=ctx,
+                    features_preview={
+                        "htf_conflict": ctx.get("htf_conflict"),
+                        "regime_reason": ctx.get("regime_reason"),
+                        "market_quality": ctx.get("market_quality"),
+                        "macro_caution": ctx.get("macro_caution"),
+                        "macro_reason": ctx.get("macro_reason"),
+                    },
+                )
                 _upsert_latest_scan_sync(db, sym, tf, result_dict)
                 no_signal_pairs.append((sym, tf))
 
