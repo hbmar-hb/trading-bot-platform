@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy import select, delete, desc, func, and_, or_, case, Float
@@ -17,22 +16,12 @@ from app.models.exchange_trade import ExchangeTrade
 from app.models.position import Position
 from app.services.database import get_db
 from app.services.cache import async_redis
-from app.services.unified_pnl_service import (
-    UnifiedTrade,
-    build_daily_pnl_curve,
-    fill_daily_curve,
-    get_closed_trades_unified,
-    get_recent_closed_trades_unified,
-)
+from app.services.scan_event_publisher import get_recent_scan_events
+from app.services import local_llm_client
 from app.services.ai_scanner import (
     build_signal, fetch_ohlcv, upsert_latest_scan,
     signal_to_dict, latest_scan_to_dict, htf_for,
-    persist_signal_async,
 )
-from app.services.scan_event_publisher import (
-    publish_scan_event_async, new_scan_id, get_recent_scan_events,
-)
-from app.services import local_llm_client
 from app.engines.smc_engine import compute_atr
 from app.services.market_regime import detect_regime
 from app.models.trade_replay_snapshot import TradeReplaySnapshot
@@ -55,71 +44,6 @@ def _calc_live_unrealized_pnl(positions: list, price_map: dict) -> dict:
         else:
             result[p.id] = float(p.unrealized_pnl) if p.unrealized_pnl else 0.0
     return result
-
-
-async def _emit_scan_event(
-    scan_id: str,
-    symbol: str,
-    timeframe: str,
-    sig,
-    result_dict: dict,
-) -> None:
-    """Publish a lightweight event to the live scanner stream."""
-    try:
-        if sig:
-            await publish_scan_event_async(
-                source="manual",
-                scan_id=scan_id,
-                symbol=symbol,
-                timeframe=timeframe,
-                status="SIGNAL",
-                direction=sig.direction,
-                score=sig.score,
-                confidence=sig.confidence,
-                quality_tier=sig.quality_tier,
-                anti_fake_status=sig.anti_fake_status,
-                success_probability=sig.success_probability,
-                regime=sig.features.get("market_regime") if sig.features else None,
-                regime_confidence=sig.features.get("regime_confidence") if sig.features else None,
-                features_preview={
-                    "entry_type": sig.features.get("entry_type") if sig.features else None,
-                    "ltf_cdc_confirmed": sig.features.get("ltf_cdc_confirmed") if sig.features else None,
-                    "htf_bias": sig.features.get("htf_bias") if sig.features else None,
-                    "market_quality": sig.features.get("market_quality") if sig.features else None,
-                    "macro_caution": sig.features.get("macro_caution") if sig.features else None,
-                },
-            )
-        else:
-            ctx = result_dict.get("context") or {}
-            reason = "no_setup"
-            if "htf_conflict" in ctx:
-                reason = f"htf_conflict={ctx['htf_conflict']}"
-            elif "regime_blocked" in ctx:
-                reason = f"regime_blocked ({ctx.get('regime_reason', '')})"
-            elif "macro_blocked" in ctx:
-                reason = "macro_blocked"
-            elif "market_quality" in ctx:
-                reason = f"market_quality={ctx.get('market_quality', '')}"
-            elif "circuit_breaker" in ctx:
-                reason = "circuit_breaker"
-            await publish_scan_event_async(
-                source="manual",
-                scan_id=scan_id,
-                symbol=symbol,
-                timeframe=timeframe,
-                status="NO_SIGNAL",
-                rejection_reason=reason,
-                rejection_context=ctx,
-                features_preview={
-                    "htf_conflict": ctx.get("htf_conflict"),
-                    "regime_reason": ctx.get("regime_reason"),
-                    "market_quality": ctx.get("market_quality"),
-                    "macro_caution": ctx.get("macro_caution"),
-                    "macro_reason": ctx.get("macro_reason"),
-                },
-            )
-    except Exception:
-        pass
 
 
 async def _resolve_adaptive_params(symbol: str, timeframe: str, ohlcv: list) -> dict | None:
@@ -204,17 +128,11 @@ async def latest_scans(
 ):
     """Return last known scan result per symbol (persisted in ai_latest_scans)."""
     q = select(AILatestScan)
-    sym_list = []
     if symbols.strip():
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
         q = q.where(AILatestScan.symbol.in_(sym_list))
     rows = (await db.execute(q)).scalars().all()
-    found = {r.symbol: latest_scan_to_dict(r) for r in rows}
-    # Ensure every requested symbol has at least a NO_SIGNAL entry
-    if sym_list:
-        default = {"symbol": "", "status": "NO_SIGNAL", "context": {"reason": "No scan data yet"}, "scanned_at": None}
-        return {sym: found.get(sym, {**default, "symbol": sym}) for sym in sym_list}
-    return found
+    return {r.symbol: latest_scan_to_dict(r) for r in rows}
 
 
 # ── Analyze single symbol ─────────────────────────────────────────────────────
@@ -231,93 +149,48 @@ async def analyze(
         timeframe = validate_timeframe(timeframe)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc))
+    htf_tf = htf_for(timeframe)
+    coros = [fetch_ohlcv(symbol, timeframe)]
+    if htf_tf:
+        coros.append(fetch_ohlcv(symbol, htf_tf))
+    all_results = await asyncio.gather(*coros)
+    sym, ohlcv = all_results[0]
+    htf_ohlcv = all_results[1][1] if htf_tf else None
 
-    scan_id = new_scan_id()
-    try:
-        htf_tf = htf_for(timeframe)
-        coros = [fetch_ohlcv(symbol, timeframe)]
-        if htf_tf:
-            coros.append(fetch_ohlcv(symbol, htf_tf))
-        # Fase A: macro context from daily/weekly candles
-        if timeframe != "1d":
-            coros.append(fetch_ohlcv(symbol, "1d"))
-        if htf_tf == "1w":
-            coros.append(fetch_ohlcv(symbol, "1w"))
+    if not ohlcv or len(ohlcv) < 50:
+        raise HTTPException(400, "Error obteniendo velas o datos insuficientes")
 
-        all_results = await asyncio.gather(*coros, return_exceptions=True)
-        fetch_errors = [r for r in all_results if isinstance(r, BaseException)]
-        if fetch_errors:
-            logger.warning(f"[AI/analyze] OHLCV fetch failed for {symbol}/{timeframe}: {fetch_errors[0]}")
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "No se pudieron obtener datos de mercado en este momento. Inténtalo de nuevo en unos segundos.",
-            )
+    adaptive = await _resolve_adaptive_params(symbol, timeframe, ohlcv)
+    result_dict, sig = build_signal(symbol, timeframe, ohlcv, htf_ohlcv=htf_ohlcv, adaptive_params=adaptive)
 
-        sym, ohlcv = all_results[0]
-        htf_ohlcv = all_results[1][1] if htf_tf else None
-
-        if not ohlcv or len(ohlcv) < 50:
-            raise HTTPException(400, "Error obteniendo velas o datos insuficientes")
-
-        daily_idx = 2 if htf_tf else 1
-        daily_ohlcv = all_results[daily_idx][1] if timeframe != "1d" else ohlcv
-        weekly_ohlcv = None
-        if htf_tf == "1w":
-            weekly_idx = daily_idx + 1
-            weekly_ohlcv = all_results[weekly_idx][1]
-
-        adaptive = await _resolve_adaptive_params(symbol, timeframe, ohlcv)
-        result_dict, sig = build_signal(
-            symbol, timeframe, ohlcv,
-            htf_ohlcv=htf_ohlcv,
-            adaptive_params=adaptive,
-            candles_1d=daily_ohlcv,
-            candles_1w=weekly_ohlcv,
-        )
-
-        await _emit_scan_event(scan_id, symbol, timeframe, sig, result_dict)
-
-        if sig:
-            # Inject rolling backtest metrics as features (connects backtest → training)
-            try:
-                from app.services.backtest_metrics_service import get_backtest_metrics_async
-                bt_metrics = await get_backtest_metrics_async(db, sig.ticker, sig.timeframe, lookback_days=30)
-                feat = dict(sig.features or {})
-                feat.update(bt_metrics)
-                sig.features = feat
-            except Exception:
-                pass
-            sig = await persist_signal_async(db, sig)
-            await upsert_latest_scan(db, symbol, timeframe, result_dict, sig)
-            await db.commit()
-            try:
-                from app.services.ai_scanner import record_shadow_for_signal
-                record_shadow_for_signal(str(sig.id), result_dict)
-            except Exception:
-                pass
-            from app.tasks.bot_activator_task import activate_signal
-            activate_signal.delay(str(sig.id))
-            # Trigger LLM diagnosis for ALL signals so bot activator can read it in real-time
-            try:
-                from app.tasks.llm_tasks import generate_signal_diagnosis
-                generate_signal_diagnosis.delay(str(sig.id), "anti_fake")
-            except Exception as exc:
-                logger.warning(f"[AI] Failed to queue LLM diagnosis for signal {sig.id}: {exc}")
-            return {"status": "SIGNAL", **result_dict, **signal_to_dict(sig)}
-
-        await upsert_latest_scan(db, symbol, timeframe, result_dict)
+    if sig:
+        # Inject rolling backtest metrics as features (connects backtest → training)
+        try:
+            from app.services.backtest_metrics_service import get_backtest_metrics_async
+            bt_metrics = await get_backtest_metrics_async(db, sig.ticker, sig.timeframe, lookback_days=30)
+            feat = dict(sig.features or {})
+            feat.update(bt_metrics)
+            sig.features = feat
+        except Exception:
+            pass
+        db.add(sig)
         await db.commit()
-        return result_dict
+        await db.refresh(sig)
+        await upsert_latest_scan(db, symbol, timeframe, result_dict, sig)
+        await db.commit()
+        from app.tasks.bot_activator_task import activate_signal
+        activate_signal.delay(str(sig.id))
+        # Trigger LLM diagnosis for ALL signals so bot activator can read it in real-time
+        try:
+            from app.tasks.llm_tasks import generate_signal_diagnosis
+            generate_signal_diagnosis.delay(str(sig.id), "anti_fake")
+        except Exception as exc:
+            logger.warning(f"[AI] Failed to queue LLM diagnosis for signal {sig.id}: {exc}")
+        return {"status": "SIGNAL", **result_dict, **signal_to_dict(sig)}
 
-    except HTTPException as exc:
-        await _emit_scan_event(scan_id, symbol, timeframe, None, {"context": {"error": exc.detail}})
-        raise
-    except Exception as exc:
-        logger.exception(f"[AI/analyze] Unhandled error for {symbol}/{timeframe}: {exc}")
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "El motor de IA no pudo completar el análisis. Revisa los logs para más detalles.",
-        )
+    await upsert_latest_scan(db, symbol, timeframe, result_dict)
+    await db.commit()
+    return result_dict
 
 
 # ── Scan watchlist (multiple symbols in parallel) ─────────────────────────────
@@ -339,45 +212,16 @@ async def scan(
     if not symbol_list:
         raise HTTPException(400, "Proporciona al menos un simbolo")
 
-    scan_id = new_scan_id()
-    await publish_scan_event_async(
-        source="manual",
-        scan_id=scan_id,
-        symbol="_ALL_",
-        timeframe="_ALL_",
-        status="SCAN_START",
-        message=f"Manual scan started for {len(symbol_list)} symbols",
-    )
-
     htf_tf = htf_for(timeframe)
     coros = [fetch_ohlcv(sym, timeframe) for sym in symbol_list]
     if htf_tf:
         coros += [fetch_ohlcv(sym, htf_tf) for sym in symbol_list]
-    # Fase A: macro context from daily candles for all symbols
-    if timeframe != "1d":
-        coros += [fetch_ohlcv(sym, "1d") for sym in symbol_list]
-    if htf_tf == "1w":
-        coros += [fetch_ohlcv(sym, "1w") for sym in symbol_list]
-    all_results = await asyncio.gather(*coros, return_exceptions=True)
-    for i, res in enumerate(all_results):
-        if isinstance(res, BaseException):
-            logger.warning(f"[AI/scan] OHLCV fetch failed: {res}")
-            all_results[i] = (None, None)
+    all_results = await asyncio.gather(*coros)
     ltf_fetches = all_results[:len(symbol_list)]
     htf_cache: dict[str, list | None] = {}
     if htf_tf:
-        for sym, (_, htf_ohlcv) in zip(symbol_list, all_results[len(symbol_list):2*len(symbol_list)]):
+        for sym, (_, htf_ohlcv) in zip(symbol_list, all_results[len(symbol_list):]):
             htf_cache[sym] = htf_ohlcv
-    daily_cache: dict[str, list | None] = {}
-    if timeframe != "1d":
-        daily_start = len(symbol_list) * (2 if htf_tf else 1)
-        for sym, (_, daily_ohlcv) in zip(symbol_list, all_results[daily_start:daily_start+len(symbol_list)]):
-            daily_cache[sym] = daily_ohlcv
-    weekly_cache: dict[str, list | None] = {}
-    if htf_tf == "1w":
-        weekly_start = len(symbol_list) * (3 if timeframe != "1d" else 2)
-        for sym, (_, weekly_ohlcv) in zip(symbol_list, all_results[weekly_start:weekly_start+len(symbol_list)]):
-            weekly_cache[sym] = weekly_ohlcv
 
     # Pre-resolve adaptive params for all symbols in parallel
     adaptive_tasks = []
@@ -399,17 +243,7 @@ async def scan(
             output.append({"symbol": sym, "status": "ERROR"})
             continue
 
-        daily_ohlcv = daily_cache.get(sym) if timeframe != "1d" else ohlcv
-        weekly_ohlcv = weekly_cache.get(sym) if htf_tf == "1w" else None
-        result_dict, sig = build_signal(
-            sym, timeframe, ohlcv,
-            htf_ohlcv=htf_cache.get(sym),
-            adaptive_params=adaptive_map.get(sym),
-            candles_1d=daily_ohlcv,
-            candles_1w=weekly_ohlcv,
-        )
-        await _emit_scan_event(scan_id, sym, timeframe, sig, result_dict)
-
+        result_dict, sig = build_signal(sym, timeframe, ohlcv, htf_ohlcv=htf_cache.get(sym), adaptive_params=adaptive_map.get(sym))
         if sig:
             # Inject rolling backtest metrics as features (connects backtest → training)
             try:
@@ -420,14 +254,11 @@ async def scan(
                 sig.features = feat
             except Exception:
                 pass
-            sig = await persist_signal_async(db, sig)
+            db.add(sig)
+            await db.commit()
+            await db.refresh(sig)
             await upsert_latest_scan(db, sym, timeframe, result_dict, sig)
             await db.commit()
-            try:
-                from app.services.ai_scanner import record_shadow_for_signal
-                record_shadow_for_signal(str(sig.id), result_dict)
-            except Exception:
-                pass
             from app.tasks.bot_activator_task import activate_signal
             activate_signal.delay(str(sig.id))
             # Trigger LLM diagnosis for ALL signals so bot activator can read it in real-time
@@ -442,15 +273,6 @@ async def scan(
             await db.commit()
             output.append(result_dict)
 
-    signal_count = sum(1 for o in output if o.get("status") == "SIGNAL")
-    await publish_scan_event_async(
-        source="manual",
-        scan_id=scan_id,
-        symbol="_ALL_",
-        timeframe="_ALL_",
-        status="SCAN_END",
-        message=f"Manual scan completed: {len(symbol_list)} symbols, {signal_count} signals",
-    )
     return output
 
 
@@ -480,68 +302,39 @@ async def stats(
     from sqlalchemy import func
     from app.models.ai_scan import AILatestScan
 
-    stmt = select(
-        func.count(AISignal.id).label("total"),
-        func.count(AISignal.id).filter(AISignal.outcome != "PENDING").label("resolved"),
-        func.count(AISignal.id).filter(AISignal.outcome == "SUCCESS").label("success"),
-        func.count(AISignal.id).filter(AISignal.outcome == "FAILURE").label("failure"),
-        func.avg(AISignal.score).label("avg_score"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "HIGH", AISignal.outcome != "PENDING"
-        ).label("high_total"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "HIGH", AISignal.outcome == "SUCCESS"
-        ).label("high_wins"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "MEDIUM", AISignal.outcome != "PENDING"
-        ).label("medium_total"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "MEDIUM", AISignal.outcome == "SUCCESS"
-        ).label("medium_wins"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "LOW", AISignal.outcome != "PENDING"
-        ).label("low_total"),
-        func.count(AISignal.id).filter(
-            AISignal.confidence == "LOW", AISignal.outcome == "SUCCESS"
-        ).label("low_wins"),
-    )
-    row = (await db.execute(stmt)).one()
+    rows     = (await db.execute(select(AISignal))).scalars().all()
+    total    = len(rows)
+    resolved = [s for s in rows if s.outcome != "PENDING"]
+    success  = [s for s in resolved if s.outcome == "SUCCESS"]
+    failure  = [s for s in resolved if s.outcome == "FAILURE"]
 
-    total, resolved, success, failure, avg_score = (
-        row.total, row.resolved, row.success, row.failure, row.avg_score
-    )
-    win_rate = round(success / resolved * 100, 1) if resolved else None
-    avg_score_rounded = round(avg_score, 1) if avg_score is not None else 0
+    win_rate  = round(len(success) / len(resolved) * 100, 1) if resolved else None
+    avg_score = round(sum(s.score for s in rows) / total, 1) if total else 0
 
-    def _wr(wins, subset):
-        return round(wins / subset * 100, 1) if subset else None
+    by_confidence: dict = {}
+    for conf in ("HIGH", "MEDIUM", "LOW"):
+        subset = [s for s in resolved if s.confidence == conf]
+        wins   = [s for s in subset if s.outcome == "SUCCESS"]
+        by_confidence[conf] = {
+            "total":    len(subset),
+            "win_rate": round(len(wins) / len(subset) * 100, 1) if subset else None,
+        }
 
-    by_confidence = {
-        "HIGH":   {"total": row.high_total,   "win_rate": _wr(row.high_wins,   row.high_total)},
-        "MEDIUM": {"total": row.medium_total, "win_rate": _wr(row.medium_wins, row.medium_total)},
-        "LOW":    {"total": row.low_total,    "win_rate": _wr(row.low_wins,    row.low_total)},
-    }
-
-    scan_count, last_scan_at = (
-        await db.execute(
-            select(
-                func.count(AILatestScan.symbol),
-                func.max(AILatestScan.scanned_at),
-            )
-        )
-    ).one()
+    # DB health: last background scan time and how many symbols are tracked
+    scan_rows = (await db.execute(select(AILatestScan))).scalars().all()
+    last_scan_at = max((r.scanned_at for r in scan_rows), default=None)
 
     return {
         "total":               total,
-        "pending":             total - resolved,
-        "resolved":            resolved,
-        "success":             success,
-        "failure":             failure,
+        "pending":             total - len(resolved),
+        "resolved":            len(resolved),
+        "success":             len(success),
+        "failure":             len(failure),
         "win_rate":            win_rate,
-        "avg_score":           avg_score_rounded,
+        "avg_score":           avg_score,
         "by_confidence":       by_confidence,
-        "model_ready":         resolved >= 200,
-        "latest_scans_count":  scan_count,
+        "model_ready":         len(resolved) >= 200,
+        "latest_scans_count":  len(scan_rows),
         "last_scan_at":        last_scan_at.isoformat() if last_scan_at else None,
     }
 
@@ -553,85 +346,79 @@ async def stats_by_ticker(
     db: AsyncSession = Depends(get_db),
     _user = Depends(get_current_admin_user),
 ):
-    from sqlalchemy import func
-
-    # Main aggregates per ticker — done in the database.
-    main_stmt = select(
-        AISignal.ticker,
-        func.count(AISignal.id).label("total"),
-        func.count(AISignal.id).filter(AISignal.outcome != "PENDING").label("resolved"),
-        func.count(AISignal.id).filter(AISignal.outcome == "SUCCESS").label("success"),
-        func.avg(AISignal.score).label("avg_score"),
-        func.avg(AISignal.pnl_pct).filter(AISignal.pnl_pct.isnot(None)).label("avg_pnl"),
-        func.avg(AISignal.outcome_bars).filter(AISignal.outcome_bars.isnot(None)).label("avg_bars"),
-    ).group_by(AISignal.ticker)
-
-    main_rows = (await db.execute(main_stmt)).all()
-
-    # Direction-level win rates per ticker.
-    direction_stmt = select(
-        AISignal.ticker,
-        AISignal.direction,
-        func.count(AISignal.id).label("total"),
-        func.count(AISignal.id).filter(AISignal.outcome == "SUCCESS").label("success"),
-    ).where(AISignal.outcome != "PENDING").group_by(AISignal.ticker, AISignal.direction)
-
-    direction_rows = (await db.execute(direction_stmt)).all()
-    by_direction: dict[str, dict[str, dict]] = {}
-    for r in direction_rows:
-        by_direction.setdefault(r.ticker, {})[r.direction or "unknown"] = {
-            "total": r.total,
-            "success": r.success,
-        }
-
-    # Tier+status level win rates per ticker.
-    tier_stmt = select(
-        AISignal.ticker,
-        AISignal.quality_tier,
-        AISignal.anti_fake_status,
-        func.count(AISignal.id).label("total"),
-        func.count(AISignal.id).filter(AISignal.outcome == "SUCCESS").label("success"),
-    ).where(AISignal.outcome != "PENDING").group_by(
-        AISignal.ticker, AISignal.quality_tier, AISignal.anti_fake_status
-    )
-
-    tier_rows = (await db.execute(tier_stmt)).all()
-    by_tier_status: dict[str, dict[str, dict]] = {}
-    for r in tier_rows:
-        tier = r.quality_tier or "UNKNOWN"
-        status = r.anti_fake_status or "UNKNOWN"
-        by_tier_status.setdefault(r.ticker, {})[f"{tier}|{status}"] = {
-            "tier": tier,
-            "status": status,
-            "total": r.total,
-            "success": r.success,
-        }
-
-    def _pick_best_key(options: dict):
-        best_key = None
-        best_wr = -1.0
-        for key, stats in options.items():
-            if stats["total"] >= 3:
-                wr = stats["success"] / stats["total"] * 100
-                if wr > best_wr:
-                    best_wr = wr
-                    best_key = key
-        return best_key
+    rows = (await db.execute(select(AISignal))).scalars().all()
+    by_ticker: dict = {}
+    for s in rows:
+        t = s.ticker
+        if t not in by_ticker:
+            by_ticker[t] = {
+                "total": 0,
+                "resolved": [],
+                "scores": [],
+                "pnls": [],
+                "bars": [],
+                "by_direction": {},
+                "by_tier_status": {},
+            }
+        d = by_ticker[t]
+        d["total"] += 1
+        d["scores"].append(s.score)
+        if s.outcome != "PENDING":
+            d["resolved"].append(s.outcome)
+            if s.pnl_pct is not None:
+                d["pnls"].append(float(s.pnl_pct))
+            if s.outcome_bars is not None:
+                d["bars"].append(s.outcome_bars)
+            # By direction
+            direction = s.direction or "unknown"
+            if direction not in d["by_direction"]:
+                d["by_direction"][direction] = {"total": 0, "success": 0}
+            d["by_direction"][direction]["total"] += 1
+            if s.outcome == "SUCCESS":
+                d["by_direction"][direction]["success"] += 1
+            # By tier+status
+            tier = s.quality_tier or "UNKNOWN"
+            status = s.anti_fake_status or "UNKNOWN"
+            ts_key = f"{tier}|{status}"
+            if ts_key not in d["by_tier_status"]:
+                d["by_tier_status"][ts_key] = {"tier": tier, "status": status, "total": 0, "success": 0}
+            d["by_tier_status"][ts_key]["total"] += 1
+            if s.outcome == "SUCCESS":
+                d["by_tier_status"][ts_key]["success"] += 1
 
     result = {}
-    for r in main_rows:
-        t = r.ticker
-        win_rate = round(r.success / r.resolved * 100, 1) if r.resolved else None
-        best_dir_key = _pick_best_key(by_direction.get(t, {}))
-        best_ts_key = _pick_best_key(by_tier_status.get(t, {}))
-        best_ts = by_tier_status.get(t, {}).get(best_ts_key) if best_ts_key else None
+    for t, d in by_ticker.items():
+        resolved = d["resolved"]
+        wins = sum(1 for o in resolved if o == "SUCCESS")
+        win_rate = round(wins / len(resolved) * 100, 1) if resolved else None
+
+        # Best direction
+        best_direction = None
+        best_dir_wr = -1
+        for direction, stats in d["by_direction"].items():
+            if stats["total"] >= 3:
+                wr = stats["success"] / stats["total"] * 100
+                if wr > best_dir_wr:
+                    best_dir_wr = wr
+                    best_direction = direction
+
+        # Best tier+status
+        best_ts = None
+        best_ts_wr = -1
+        for ts_key, stats in d["by_tier_status"].items():
+            if stats["total"] >= 3:
+                wr = stats["success"] / stats["total"] * 100
+                if wr > best_ts_wr:
+                    best_ts_wr = wr
+                    best_ts = stats
+
         result[t] = {
-            "total":          r.total,
+            "total":          d["total"],
             "win_rate":       win_rate,
-            "avg_score":      round(r.avg_score, 1) if r.avg_score is not None else 0,
-            "avg_pnl_pct":    round(r.avg_pnl, 2) if r.avg_pnl is not None else None,
-            "avg_bars":       round(r.avg_bars, 1) if r.avg_bars is not None else None,
-            "best_direction": best_dir_key,
+            "avg_score":      round(sum(d["scores"]) / len(d["scores"]), 1) if d["scores"] else 0,
+            "avg_pnl_pct":    round(sum(d["pnls"]) / len(d["pnls"]), 2) if d["pnls"] else None,
+            "avg_bars":       round(sum(d["bars"]) / len(d["bars"]), 1) if d["bars"] else None,
+            "best_direction": best_direction,
             "best_tier":      best_ts["tier"] if best_ts else None,
             "best_status":    best_ts["status"] if best_ts else None,
         }
@@ -1056,49 +843,6 @@ async def trigger_train(_user = Depends(get_current_admin_user)):
     return {"status": "trained", "result": result}
 
 
-@router.post("/model/train-candidate")
-async def train_candidate_model(_user = Depends(get_current_admin_user)):
-    """Train a candidate anti-fake model offline for Fase D shadow evaluation."""
-    import importlib.util
-    from pathlib import Path
-
-    script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "train_candidate_model.py"
-    spec = importlib.util.spec_from_file_location("train_candidate_model", script_path)
-    if spec is None or spec.loader is None:
-        raise HTTPException(status_code=500, detail="train_candidate_model script not found")
-    tcm = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tcm)
-
-    result = await run_in_threadpool(tcm.train_candidate)
-    return {"status": "ok", "result": result}
-
-
-@router.get("/model/candidate-shadow")
-async def candidate_shadow_status(_user = Depends(get_current_admin_user)):
-    """Return 48h candidate shadow mode evaluation status."""
-    from ai.services.candidate_shadow_mode import evaluate_candidate_shadow
-    return evaluate_candidate_shadow()
-
-
-@router.post("/model/promote-candidate")
-async def promote_candidate_model(_user = Depends(get_current_admin_user)):
-    """Promote candidate_anti_fake_v1.pkl to live anti_fake_v1.pkl."""
-    import importlib.util
-    from pathlib import Path
-
-    script_path = Path(__file__).resolve().parent.parent.parent / "scripts" / "train_candidate_model.py"
-    spec = importlib.util.spec_from_file_location("train_candidate_model", script_path)
-    if spec is None or spec.loader is None:
-        raise HTTPException(status_code=500, detail="train_candidate_model script not found")
-    tcm = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(tcm)
-
-    result = await run_in_threadpool(tcm.promote_candidate)
-    if not result.get("promoted"):
-        raise HTTPException(status_code=400, detail=result.get("reason", "promotion_failed"))
-    return {"status": "promoted", "result": result}
-
-
 @router.post("/model/recalibrate-weights")
 async def recalibrate_weights_endpoint(
     _user = Depends(get_current_admin_user),
@@ -1300,38 +1044,64 @@ async def get_real_performance(
         return True  # total -> no filter
 
     # ── Trades IA cerrados ───────────────────────────────────────
-    # Fuente unificada: ExchangeTrade para real, Position para paper.
-    source_filter = "ai_bot"
-    trade_mode = mode
-    if mode == "paper":
-        source_filter = None
-    elif mode == "real":
-        trade_mode = "real"
+    all_trade_objs = []
 
-    unified_trades = await get_recent_closed_trades_unified(
-        db,
-        user_id=user.id,
-        source=source_filter,
-        mode=trade_mode,
-        limit=100,
-    )
+    if mode in ("real", "total"):
+        et_query = (
+            select(ExchangeTrade)
+            .where(
+                ExchangeTrade.user_id == user.id,
+                ExchangeTrade.source == "ai_bot",
+                ExchangeTrade.status == "closed",
+            )
+            .order_by(ExchangeTrade.closed_at.desc())
+            .limit(100)
+        )
+        et_result = await db.execute(et_query)
+        et_trades = et_result.scalars().all()
+        for t in et_trades:
+            all_trade_objs.append({
+                "id": str(t.id),
+                "symbol": t.symbol,
+                "side": t.side,
+                "quantity": float(t.quantity) if t.quantity else None,
+                "entry_price": float(t.entry_price) if t.entry_price else None,
+                "exit_price": float(t.exit_price) if t.exit_price else None,
+                "realized_pnl": float(t.realized_pnl or 0),
+                "fee": float(t.fee) if t.fee else None,
+                "opened_at": t.opened_at,
+                "closed_at": t.closed_at,
+                "is_paper": False,
+            })
 
-    all_trade_objs = [
-        {
-            "id": str(t.id),
-            "symbol": t.symbol,
-            "side": t.side,
-            "quantity": float(t.quantity) if t.quantity is not None else None,
-            "entry_price": float(t.entry_price) if t.entry_price is not None else None,
-            "exit_price": float(t.exit_price) if t.exit_price is not None else None,
-            "realized_pnl": float(t.realized_pnl),
-            "fee": float(t.fee) if t.fee is not None else None,
-            "opened_at": t.opened_at,
-            "closed_at": t.closed_at,
-            "is_paper": t.is_paper,
-        }
-        for t in unified_trades
-    ]
+    if mode in ("paper", "total"):
+        paper_closed_query = (
+            select(Position)
+            .join(BotConfig, Position.bot_id == BotConfig.id)
+            .where(
+                _paper_filter(BotConfig.paper_balance_id),
+                Position.status == "closed",
+                Position.source == "ai_bot",
+            )
+            .order_by(Position.closed_at.desc())
+            .limit(100)
+        )
+        paper_closed_result = await db.execute(paper_closed_query)
+        paper_closed = paper_closed_result.scalars().all()
+        for p in paper_closed:
+            all_trade_objs.append({
+                "id": str(p.id),
+                "symbol": p.symbol,
+                "side": p.side,
+                "quantity": float(p.quantity) if p.quantity else None,
+                "entry_price": float(p.entry_price) if p.entry_price else None,
+                "exit_price": None,
+                "realized_pnl": float(p.realized_pnl or 0),
+                "fee": None,
+                "opened_at": p.opened_at,
+                "closed_at": p.closed_at,
+                "is_paper": True,
+            })
 
     # Calcular stats
     pnls = [t["realized_pnl"] for t in all_trade_objs]
@@ -1469,32 +1239,46 @@ async def get_symbol_real_stats(
         return True  # total -> no filter
 
     # ── Trades cerrados ──────────────────────────────────────────
-    # Fuente unificada: ExchangeTrade para real, Position para paper.
-    source_filter = "ai_bot"
-    trade_mode = mode
-    if mode == "paper":
-        source_filter = None
-    elif mode == "real":
-        trade_mode = "real"
+    # Reales → ExchangeTrade; Paper → Position (closed)
+    all_trade_objs = []
 
-    unified_trades = await get_closed_trades_unified(
-        db,
-        user_id=user.id,
-        symbol=ccxt_sym,
-        source=source_filter,
-        mode=trade_mode,
-        order_desc=False,
-    )
+    if mode in ("real", "total"):
+        et_query = select(ExchangeTrade).where(
+            ExchangeTrade.user_id == user.id,
+            ExchangeTrade.symbol == ccxt_sym,
+            ExchangeTrade.status == "closed",
+            ExchangeTrade.source == "ai_bot",
+        )
+        et_result = await db.execute(et_query)
+        et_trades = et_result.scalars().all()
+        for t in et_trades:
+            all_trade_objs.append({
+                "realized_pnl": float(t.realized_pnl or 0),
+                "opened_at": t.opened_at,
+                "closed_at": t.closed_at,
+                "is_paper": False,
+            })
 
-    all_trade_objs = [
-        {
-            "realized_pnl": float(t.realized_pnl),
-            "opened_at": t.opened_at,
-            "closed_at": t.closed_at,
-            "is_paper": t.is_paper,
-        }
-        for t in unified_trades
-    ]
+    if mode in ("paper", "total"):
+        paper_closed_query = (
+            select(Position)
+            .join(BotConfig, Position.bot_id == BotConfig.id)
+            .where(
+                Position.symbol == ccxt_sym,
+                _paper_filter(BotConfig.paper_balance_id),
+                Position.status == "closed",
+                Position.source == "ai_bot",
+            )
+        )
+        paper_closed_result = await db.execute(paper_closed_query)
+        paper_closed = paper_closed_result.scalars().all()
+        for p in paper_closed:
+            all_trade_objs.append({
+                "realized_pnl": float(p.realized_pnl or 0),
+                "opened_at": p.opened_at,
+                "closed_at": p.closed_at,
+                "is_paper": True,
+            })
 
     total_trades = len(all_trade_objs)
     winners = sum(1 for t in all_trade_objs if t["realized_pnl"] > 0)
@@ -1681,19 +1465,42 @@ async def get_symbol_backtest_comparison(
             realistic_daily[day].append(float(realistic_pnl))
 
     # ── Trade curve (real + paper) ───────────────────────────────
-    unified_trades = await get_closed_trades_unified(
-        db,
-        user_id=user.id,
-        symbol=ccxt_sym,
-        source="ai_bot",
-        mode="total",
-        from_date=since.date(),
-        to_date=now.date(),
-        order_desc=False,
+    # Real trades from ExchangeTrade
+    et_query = select(ExchangeTrade).where(
+        ExchangeTrade.user_id == user.id,
+        ExchangeTrade.symbol == ccxt_sym,
+        ExchangeTrade.status == "closed",
+        ExchangeTrade.source == "ai_bot",
+        ExchangeTrade.closed_at >= since,
     )
+    et_result = await db.execute(et_query)
+    et_trades = et_result.scalars().all()
 
-    raw_curve = build_daily_pnl_curve(unified_trades)
-    filled_curve = fill_daily_curve(raw_curve, since.date(), now.date())
+    trade_daily: dict[str, float] = defaultdict(float)
+    for t in et_trades:
+        if t.realized_pnl is not None and t.closed_at:
+            day = t.closed_at.strftime("%Y-%m-%d")
+            trade_daily[day] += float(t.realized_pnl)
+
+    # Paper trades from Position
+    paper_query = (
+        select(Position)
+        .join(BotConfig, Position.bot_id == BotConfig.id)
+        .where(
+            Position.symbol == ccxt_sym,
+            BotConfig.paper_balance_id.isnot(None),
+            Position.status == "closed",
+            Position.source == "ai_bot",
+            Position.closed_at >= since,
+        )
+    )
+    paper_result = await db.execute(paper_query)
+    paper_positions = paper_result.scalars().all()
+    for p in paper_positions:
+        if p.realized_pnl is not None and p.closed_at:
+            day = p.closed_at.strftime("%Y-%m-%d")
+            trade_daily[day] += float(p.realized_pnl)
+
     # ── Build aligned arrays ─────────────────────────────────────
     # Backtest (realistic): compound equity curve with slippage/fees/gaps
     signal_curve = []
@@ -1724,13 +1531,18 @@ async def get_symbol_backtest_comparison(
 
     # Execution: absolute P&L + normalized % with $10k reference capital
     trade_curve = []
+    cum_trade = 0.0
     REF_CAPITAL = 10000.0
-    for row in filled_curve:
+    cursor = since.date()
+    while cursor <= end:
+        ds = cursor.strftime("%Y-%m-%d")
+        cum_trade += trade_daily.get(ds, 0.0)
         trade_curve.append({
-            "date": row["date"],
-            "cumulative_pnl": float(row["cumulative_pnl"]),
-            "cumulative_pnl_pct": round((float(row["cumulative_pnl"]) / REF_CAPITAL) * 100, 4),
+            "date": ds,
+            "cumulative_pnl": round(cum_trade, 4),
+            "cumulative_pnl_pct": round((cum_trade / REF_CAPITAL) * 100, 4),
         })
+        cursor += timedelta(days=1)
 
     return {
         "symbol": symbol,
@@ -1786,18 +1598,40 @@ async def get_backtest_comparison(
             realistic_daily[day].append(float(realistic_pnl))
 
     # ── Trade curve (real + paper, all symbols) ──────────────────
-    unified_trades = await get_closed_trades_unified(
-        db,
-        user_id=user.id,
-        source="ai_bot",
-        mode="total",
-        from_date=since.date(),
-        to_date=now.date(),
-        order_desc=False,
-    )
+    trade_daily: dict[str, float] = defaultdict(float)
 
-    raw_curve = build_daily_pnl_curve(unified_trades)
-    filled_curve = fill_daily_curve(raw_curve, since.date(), now.date())
+    # Real trades
+    et_query = select(ExchangeTrade).where(
+        ExchangeTrade.user_id == user.id,
+        ExchangeTrade.status == "closed",
+        ExchangeTrade.source == "ai_bot",
+        ExchangeTrade.closed_at >= since,
+    )
+    et_result = await db.execute(et_query)
+    et_trades = et_result.scalars().all()
+    for t in et_trades:
+        if t.realized_pnl is not None and t.closed_at:
+            day = t.closed_at.strftime("%Y-%m-%d")
+            trade_daily[day] += float(t.realized_pnl)
+
+    # Paper trades
+    paper_query = (
+        select(Position)
+        .join(BotConfig, Position.bot_id == BotConfig.id)
+        .where(
+            BotConfig.paper_balance_id.isnot(None),
+            Position.status == "closed",
+            Position.source == "ai_bot",
+            Position.closed_at >= since,
+        )
+    )
+    paper_result = await db.execute(paper_query)
+    paper_positions = paper_result.scalars().all()
+    for p in paper_positions:
+        if p.realized_pnl is not None and p.closed_at:
+            day = p.closed_at.strftime("%Y-%m-%d")
+            trade_daily[day] += float(p.realized_pnl)
+
     # ── Build aligned arrays ─────────────────────────────────────
     # Backtest (realistic): compound equity curve with slippage/fees/gaps
     signal_curve = []
@@ -1828,13 +1662,18 @@ async def get_backtest_comparison(
 
     # Execution: absolute P&L + normalized % with $10k reference capital
     trade_curve = []
+    cum_trade = 0.0
     REF_CAPITAL = 10000.0
-    for row in filled_curve:
+    cursor = since.date()
+    while cursor <= end:
+        ds = cursor.strftime("%Y-%m-%d")
+        cum_trade += trade_daily.get(ds, 0.0)
         trade_curve.append({
-            "date": row["date"],
-            "cumulative_pnl": float(row["cumulative_pnl"]),
-            "cumulative_pnl_pct": round((float(row["cumulative_pnl"]) / REF_CAPITAL) * 100, 4),
+            "date": ds,
+            "cumulative_pnl": round(cum_trade, 4),
+            "cumulative_pnl_pct": round((cum_trade / REF_CAPITAL) * 100, 4),
         })
+        cursor += timedelta(days=1)
 
     return {
         "days": days,
@@ -1953,18 +1792,21 @@ async def get_ai_dashboard(
         if s.quality_tier in ("STRONG", "MODERATE") and s.anti_fake_status != "BLOCK"
     ]
 
-    # ── 3. Trades IA — fuente unificada (real + paper) ────────────
-    trades_60d = await get_closed_trades_unified(
-        db,
-        user_id=user.id,
-        source="ai_bot",
-        mode="total",
-        from_date=d60.date(),
-        to_date=now.date(),
-        order_desc=False,
+    # ── 3. Trades reales IA — carga todos, filtra en Python ──────
+    trades_q = await db.execute(
+        select(ExchangeTrade).where(
+            ExchangeTrade.user_id == user.id,
+            ExchangeTrade.source == "ai_bot",
+            ExchangeTrade.status == "closed",
+        ).order_by(ExchangeTrade.closed_at)
     )
+    all_trades = trades_q.scalars().all()
+    trades_60d = [
+        t for t in all_trades
+        if t.closed_at and (now - t.closed_at.replace(tzinfo=timezone.utc)).days < 60
+    ]
 
-    trade_pnls   = [float(t.realized_pnl) for t in trades_60d]
+    trade_pnls   = [float(t.realized_pnl or 0) for t in trades_60d]
     total_trades = len(trade_pnls)
     winners_real = sum(1 for p in trade_pnls if p > 0)
     real_wr      = round(winners_real / total_trades * 100, 1) if total_trades else 0.0
@@ -3761,6 +3603,26 @@ async def get_correlation_matrix(
                     "recommendation": "Monitor combined exposure",
                 })
 
+@router.get("/live-scan/events")
+async def get_live_scan_events(
+    limit: int = Query(500, ge=1, le=5000),
+    _user=Depends(get_current_authorized_user),
+):
+    """Return recent AI scanner events persisted in Redis."""
+    events = get_recent_scan_events(limit)
+    return {"events": events}
+
+
+@router.post("/live-tip")
+async def live_tip(
+    event: dict,
+    _user=Depends(get_current_authorized_user),
+):
+    """Generate a short trading tip for a scan event using the local LLM."""
+    tip = await local_llm_client.generate_tip(event, heavy=False)
+    return tip.dict()
+
+
     return {
         "matrix": matrix_out,
         "alerts": alerts,
@@ -3771,32 +3633,3 @@ async def get_correlation_matrix(
             "generated_at": datetime.now(timezone.utc).isoformat(),
         },
     }
-
-
-# ═══════════════════════════════════════════════════════════════════════════════
-# Scanner Live: eventos en tiempo real + tips de IA local
-# ═══════════════════════════════════════════════════════════════════════════════
-
-@router.get("/live-scan/events")
-async def live_scan_events(
-    limit: int = Query(500, ge=1, le=2000),
-    _user = Depends(get_current_admin_user),
-):
-    """Return the last `limit` scan events persisted in Redis (24h TTL)."""
-    return {
-        "events": get_recent_scan_events(limit),
-        "meta": {
-            "limit": limit,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    }
-
-
-@router.post("/live-tip")
-async def live_tip(
-    event: dict,
-    _user = Depends(get_current_admin_user),
-):
-    """Generate a trading tip for a scan event using the user's local LLM."""
-    tip = await local_llm_client.generate_tip(event)
-    return tip.model_dump()
