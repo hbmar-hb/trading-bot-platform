@@ -3603,6 +3603,18 @@ async def get_correlation_matrix(
                     "recommendation": "Monitor combined exposure",
                 })
 
+    return {
+        "matrix": matrix_out,
+        "alerts": alerts,
+        "meta": {
+            "symbols_evaluated": n,
+            "lookback_bars": lookback_bars,
+            "timeframe": timeframe,
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        },
+    }
+
+
 @router.get("/live-scan/events")
 async def get_live_scan_events(
     limit: int = Query(500, ge=1, le=5000),
@@ -3621,15 +3633,3 @@ async def live_tip(
     """Generate a short trading tip for a scan event using the local LLM."""
     tip = await local_llm_client.generate_tip(event, heavy=False)
     return tip.dict()
-
-
-    return {
-        "matrix": matrix_out,
-        "alerts": alerts,
-        "meta": {
-            "symbols_evaluated": n,
-            "lookback_bars": lookback_bars,
-            "timeframe": timeframe,
-            "generated_at": datetime.now(timezone.utc).isoformat(),
-        },
-    }
