@@ -106,17 +106,14 @@ class Settings(BaseSettings):
     llm_enabled: bool = True
 
     # ─── Local LLM (Ollama / vLLM / etc.) ────────────────────
-    # Used for optional live scanner tips. The model runs on the user's local
-    # machine; the backend calls the exposed OpenAI-compatible endpoint.
+    # Used for optional live scanner tips and assistant. The model runs on the
+    # user's local machine; the backend calls the exposed OpenAI-compatible endpoint.
     local_llm_url: str = ""          # e.g. http://localhost:11434/v1 or a tunnel URL
-    local_llm_model: str = "mixtral:8x7b"
+    local_llm_model: str = "mistral:7b"              # fast model for interactive tips
+    local_llm_model_assistant: str = "mistral:7b"    # model for assistant/RAG responses
+    local_llm_model_heavy: str = "mixtral:8x7b"      # slow model for background tasks
     local_llm_enabled: bool = False
-
-    # ─── AI Engine ───────────────────────────────────────────
-    # Master switch for autonomous AI calibration tasks.
-    # Set to false to freeze ai_optimal_config_task, rejection_feedback_task
-    # and activator_calibration_task while keeping signal generation running.
-    ai_auto_calibration_enabled: bool = True
+    assistant_use_local_llm: bool = True               # if false, assistant uses OpenRouter/Moonshot
 
     model_config = {
         "env_file": ".env",

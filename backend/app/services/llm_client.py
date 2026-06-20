@@ -208,6 +208,84 @@ def generate_structured(
     raise LLMError(f"LLM failed after trying {models_to_try}: {last_error}")
 
 
+async def generate_chat_async(
+    messages: list[dict],
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float = 0.2,
+) -> LLMResponse:
+    """Simple async chat completion (non-streaming) via OpenRouter."""
+    if not settings.llm_enabled or not settings.openrouter_api_key:
+        raise LLMError("LLM is disabled or OPENROUTER_API_KEY is not set")
+
+    model = model or settings.llm_default_model
+    max_tok = max_tokens or settings.llm_max_tokens or DEFAULT_MAX_TOKENS
+    headers = _build_headers()
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tok,
+        "temperature": temperature,
+    }
+    url = f"{settings.openrouter_base_url}/chat/completions"
+
+    start = time.perf_counter()
+    try:
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        logger.warning(f"LLM HTTP error {exc.response.status_code}: {exc.response.text[:200]}")
+        raise
+    except httpx.RequestError as exc:
+        logger.warning(f"LLM request error: {exc}")
+        raise
+
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    return _postprocess_llm_response(resp.json(), model, elapsed_ms)
+
+
+async def generate_chat_stream(
+    messages: list[dict],
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float = 0.2,
+):
+    """Async streaming chat completion via OpenRouter (OpenAI-compatible SSE)."""
+    if not settings.llm_enabled or not settings.openrouter_api_key:
+        raise LLMError("LLM is disabled or OPENROUTER_API_KEY is not set")
+
+    model = model or settings.llm_default_model
+    max_tok = max_tokens or settings.llm_max_tokens or DEFAULT_MAX_TOKENS
+    headers = _build_headers()
+    payload = {
+        "model": model,
+        "messages": messages,
+        "max_tokens": max_tok,
+        "temperature": temperature,
+        "stream": True,
+    }
+    url = f"{settings.openrouter_base_url}/chat/completions"
+
+    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        async with client.stream("POST", url, headers=headers, json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                    delta = chunk.get("choices", [{}])[0].get("delta", {})
+                    content = delta.get("content", "")
+                    if content:
+                        yield content
+                except Exception:
+                    continue
+
+
 async def generate_structured_async(
     prompt: str,
     response_model: type[T],
