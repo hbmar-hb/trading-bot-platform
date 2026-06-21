@@ -75,8 +75,20 @@ class KnowledgeBase:
         self.load()
         return {"status": "reloaded", "chunks_before": before, "chunks_after": len(self.chunks)}
 
-    def search(self, query: str, top_k: int = 5) -> list[Chunk]:
-        """BM25 keyword-based retrieval with small title/source boosts."""
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        allowed_sources: list[str] | None = None,
+    ) -> list[Chunk]:
+        """BM25 keyword-based retrieval with small title/source boosts.
+
+        Args:
+            query: user query.
+            top_k: number of chunks to return.
+            allowed_sources: optional list of source filenames to restrict the
+                search to (e.g. ["phase1_user_guide.md"]).
+        """
         query_terms = _extract_query_terms(query)
         if not query_terms:
             return []
@@ -86,7 +98,13 @@ class KnowledgeBase:
         if n == 0:
             return []
 
+        allowed = None
+        if allowed_sources:
+            allowed = {s.lower() for s in allowed_sources}
+
         for idx, chunk in enumerate(self.chunks):
+            if allowed and chunk.source.lower() not in allowed:
+                continue
             tokens = self._tokenized[idx]
             if chunk.is_header or not chunk.text.strip():
                 continue
@@ -380,5 +398,9 @@ def reload_knowledge() -> dict:
     return get_knowledge_base().reload()
 
 
-def search_knowledge(query: str, top_k: int = 5) -> list[Chunk]:
-    return get_knowledge_base().search(query, top_k)
+def search_knowledge(
+    query: str,
+    top_k: int = 5,
+    allowed_sources: list[str] | None = None,
+) -> list[Chunk]:
+    return get_knowledge_base().search(query, top_k, allowed_sources=allowed_sources)

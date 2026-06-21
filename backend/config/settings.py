@@ -129,6 +129,14 @@ class Settings(BaseSettings):
     # Security
     require_email_verification: bool = False
 
+    # Comma-separated list of usernames that have developer/super-admin access.
+    # Developers bypass assistant knowledge restrictions and can query all docs.
+    developer_usernames: str = "Marci526"
+
+    @property
+    def developer_username_set(self) -> set[str]:
+        return {u.strip() for u in self.developer_usernames.split(",") if u.strip()}
+
     # GIFs (Giphy)
     giphy_api_key: str = ""
 

@@ -1,16 +1,22 @@
-import { useState, useRef, useEffect } from 'react'
-import { MessageCircle, X, Send, Bot } from 'lucide-react'
-import api from '@/services/api'
+import { useState, useRef, useEffect, useCallback } from 'react'
+import { MessageCircle, X, Send, Bot, Square, ThumbsUp, ThumbsDown } from 'lucide-react'
+import api, { BASE_URL } from '@/services/api'
 
 const WELCOME = '¡Hola! Soy el asistente de la plataforma. Puedo ayudarte con dudas sobre bots, el scanner de IA, el chart, paper trading y más. ¿En qué puedo ayudarte?'
+
+function getAccessToken() {
+  return localStorage.getItem('access_token')
+}
 
 export default function AssistantWidget() {
   const [open, setOpen] = useState(false)
   const [history, setHistory] = useState([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
+  const [feedbackMap, setFeedbackMap] = useState({})
   const bottomRef = useRef(null)
   const textareaRef = useRef(null)
+  const abortRef = useRef(null)
 
   useEffect(() => {
     if (open && history.length === 0) {
@@ -25,25 +31,178 @@ export default function AssistantWidget() {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [history, loading])
 
+  const stopStreaming = useCallback(() => {
+    if (abortRef.current) {
+      abortRef.current.abort()
+      abortRef.current = null
+    }
+  }, [])
+
+  async function sendFeedback(interactionId, value) {
+    if (!interactionId) return
+    try {
+      await api.post('/assistant/feedback', {
+        interaction_id: interactionId,
+        feedback: value,
+      })
+      setFeedbackMap(prev => ({ ...prev, [interactionId]: value }))
+    } catch {
+      // Silently ignore feedback errors so the UI keeps working.
+    }
+  }
+
   async function send() {
     const msg = input.trim()
     if (!msg || loading) return
 
-    const next = [...history, { role: 'user', content: msg }]
-    setHistory(next)
+    const nextHistory = [...history, { role: 'user', content: msg }]
+    setHistory(nextHistory)
     setInput('')
     setLoading(true)
 
+    // Placeholder for the assistant reply that will be filled token by token.
+    setHistory(h => [...h, { role: 'assistant', content: '' }])
+
+    const controller = new AbortController()
+    abortRef.current = controller
+
     try {
-      const { data } = await api.post('/assistant/message', {
-        message: msg,
-        history: next.slice(-8),
+      const token = getAccessToken()
+      const response = await fetch(`${BASE_URL}/assistant/message/stream`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token && { Authorization: `Bearer ${token}` }),
+        },
+        body: JSON.stringify({
+          message: msg,
+          history: nextHistory.slice(-8),
+        }),
       })
-      setHistory(h => [...h, { role: 'assistant', content: data.reply }])
-    } catch {
-      setHistory(h => [...h, { role: 'assistant', content: 'Error al conectar con el asistente. Inténtalo de nuevo.' }])
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`)
+      }
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      let currentEvent = ''
+      let accumulated = ''
+      let lastInteractionId = null
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('event: ')) {
+            currentEvent = line.slice(7).trim()
+            continue
+          }
+
+          if (!line.startsWith('data: ')) continue
+          const data = line.slice(6)
+
+          if (currentEvent === 'message') {
+            try {
+              const parsed = JSON.parse(data)
+              const chunk = parsed.content || ''
+              accumulated += chunk
+              setHistory(prev => {
+                const updated = [...prev]
+                updated[updated.length - 1] = {
+                  role: 'assistant',
+                  content: accumulated,
+                  interactionId: lastInteractionId,
+                }
+                return updated
+              })
+            } catch {
+              // Ignore malformed SSE payloads.
+            }
+          } else if (currentEvent === 'error') {
+            let errorMessage = 'Error al generar la respuesta. Inténtalo de nuevo.'
+            try {
+              const parsed = JSON.parse(data)
+              errorMessage = parsed.error || errorMessage
+            } catch {
+              // Use default message.
+            }
+            setHistory(prev => {
+              const updated = [...prev]
+              updated[updated.length - 1] = {
+                role: 'assistant',
+                content: errorMessage,
+                interactionId: lastInteractionId,
+              }
+              return updated
+            })
+          } else if (currentEvent === 'interaction') {
+            try {
+              const parsed = JSON.parse(data)
+              lastInteractionId = parsed.interaction_id || null
+              setHistory(prev => {
+                const updated = [...prev]
+                updated[updated.length - 1] = {
+                  ...updated[updated.length - 1],
+                  interactionId: lastInteractionId,
+                }
+                return updated
+              })
+            } catch {
+              // Ignore malformed interaction payloads.
+            }
+          } else if (currentEvent === 'done') {
+            // Streaming finished; nothing else to append.
+          }
+        }
+      }
+
+      // If nothing was produced, replace empty assistant message with a friendly fallback.
+      setHistory(prev => {
+        const updated = [...prev]
+        const last = updated[updated.length - 1]
+        if (last?.role === 'assistant' && last.content.trim() === '') {
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: 'No se pudo generar una respuesta en este momento.',
+            interactionId: lastInteractionId,
+          }
+        }
+        return updated
+      })
+    } catch (err) {
+      if (err.name === 'AbortError') {
+        setHistory(prev => {
+          const updated = [...prev]
+          const last = updated[updated.length - 1]
+          if (last?.role === 'assistant' && last.content.trim() === '') {
+            updated[updated.length - 1] = {
+              role: 'assistant',
+              content: 'Respuesta cancelada.',
+            }
+          }
+          return updated
+        })
+      } else {
+        setHistory(prev => {
+          const updated = [...prev]
+          updated[updated.length - 1] = {
+            role: 'assistant',
+            content: 'Error al conectar con el asistente. Inténtalo de nuevo.',
+          }
+          return updated
+        })
+      }
     } finally {
       setLoading(false)
+      abortRef.current = null
     }
   }
 
@@ -80,6 +239,32 @@ export default function AssistantWidget() {
                     : 'bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-gray-100 rounded-bl-sm'
                 }`}>
                   {m.content}
+                  {m.role === 'assistant' && m.interactionId && (
+                    <div className="flex items-center justify-end gap-1 mt-1.5 pt-1 border-t border-gray-200 dark:border-gray-700">
+                      <button
+                        onClick={() => sendFeedback(m.interactionId, 1)}
+                        className={`p-1 rounded transition-colors ${
+                          feedbackMap[m.interactionId] === 1
+                            ? 'text-emerald-600 bg-emerald-100 dark:bg-emerald-900/30'
+                            : 'text-gray-400 hover:text-emerald-600 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                        title="Respuesta útil"
+                      >
+                        <ThumbsUp size={12} />
+                      </button>
+                      <button
+                        onClick={() => sendFeedback(m.interactionId, -1)}
+                        className={`p-1 rounded transition-colors ${
+                          feedbackMap[m.interactionId] === -1
+                            ? 'text-red-600 bg-red-100 dark:bg-red-900/30'
+                            : 'text-gray-400 hover:text-red-600 hover:bg-gray-200 dark:hover:bg-gray-700'
+                        }`}
+                        title="Respuesta no útil"
+                      >
+                        <ThumbsDown size={12} />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -111,11 +296,11 @@ export default function AssistantWidget() {
               className="flex-1 resize-none text-sm px-3 py-2 rounded-xl border border-gray-200 dark:border-gray-600 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
             />
             <button
-              onClick={send}
-              disabled={!input.trim() || loading}
+              onClick={loading ? stopStreaming : send}
+              disabled={!loading && !input.trim()}
               className="p-2 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex-shrink-0"
             >
-              <Send size={16} />
+              {loading ? <Square size={16} fill="currentColor" /> : <Send size={16} />}
             </button>
           </div>
         </div>
