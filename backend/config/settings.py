@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     local_llm_model_assistant: str = "mistral:7b"    # model for assistant/RAG responses
     local_llm_model_heavy: str = "mixtral:8x7b"      # slow model for background tasks
     local_llm_enabled: bool = False
+    local_llm_allow_remote_fallback: bool = False      # if false, local LLM failures return unavailable instead of using remote paid LLM
     assistant_use_local_llm: bool = True               # if false, assistant uses OpenRouter/Moonshot
 
     model_config = {
