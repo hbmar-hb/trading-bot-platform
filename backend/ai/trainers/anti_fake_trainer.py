@@ -21,23 +21,28 @@ MODEL_PATH = MODEL_DIR / "anti_fake_v1.pkl"
 MIN_SAMPLES = 200
 
 
-def train(X: pd.DataFrame, y: pd.Series) -> dict:
+def train_model(
+    X: pd.DataFrame,
+    y: pd.Series,
+    groups: pd.Series | None = None,
+    sample_weights: pd.Series | None = None,
+) -> tuple[dict, dict]:
     """
-    Train XGBoost anti-fake classifier.
+    Train XGBoost anti-fake classifier and return artifact + metrics.
 
     Args:
         X: feature matrix (n_samples × n_features)
         y: binary labels (1=fake/failure, 0=real/success)
+        groups: optional group labels (currently unused, kept for API compatibility)
+        sample_weights: optional per-sample weights passed to XGBClassifier.fit
 
     Returns:
-        metrics dict with auc, accuracy, train_samples, test_samples
+        (artifact_dict, metrics_dict)
     """
     if len(X) < MIN_SAMPLES:
         raise ValueError(f"Need ≥{MIN_SAMPLES} resolved signals, got {len(X)}")
 
     from xgboost import XGBClassifier
-
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
 
     pos = int((y == 1).sum())
     neg = int((y == 0).sum())
@@ -46,6 +51,10 @@ def train(X: pd.DataFrame, y: pd.Series) -> dict:
     X_tr, X_te, y_tr, y_te = train_test_split(
         X, y, test_size=0.2, random_state=42, stratify=y
     )
+
+    sw_tr = None
+    if sample_weights is not None:
+        sw_tr = sample_weights.loc[X_tr.index].values
 
     clf = XGBClassifier(
         n_estimators      = 150,
@@ -58,11 +67,13 @@ def train(X: pd.DataFrame, y: pd.Series) -> dict:
         eval_metric       = "logloss",
         verbosity         = 0,
     )
-    clf.fit(
-        X_tr, y_tr,
-        eval_set          = [(X_te, y_te)],
-        verbose           = False,
-    )
+    fit_kwargs = {
+        "eval_set": [(X_te, y_te)],
+        "verbose": False,
+    }
+    if sw_tr is not None:
+        fit_kwargs["sample_weight"] = sw_tr
+    clf.fit(X_tr, y_tr, **fit_kwargs)
 
     y_prob = clf.predict_proba(X_te)[:, 1]
     y_pred = (y_prob >= 0.5).astype(int)
@@ -87,10 +98,7 @@ def train(X: pd.DataFrame, y: pd.Series) -> dict:
         "trained_on":       len(X),
     }
 
-    with open(MODEL_PATH, "wb") as f:
-        pickle.dump(artifact, f)
-
-    return {
+    metrics = {
         "auc":           auc,
         "accuracy":      accuracy,
         "train_samples": len(X_tr),
@@ -98,3 +106,27 @@ def train(X: pd.DataFrame, y: pd.Series) -> dict:
         "feature_count": X.shape[1],
         "top_features":  list(feature_importance.keys())[:5],
     }
+    return artifact, metrics
+
+
+def save_artifact(artifact: dict) -> None:
+    """Persist anti-fake artifact to disk."""
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    with open(MODEL_PATH, "wb") as f:
+        pickle.dump(artifact, f)
+
+
+def train(X: pd.DataFrame, y: pd.Series) -> dict:
+    """
+    Train and immediately save XGBoost anti-fake classifier.
+
+    Args:
+        X: feature matrix (n_samples × n_features)
+        y: binary labels (1=fake/failure, 0=real/success)
+
+    Returns:
+        metrics dict with auc, accuracy, train_samples, test_samples
+    """
+    artifact, metrics = train_model(X, y)
+    save_artifact(artifact)
+    return metrics

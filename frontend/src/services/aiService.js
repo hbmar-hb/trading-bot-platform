@@ -73,4 +73,8 @@ export const aiService = {
   // Scanner Live — persisted events + on-demand local LLM tip
   liveScanEvents: (limit = 500) => api.get('/ai/live-scan/events', { params: { limit } }),
   liveTip:        (event)       => api.post('/ai/live-tip', event),
+
+  // Engine Narrator — AI-generated summary + Q&A over live engine metrics
+  engineSummary: ()            => api.post('/ai/engine-summary'),
+  explainEngine: (question)    => api.post('/assistant/explain', { question }),
 }

@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, CheckCircle, ClipboardCopy, History, Loader2, 
 import { cn } from '@/utils/cn'
 import { adminSystemService } from '@/services/adminSystem'
 import useAuthStore from '@/store/authStore'
+import EngineAIHelper from '@/components/IAEngine/EngineAIHelper'
 
 const CHECK_ICONS = {
   infra: Activity,
@@ -590,6 +591,8 @@ export default function AdminSystemPage() {
           </div>
         )}
       </div>
+
+      <EngineAIHelper page="admin-system" />
     </div>
   )
 }

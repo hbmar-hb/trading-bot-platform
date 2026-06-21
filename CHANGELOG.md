@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-06-21 — Asistente Narrativo del Motor IA (EngineAIHelper)
+
+### 🚀 Nuevas Funcionalidades
+
+- **Asistente narrativo del motor IA** (`EngineAIHelper`) — Widget flotante en `/ai` y `/admin/system` que genera un resumen ejecutivo del estado del motor IA y permite hacer preguntas sobre métricas concretas.
+  - Backend: nuevo servicio `app/services/engine_narrator.py` que recopila métricas de health checks, deployment gate, modelo y bots/señales, y las resume con Ollama local (fallback remoto).
+  - Endpoints: `POST /ai/engine-summary` (admin) y `POST /assistant/explain` (usuarios autenticados).
+  - Endpoints en streaming (SSE): `GET /ai/engine-summary/stream` y `GET /assistant/explain/stream`.
+  - Frontend: componente `frontend/src/components/IAEngine/EngineAIHelper.jsx` con resumen, problemas clave, recomendación y chat de preguntas.
+
+### 🔧 Mejoras
+
+- `local_llm_client.py` extiende `generate_summary` y `answer_question` con fallback a LLM remoto y parseo flexible de respuestas estructuradas.
+- Recopilación de métricas en paralelo y health check con timeout (20s) para reducir la latencia del resumen.
+- El asistente del motor IA es informativo: no dispara acciones automáticas.
+
 ## 2026-06-20 — Sincronización de Documentación
 
 ### 📚 Documentación

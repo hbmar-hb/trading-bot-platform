@@ -65,7 +65,7 @@ function IAEngineSection() {
               <p><strong>1. Datos OHLCV</strong> (cada 5 min) → Análisis ICT/SMC (<code>confluence_engine.py</code>)</p>
               <p><strong>2. Scoring de confluencia</strong> (0-100 pts) — CHoCH, BOS, OB, FVG, sweep, P/D, killzone. <strong>Pesos adaptativos</strong> por feature importance del ensemble</p>
               <p><strong>3. Calidad heurística</strong> — red flags, volume, spread, sweep, FVGs, RSI/Stoch + Volume Profile POC</p>
-              <p><strong>4. Ensemble Híbrido Anti-Fake</strong> — XGBoost + RandomForest + GaussianNB + meta-learner LR que asigna <code>ensemble_success_prob</code></p>
+              <p><strong>4. Ensemble Híbrido Anti-Fake</strong> — XGBoost + RandomForest + RidgeClassifier + meta-learner LR que asigna <code>ensemble_success_prob</code></p>
               <p><strong>5. Bot Activator</strong> → múltiples gates de riesgo (Kelly, drift, macro, portfolio, rolling beta) → Exchange</p>
               <p><strong>6. Outcome Tracker</strong> — cada 15 min evalúa TP1/SL. El resultado real alimenta el próximo retrain con <strong>sample_weight 5×</strong></p>
             </div>

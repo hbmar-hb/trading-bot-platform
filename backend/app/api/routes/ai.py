@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, delete, desc, func, and_, or_, case, Float
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,6 +19,7 @@ from app.services.database import get_db
 from app.services.cache import async_redis
 from app.services.scan_event_publisher import get_recent_scan_events
 from app.services import local_llm_client
+from app.services.engine_narrator import generate_engine_summary, generate_engine_summary_stream
 from app.services.ai_scanner import (
     build_signal, fetch_ohlcv, upsert_latest_scan,
     signal_to_dict, latest_scan_to_dict, htf_for,
@@ -2180,6 +2182,37 @@ def _compute_institutional_health_sync(trades: list, equity_curve: list[dict]) -
         "avg_win": health.avg_win,
         "avg_loss": health.avg_loss,
     }
+
+
+# ── Engine Narrator ───────────────────────────────────────────────────────────
+
+@router.post("/engine-summary")
+async def engine_summary(_user=Depends(get_current_admin_user)) -> dict:
+    """Return a narrative summary of the current AI engine/system state.
+
+    Uses live metrics from the dashboard, health checks, deployment gate and model status,
+    summarized by a local LLM (with remote fallback).
+    """
+    return await generate_engine_summary()
+
+
+@router.get("/engine-summary/stream")
+async def engine_summary_stream(_user=Depends(get_current_admin_user)):
+    """Stream a narrative summary of the current AI engine/system state via SSE.
+
+    Events:
+      - phase:metrics
+      - metrics
+      - phase:llm
+      - token
+      - summary
+      - error
+    """
+    return StreamingResponse(
+        generate_engine_summary_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )
 
 
 # ── P&L Attribution endpoint ──────────────────────────────────────────────────

@@ -53,7 +53,7 @@ def _save_meta(meta: dict) -> None:
     META_PATH.write_text(json.dumps(_to_json_safe(meta), indent=2))
 
 
-ADAPTIVE_WEIGHTS_PATH = Path(__file__).parent.parent.parent / "ai" / "models" / "adaptive_weights.json"
+ADAPTIVE_WEIGHTS_PATH = Path("/app/ai/models/adaptive_weights.json")
 
 # V2.1 Base weights (rebalanced pillars)
 _BASE_WEIGHTS = {
@@ -721,14 +721,14 @@ def retrain_anti_fake() -> dict:
             y_binary=y_binary.values,
             y_returns=y_returns.values,
             model_params={
-                "n_estimators": 500,
+                "n_estimators": 200,
                 "max_depth": 3,
                 "learning_rate": 0.05,
                 "subsample": 0.7,
                 "colsample_bytree": 0.7,
                 "colsample_bylevel": 0.7,
                 "reg_alpha": 0.5,
-                "reg_lambda": 3.0,
+                "reg_lambda": 5.0,
                 "gamma": 2.0,
                 "min_child_weight": 10,
                 "scale_pos_weight": wf_spw,
@@ -736,8 +736,8 @@ def retrain_anti_fake() -> dict:
                 "eval_metric": "logloss",
                 "verbosity": 0,
             },
-            train_window=max(60, len(X) // 10),
-            test_window=max(20, len(X) // 25),
+            train_window=max(120, len(X) // 8),
+            test_window=max(28, len(X) // 30),
         )
 
         # Load old metrics for comparison (supports legacy keys for backward compat)

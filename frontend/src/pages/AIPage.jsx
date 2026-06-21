@@ -19,6 +19,7 @@ const IALiveScannerTab = lazy(() => import('@/components/IAEngine/IALiveScannerT
 import SignalDiagnosisModal from '@/components/Analytics/SignalDiagnosisModal'
 import useAuthStore from '@/store/authStore'
 import IAMissionControlTab from '@/components/IAEngine/IAMissionControlTab'
+import EngineAIHelper from '@/components/IAEngine/EngineAIHelper'
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -3702,6 +3703,8 @@ export default function AIPage() {
           aiBots={aiBots}
         />
       )}
+
+      <EngineAIHelper page="ai" />
     </div>
   )
 }

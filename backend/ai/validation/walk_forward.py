@@ -47,17 +47,22 @@ class WFMetrics:
 
 
 # ── Gate thresholds (classification-focused) ─────────────────────────────
-_MIN_AUC = 0.60                      # Must beat random by meaningful margin
-_MIN_PRECISION = 0.45                # At least some true positives among predicted failures
+_MIN_AUC = 0.62                      # Must beat random by meaningful margin
+_MIN_PRECISION = 0.50                # At least some true positives among predicted failures
 _MIN_RECALL = 0.10                   # Catch at least 10% of failures
 _MIN_F1 = 0.25                       # Balanced precision/recall floor
 _MAX_LOGLOSS = 2.0                   # Not completely uncalibrated
 _MIN_AUC_LIFT = 0.01                 # Must beat baseline by at least 1pp AUC
 
 # Temporal stability thresholds
-_MIN_FOLD_AUC = 0.58
-_MAX_FOLD_AUC_STD = 0.07
-_MIN_PER_FOLD_AUC = 0.55
+_MIN_FOLD_AUC = 0.60
+_MAX_FOLD_AUC_STD = 0.05
+_MIN_PER_FOLD_AUC = 0.58
+
+# Realism guard: WFV is a proxy, not a trading simulator.
+# If the proxy produces fantasy trading metrics, reject to avoid overfitting.
+_MAX_REALISTIC_SHARPE = 5.0
+_MAX_REALISTIC_PROFIT_FACTOR = 20.0
 
 # Relative retention vs old model (using AUC as primary metric)
 _AUC_MIN_RETENTION = 0.90            # New AUC >= 90% of old
@@ -120,9 +125,9 @@ def _compute_trading_metrics(returns: list[float]) -> dict[str, float]:
 def walk_forward_split(
     X: np.ndarray,
     y: np.ndarray,
-    train_window: int = 60,
-    test_window: int = 7,
-    min_train_size: int = 30,
+    train_window: int = 120,
+    test_window: int = 14,
+    min_train_size: int = 60,
 ) -> list[tuple[int, int, int, int]]:
     """Generate time-series walk-forward split indices.
 
@@ -144,6 +149,24 @@ def walk_forward_split(
         start += test_window  # Roll forward by test_window
 
     return splits
+
+
+def _apply_purge(
+    train_start: int,
+    train_end: int,
+    test_start: int,
+    purge_n: int = 5,
+) -> int:
+    """Remove training samples adjacent to the test fold boundary.
+
+    Data is assumed sorted chronologically (oldest first). Eliminates serial
+    market-correlation leakage at each train/test boundary.
+    """
+    if purge_n <= 0 or train_end <= test_start:
+        return train_end
+    purged_end = test_start - purge_n
+    # Keep at least 20 training samples
+    return max(train_start + 20, purged_end)
 
 
 def evaluate_model(
@@ -291,8 +314,14 @@ def walk_forward_validate(
 
     for i, (train_start, train_end, test_start, test_end) in enumerate(split_indices):
         try:
-            X_train = X[train_start:train_end]
-            y_train = y_binary[train_start:train_end]
+            # Temporal purge: drop training samples adjacent to test fold
+            train_end_purged = _apply_purge(train_start, train_end, test_start, purge_n=5)
+            if train_end_purged - train_start < 20:
+                logger.warning(f"[WF] Fold {i + 1} skipped: purge left <20 training samples")
+                continue
+
+            X_train = X[train_start:train_end_purged]
+            y_train = y_binary[train_start:train_end_purged]
             X_test = X[test_start:test_end]
             y_test = y_binary[test_start:test_end]
 
@@ -358,6 +387,19 @@ def walk_forward_validate(
         trades=sum(m.trades for m in fold_metrics),
         avg_trade=round(sum(m.avg_trade for m in fold_metrics) / n, 4),
     )
+
+    # Realism guard on advisory trading metrics
+    realism_reasons = []
+    if aggregated.sharpe > _MAX_REALISTIC_SHARPE:
+        realism_reasons.append(f"sharpe {aggregated.sharpe:.2f} > {_MAX_REALISTIC_SHARPE}")
+    if aggregated.profit_factor > _MAX_REALISTIC_PROFIT_FACTOR:
+        realism_reasons.append(f"profit_factor {aggregated.profit_factor:.2f} > {_MAX_REALISTIC_PROFIT_FACTOR}")
+    if realism_reasons:
+        stability = {
+            "passes": False,
+            "reason": "wf_proxy_unrealistic: " + "; ".join(realism_reasons),
+            **stability,
+        }
 
     passes_gate = _passes_absolute_gate(aggregated) and stability["passes"]
 

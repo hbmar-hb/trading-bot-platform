@@ -243,7 +243,7 @@ def build_signal(
                 result.features["ensemble_success_prob"] = ens_probs["ensemble"]
                 result.features["xgb_success_prob"] = ens_probs["xgb"]
                 result.features["rf_success_prob"] = ens_probs["rf"]
-                result.features["nb_success_prob"] = ens_probs.get("nb")
+                result.features["ridge_success_prob"] = ens_probs.get("ridge")
         # Fallback to standalone XGBoost
         elif anti_fake_registry.model_ready():
             calibrated = anti_fake_registry.predict_calibrated_success_probability(result.features)

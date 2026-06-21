@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 import httpx
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from loguru import logger
 from pydantic import BaseModel
@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from app.api.dependencies import get_current_authorized_user
 from app.services import llm_client, local_llm_client
 from app.services.knowledge_service import search_knowledge
+from app.services.engine_narrator import answer_engine_question, answer_engine_question_stream
 from config.settings import settings
 
 router = APIRouter(prefix="/assistant", tags=["assistant"])
@@ -249,3 +250,41 @@ async def reload_knowledge_endpoint(_user=Depends(get_current_authorized_user)) 
     """Reload markdown knowledge files without restarting the backend."""
     from app.services.knowledge_service import reload_knowledge
     return reload_knowledge()
+
+
+class ExplainRequest(BaseModel):
+    question: str
+
+
+@router.post("/explain")
+async def explain_engine_metrics(
+    req: ExplainRequest,
+    _user=Depends(get_current_authorized_user),
+) -> dict:
+    """Answer a user question about current engine/system metrics.
+
+    Uses live data from the AI dashboard, deployment gate and health checks.
+    """
+    return await answer_engine_question(req.question)
+
+
+@router.get("/explain/stream")
+async def explain_engine_metrics_stream(
+    question: str = Query(..., min_length=1),
+    _user=Depends(get_current_authorized_user),
+):
+    """Stream an answer about current engine/system metrics via SSE.
+
+    Events:
+      - phase:metrics
+      - metrics
+      - phase:llm
+      - token
+      - answer
+      - error
+    """
+    return StreamingResponse(
+        answer_engine_question_stream(question),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+    )

@@ -21,7 +21,7 @@ Estados:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -49,13 +49,15 @@ def _filter_real_ai_trades_query(
     """Build base query for REAL ai_bot trades (excludes paper bots).
 
     Optionally filter by bot symbol and/or timeframe for per-pair evaluation.
+    Only includes trades closed after CLEAN_CUTOFF to avoid mixing old-model data.
     """
-    from datetime import timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    # Use the later of rolling cutoff and clean cutoff
+    effective_cutoff = max(cutoff, CLEAN_CUTOFF)
     conditions = [
         ExchangeTrade.source == "ai_bot",
         ExchangeTrade.status == "closed",
-        ExchangeTrade.closed_at >= cutoff,
+        ExchangeTrade.closed_at >= effective_cutoff,
         BotConfig.paper_balance_id.is_(None),
     ]
     if symbol:
@@ -71,34 +73,38 @@ def _filter_real_ai_trades_query(
 
 def _filter_paper_ai_trades_query(days: int = 60):
     """Build base query for PAPER ai_bot trades."""
-    from datetime import timedelta
     cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    effective_cutoff = max(cutoff, CLEAN_CUTOFF)
     return (
         select(ExchangeTrade)
         .join(BotConfig, ExchangeTrade.bot_id == BotConfig.id)
         .where(
             ExchangeTrade.source == "ai_bot",
             ExchangeTrade.status == "closed",
-            ExchangeTrade.closed_at >= cutoff,
+            ExchangeTrade.closed_at >= effective_cutoff,
             BotConfig.paper_balance_id.isnot(None),
         )
     )
+
+# Fecha de corte: solo evaluamos trades generados por el motor actual.
+# Trades anteriores a esta fecha provienen del motor antiguo/intermedio.
+CLEAN_CUTOFF = datetime(2026, 6, 10, tzinfo=timezone.utc)
 
 # ── Thresholds ──────────────────────────────────────────────
 # Thresholds calibrated for institutional risk management
 # A system with Sharpe < -3 or PF < 0.8 is already losing money consistently.
 _MAX_DD_PAUSE_PCT = Decimal("15.0")
 _MAX_DD_DEGRADE_PCT = Decimal("10.0")
-_SHARPE_DEGRADE = Decimal("-50.0")  # Temporarily permissive
-_SHARPE_PAUSE = Decimal("-100.0")  # Temporarily permissive to accumulate clean post-fix data
-_PF_DEGRADE = Decimal("0.1")  # Temporarily permissive
-_PF_PAUSE = Decimal("0.01")  # Temporarily permissive to accumulate clean post-fix data
+_SHARPE_DEGRADE = Decimal("-1.0")  # Realistic risk floor
+_SHARPE_PAUSE = Decimal("-2.0")  # No edge — stop real trading
+_PF_DEGRADE = Decimal("1.0")  # Realistic risk floor
+_PF_PAUSE = Decimal("0.8")  # Losing system — stop real trading
 _DRIFT_DEGRADE = Decimal("0.15")
 _DRIFT_PAUSE = Decimal("0.20")
 _DECAY_DEGRADE = Decimal("70.0")
 _DECAY_PAUSE = Decimal("100.0")
-_EXPECTANCY_DEGRADE = Decimal("-0.1")  # Temporarily permissive
-_EXPECTANCY_PAUSE = Decimal("-1.0")  # Temporarily permissive to accumulate clean post-fix data
+_EXPECTANCY_DEGRADE = Decimal("0.0")  # Realistic risk floor
+_EXPECTANCY_PAUSE = Decimal("-0.5")  # Negative expectancy — stop real trading
 
 # Minimum trades required before trade-based metrics are evaluated
 _MIN_TRADES_FOR_EVAL = 10

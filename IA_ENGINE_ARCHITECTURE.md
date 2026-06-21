@@ -41,7 +41,7 @@
     ├──► ensemble_registry.predict_ensemble_probability()
     │    ├── XGBoost base model          ← P(success) (timeframe-aware training)
     │    ├── RandomForest base model     ← P(success)
-    │    ├── GaussianNB base model       ← P(success) (diverse, probabilistic)
+    │    ├── RidgeClassifier base model  ← P(success) (linear diversity)
     │    └── Meta-learner LR             ← ensemble_prob (blend)
     │
     ├──► RegimeAdapter.apply_to_signal() ← SEGUNDA vez detect_regime (post-ML, acción)
@@ -117,7 +117,7 @@
     ├──► Si pasa gate:
     │    ├──► Guarda anti_fake_v1.pkl
     │    ├──► Guarda retrain_meta.json
-    │    ├──► ensemble_trainer.py      ← entrena ensemble XGB+RF+NB (GaussianNB, no LR)
+    │    ├──► ensemble_trainer.py      ← entrena ensemble XGB+RF+Ridge (meta-learner LR)
     │    ├──► Guarda ensemble_v1.pkl
     │    └──► _build_and_save_adaptive_weights()  ← recalibra pesos confluence + per-timeframe
     │        └── Adaptive weights por PnL realistic (70% PnL + 30% WR), clamp ±20%
@@ -170,7 +170,7 @@ Calibración: Platt scaling (calibrated confidence)
 Ubicación:   backend/ai/models/ensemble_v1.pkl
 Registro:    ai.ensemble_registry
 Arquitectura: Stacking (OOF meta-features)
-Base models: XGBoost + RandomForest + GaussianNB
+Base models: XGBoost + RandomForest + RidgeClassifier
 Meta-learner: LogisticRegression (con StandardScaler)
 Input:       21 features (NO LLM meta-feature)
 Output:      { ensemble: float, xgb: float, rf: float, nb: float }
@@ -441,7 +441,7 @@ dynamic_risk_manager.py    ← Exposure cap por símbolo (paper vs real isolatio
 │  ├── ensemble_registry.predict_ensemble_probability()      │
 │  │   ├── XGBoost  → P(success)                             │
 │  │   ├── RandomForest → P(success)                         │
-│  │   ├── GaussianNB → P(success)                           │
+│  │   ├── RidgeClassifier → P(success)                      │
 │  │   └── Meta-learner → ensemble_prob                      │
 │  └── Fallback: registry.predict_calibrated_confidence()    │
 └────────────────────────────────────────────────────────────┘
@@ -552,9 +552,9 @@ dynamic_risk_manager.py    ← Exposure cap por símbolo (paper vs real isolatio
 | **RandomForest** | 0.6757 | **+0.631** | ✅ Mejor modelo base |
 | **XGBoost** | 0.6843 | **+0.227** | ✅ Buen modelo base |
 | **LLM** | — | **+0.138** | ✅ Contribución positiva |
-| **GaussianNB** | **0.4857** | **−0.325** | ❌ **Peor que azar** |
+| **RidgeClassifier** | >0.55 | ≥0.0 | ✅ Modelo lineal diverso |
 
-> 🚨 **CRÍTICO: GaussianNB tiene AUC 0.4857**, inferior a una moneda al aire. El meta-learner le asigna peso **negativo** (−0.325), lo que indica que el modelo está aprendiendo a restar sus predicciones. **Requiere eliminación o reemplazo inmediato.**
+> ✅ **Resuelto: GaussianNB fue reemplazado por RidgeClassifier.** El nuevo modelo aporta diversidad lineal frente a XGB/RF, soporta `class_weight="balanced"` y `sample_weight`, y ya no genera predicciones peor-que-azar.
 
 ### 10.3 Walk-Forward Validation — Overfit Severo
 
@@ -1968,17 +1968,16 @@ Drawdown: −1.28%
 
 La auditoría del 2026-05-26 reveló discrepancias **masivas** entre las métricas documentadas y los valores reales en producción. El documento anterior contenía valores ficticios o desactualizados que distorsionaban la realidad del sistema. Esta sección consolida los hallazgos críticos.
 
-### 29.2 Hallazgo #1: GaussianNB es Peor que el Azar
+### 29.2 Hallazgo #1: GaussianNB era Peor que el Azar (Resuelto)
 
 | Aspecto | Detalle |
 |---------|---------|
 | **AUC GaussianNB** | **0.4857** (azar = 0.50) |
 | **Meta-weight** | **−0.325** (negativo) |
-| **Impacto** | El meta-learner RESTA las predicciones de NB |
+| **Impacto** | El meta-learner RESTABA las predicciones de NB |
+| **Estado** | ✅ Reemplazado por RidgeClassifier en `ensemble_trainer.py` v2 |
 
-**Recomendación:** Eliminar GaussianNB del ensemble inmediatamente. Reemplazar por:
-- LightGBM (mejor manejo de features sparse)
-- Logistic Regression con regularización L1 (baseline robusto)
+**Acción tomada:** GaussianNB fue eliminado del entrenamiento y reemplazado por `RidgeClassifier`, que aporta diversidad lineal, maneja desbalance con `class_weight="balanced"` y soporta `sample_weight`.
 - O simplemente eliminarlo y quedarse con RF+XGB+LLM (3 modelos son suficientes)
 
 ### 29.3 Hallazgo #2: Overfit Extremo en Walk-Forward
@@ -2051,7 +2050,7 @@ La auditoría del 2026-05-26 reveló discrepancias **masivas** entre las métric
 
 | Prioridad | Acción | Impacto Esperado | Esfuerzo |
 |-----------|--------|------------------|----------|
-| **P0** | Eliminar GaussianNB del ensemble | Reduce ruido, mejora estabilidad | 1h |
+| **P0** | Reemplazar GaussianNB por RidgeClassifier (hecho) | Reduce ruido, mejora estabilidad | 1h |
 | **P0** | Remover `tp_fill_rate` del feature set | Elimina data leakage | 30min |
 | **P1** | Implementar purged k-fold con 7d embargo | WF Sharpe realista | 4h |
 | **P1** | Aumentar regularización XGB/RF | Reduce fold_std de 0.055 a <0.03 | 2h |

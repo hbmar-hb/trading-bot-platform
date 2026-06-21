@@ -10,6 +10,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
+
+# Fecha de corte: solo usamos señales generadas por el motor actual.
+CLEAN_CUTOFF = datetime(2026, 6, 10, tzinfo=timezone.utc)
 from typing import TYPE_CHECKING
 
 from sqlalchemy import desc, select, func
@@ -62,6 +65,7 @@ def compute_confidence_decay(
                 "SUCCESS", "FAILURE", "FAILURE_MAX_ADVERSE", "FAILURE_BEHAVIORAL"
             ]),
             AISignal.success_probability.isnot(None),
+            AISignal.created_at >= CLEAN_CUTOFF,
         )
         .order_by(desc(AISignal.created_at))
         .limit(window_size)

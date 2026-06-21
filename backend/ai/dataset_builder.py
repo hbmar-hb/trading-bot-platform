@@ -17,10 +17,16 @@ v2 — Added real-trade weighting:
 from __future__ import annotations
 
 import pandas as pd
+from datetime import datetime, timezone
 from loguru import logger
 
 from app.services.execution_analytics import get_profile_for_signal
 from ai.services.causal_feature_builder import CausalFeatureBuilder
+
+# Fecha de corte: solo usamos señales resueltas con el motor realista posterior a esta fecha.
+# Esto rompe la contaminación de métricas/trades del motor antiguo.
+CLEAN_CUTOFF = datetime(2026, 6, 10, tzinfo=timezone.utc)
+
 
 FEATURE_COLS = [
     "fvg_aligned_count",
@@ -110,6 +116,7 @@ def _get_signal_quality_map(db, target_timeframe: str | None = None) -> dict[str
         from sqlalchemy import func
 
         # Join Position → BotConfig → AISignal to get both real/paper status AND timeframe
+        # Filtramos por fecha de corte para no mezclar posiciones antiguas del motor viejo.
         rows = (
             db.query(
                 Position.extra_config["ai_signal_id"].astext.label("signal_id"),
@@ -119,6 +126,7 @@ def _get_signal_quality_map(db, target_timeframe: str | None = None) -> dict[str
             .join(BotConfig, Position.bot_id == BotConfig.id)
             .join(AISignal, AISignal.id == func.cast(Position.extra_config["ai_signal_id"].astext, AISignal.id.type))
             .filter(Position.extra_config["ai_signal_id"].isnot(None))
+            .filter(AISignal.created_at >= CLEAN_CUTOFF)
             .all()
         )
 
@@ -198,13 +206,15 @@ def build_dataset_with_metadata_sync(max_samples: int = 5000, target_timeframe: 
             db.query(AISignal)
             .filter(
                 AISignal.outcome.in_(["SUCCESS", "FAILURE_MAX_ADVERSE", "FAILURE_BEHAVIORAL", "CENSORED"]),
+                AISignal.realistic_outcome.isnot(None),
+                AISignal.resolved_at >= CLEAN_CUTOFF,
             )
         )
         if bot_ticker:
             query = query.filter(AISignal.ticker == bot_ticker)
         if bot_timeframe:
             query = query.filter(AISignal.timeframe == bot_timeframe)
-        
+
         rows = (
             query
             .order_by(AISignal.resolved_at.desc().nullslast())
