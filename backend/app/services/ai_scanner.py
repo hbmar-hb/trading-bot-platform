@@ -261,16 +261,26 @@ def build_signal(
         pass  # Model not ready or prediction failed — fall back to heuristic only
 
     # Pre-compute probabilities for shadow mode (recorded after DB commit)
+    # If dedicated shadow/candidate models are not available, fall back to the
+    # live success probability so shadow mode keeps recording predictions.
     shadow_success_prob = None
     candidate_prob = None
     try:
         if anti_fake_registry.model_ready():
             shadow_success_prob = anti_fake_registry.predict_calibrated_success_probability(result.features)
+    except Exception:
+        pass
+    if shadow_success_prob is None:
+        shadow_success_prob = success_prob
+
+    try:
         from ai.services import candidate_shadow_mode
         if candidate_shadow_mode.model_ready():
             candidate_prob = candidate_shadow_mode.predict_success_probability(result.features)
     except Exception:
         pass
+    if candidate_prob is None:
+        candidate_prob = success_prob
 
     # Evaluación 1: Apply regime-adjusted thresholds AFTER ensemble prediction
     try:
@@ -465,8 +475,10 @@ def record_shadow_for_signal(signal_id: str, result_dict: dict) -> None:
     never match.
     """
     if not signal_id or signal_id == "None":
+        logger.debug(f"[record_shadow_for_signal] skipped: signal_id={signal_id}")
         return
     probs = result_dict.get("_shadow_probs") or {}
+    logger.debug(f"[record_shadow_for_signal] signal_id={signal_id} probs={probs}")
     live = probs.get("live")
     shadow = probs.get("shadow")
     candidate = probs.get("candidate")

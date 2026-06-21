@@ -318,8 +318,9 @@ def _run_scan(scan_id: str) -> dict:
                     try:
                         from app.services.ai_scanner import record_shadow_for_signal
                         record_shadow_for_signal(str(sig.id), result_dict)
-                    except Exception:
-                        pass
+                        logger.debug(f"[AI SCAN] {sym}/{tf}: shadow predictions recorded for {sig.id}")
+                    except Exception as exc:
+                        logger.warning(f"[AI SCAN] {sym}/{tf}: failed to record shadow predictions: {exc}")
                     signals += 1
                     from app.tasks.bot_activator_task import activate_signal
                     activate_signal.delay(str(sig.id))
