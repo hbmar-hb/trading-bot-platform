@@ -23,7 +23,9 @@ from app.services.local_llm_client import (
     answer_question,
     generate_summary_stream,
     answer_question_stream,
+    _UNAVAILABLE_MESSAGE,
 )
+from app.services.faq_service import answer_faq
 from app.models.bot_config import BotConfig
 
 
@@ -267,6 +269,20 @@ async def answer_engine_question(question: str) -> dict:
 
     try:
         answer, model_used = await answer_question(prompt)
+        # If the local LLM is unavailable and remote fallback is disabled,
+        # try a mechanical FAQ answer from the knowledge base.
+        if model_used == "local_unavailable":
+            faq_answer = answer_faq(question, allowed_sources=None, top_k=5)
+            if faq_answer and "No encontré información" not in faq_answer:
+                return {
+                    "question": question,
+                    "answer": faq_answer,
+                    "model_used": "faq",
+                    "metrics_snapshot": metrics,
+                    "generated_at": datetime.now(timezone.utc).isoformat(),
+                }
+            answer = "El asistente de IA local no está disponible en este momento. Inténtalo más tarde."
+            model_used = "unavailable"
         return {
             "question": question,
             "answer": answer,
@@ -344,6 +360,7 @@ async def answer_engine_question_stream(question: str) -> AsyncIterator[str]:
 
     prompt = _build_question_prompt(metrics, question)
     accumulated = ""
+    local_unavailable = False
     try:
         async for event in answer_question_stream(prompt):
             if event["event"] == "token":
@@ -358,10 +375,29 @@ async def answer_engine_question_stream(question: str) -> AsyncIterator[str]:
                     "generated_at": datetime.now(timezone.utc).isoformat(),
                 })
             elif event["event"] == "error":
-                yield _sse_event("error", {"message": event.get("message", "Error desconocido")})
+                if _UNAVAILABLE_MESSAGE in event.get("message", ""):
+                    local_unavailable = True
+                else:
+                    yield _sse_event("error", {"message": event.get("message", "Error desconocido")})
     except Exception as exc:
         logger.warning(f"[engine_narrator] Question stream failed: {exc}")
         yield _sse_event("error", {"message": str(exc)})
+        return
+
+    if local_unavailable:
+        faq_answer = answer_faq(question, allowed_sources=None, top_k=5)
+        if faq_answer and "No encontré información" not in faq_answer:
+            for word in faq_answer.split():
+                yield _sse_event("token", {"content": word + " "})
+            yield _sse_event("answer", {
+                "question": question,
+                "answer": faq_answer,
+                "model_used": "faq",
+                "metrics_snapshot": metrics,
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+            })
+        else:
+            yield _sse_event("error", {"message": _UNAVAILABLE_MESSAGE})
 
 
 def _sse_event(event: str, data: dict) -> str:

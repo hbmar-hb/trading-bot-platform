@@ -25,6 +25,7 @@ from app.services.engine_narrator import (
     answer_engine_question,
     answer_engine_question_stream,
 )
+from app.services.faq_service import answer_faq
 from app.services.knowledge_service import search_knowledge
 from config.settings import settings
 
@@ -183,6 +184,16 @@ def _source_scope_for_user(user: User) -> str:
     return "developer" if _is_developer(user) else "phase1"
 
 
+def _faq_sources_for_user(user: User) -> list[str] | None:
+    """Return allowed knowledge sources for mechanical FAQ answers."""
+    return None if _is_developer(user) else _PHASE1_ALLOWED_SOURCES
+
+
+def _try_faq_reply(question: str, user: User) -> str:
+    """Return a documentation-based answer when the LLM is unavailable."""
+    return answer_faq(question, allowed_sources=_faq_sources_for_user(user), top_k=5)
+
+
 async def _persist_interaction(
     interaction_id: uuid.UUID,
     user_id: uuid.UUID,
@@ -238,6 +249,11 @@ async def assistant_message(
         response = await _assistant_message_remote(messages)
         model_used = settings.llm_default_model
 
+    # If the LLM failed, fall back to a mechanical FAQ answer from docs.
+    if response.reply in (_ERROR_LOCAL, _ERROR_REMOTE):
+        response = AssistantResponse(reply=_try_faq_reply(req.message, user))
+        model_used = "faq"
+
     latency_ms = int((time.perf_counter() - started_at) * 1000)
     await _persist_interaction(
         interaction_id=interaction_id,
@@ -251,6 +267,28 @@ async def assistant_message(
         extra_data={"messages": messages},
     )
     return AssistantResponse(reply=response.reply, interaction_id=interaction_id)
+
+
+@router.post("/faq", response_model=AssistantResponse)
+async def assistant_faq(
+    req: AssistantRequest,
+    user: User = Depends(get_current_authorized_user),
+) -> AssistantResponse:
+    """Return a mechanical, documentation-based answer without using an LLM."""
+    interaction_id = uuid.uuid4()
+    reply = _try_faq_reply(req.message, user)
+    await _persist_interaction(
+        interaction_id=interaction_id,
+        user_id=user.id,
+        question=req.message,
+        answer=reply,
+        source_scope=_source_scope_for_user(user),
+        model_used="faq",
+        was_streamed=False,
+        latency_ms=None,
+        extra_data={"faq": True},
+    )
+    return AssistantResponse(reply=reply, interaction_id=interaction_id)
 
 
 async def _assistant_message_local(messages: list[dict]) -> AssistantResponse:
@@ -313,6 +351,7 @@ async def assistant_message_stream(
     if _use_local_llm():
         return _assistant_stream_local(
             messages,
+            user=user,
             user_id=user.id,
             question=req.message,
             source_scope=source_scope,
@@ -322,6 +361,7 @@ async def assistant_message_stream(
         )
     return _assistant_stream_remote(
         messages,
+        user=user,
         user_id=user.id,
         question=req.message,
         source_scope=source_scope,
@@ -333,6 +373,7 @@ async def assistant_message_stream(
 
 def _assistant_stream_local(
     messages: list[dict],
+    user: User,
     user_id: uuid.UUID,
     question: str,
     source_scope: str,
@@ -379,7 +420,10 @@ def _assistant_stream_local(
                             continue
         except Exception as exc:
             logger.warning(f"[assistant/stream] local LLM call failed: {exc}")
-            yield f"event: error\ndata: {json.dumps({'error': _ERROR_LOCAL})}\n\n"
+            faq_reply = _try_faq_reply(question, user)
+            for word in faq_reply.split():
+                yield f"event: message\ndata: {json.dumps({'content': word + ' '})}\n\n"
+            yield "event: done\ndata: \n\n"
         finally:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
             await _persist_interaction(
@@ -400,6 +444,7 @@ def _assistant_stream_local(
 
 def _assistant_stream_remote(
     messages: list[dict],
+    user: User,
     user_id: uuid.UUID,
     question: str,
     source_scope: str,
@@ -420,7 +465,10 @@ def _assistant_stream_remote(
             yield "event: done\ndata: \n\n"
         except Exception as exc:
             logger.warning(f"[assistant/stream] remote LLM call failed: {exc}")
-            yield f"event: error\ndata: {json.dumps({'error': _ERROR_REMOTE})}\n\n"
+            faq_reply = _try_faq_reply(question, user)
+            for word in faq_reply.split():
+                yield f"event: message\ndata: {json.dumps({'content': word + ' '})}\n\n"
+            yield "event: done\ndata: \n\n"
         finally:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
             await _persist_interaction(
