@@ -5,6 +5,7 @@ Ruta pública (sin JWT) — autenticada por webhook_secret por bot.
 Debe responder en < 3 segundos o TradingView reintenta.
 Toda la lógica pesada va al Celery task.
 """
+import asyncio
 import hashlib
 from loguru import logger
 import hmac
@@ -269,7 +270,8 @@ async def _process_webhook_signal(
             f"[WEBHOOK] Notificando señal {bot.symbol} {action} a Telegram "
             f"(destino: {telegram_target})"
         )
-        notify_webhook_signal(
+        await asyncio.to_thread(
+            notify_webhook_signal,
             symbol=bot.symbol,
             action=action,
             price=price,
@@ -277,10 +279,17 @@ async def _process_webhook_signal(
             chat_id=bot.telegram_chat_id,
             thread_id=bot.telegram_thread_id,
             alerts_only=getattr(bot, "alerts_only", False),
+            timeframe=bot.timeframe,
+            bot_name=bot.bot_name,
         )
 
     # ─── Modo solo alertas: no ejecutar trades ─────────────────
     if getattr(bot, "alerts_only", False):
+        signal_log.processed = True
+        signal_log.processed_at = received_at
+        trading_signal.status = "ignored"
+        trading_signal.processed_at = received_at
+        await db.commit()
         return {
             "status": "accepted_alert",
             "signal_id": str(signal_log.id),

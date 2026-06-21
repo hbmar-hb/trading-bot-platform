@@ -27,6 +27,7 @@ function QualityBadge({ tier, status, successProbability }) {
   const map = {
     STRONG: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400',
     MODERATE: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400',
+    MEDIUM: 'bg-yellow-100 text-yellow-700 dark:bg-yellow-500/20 dark:text-yellow-400',
     WEAK:   'bg-orange-100 text-orange-700 dark:bg-orange-500/20 dark:text-orange-400',
   }
   return (
@@ -45,8 +46,6 @@ function QualityBadge({ tier, status, successProbability }) {
 function buildRejectionReason(result) {
   const ctx = result?.context || {}
 
-  if (ctx.reason && typeof ctx.reason === 'string') return ctx.reason
-
   if (ctx.gate) {
     const gateMap = {
       HTF_CONFLICT: 'Conflicto HTF — dirección contraria al sesgo macro',
@@ -60,11 +59,7 @@ function buildRejectionReason(result) {
     return gateMap[ctx.gate] || `Gate bloqueado: ${ctx.gate}`
   }
 
-  if (ctx.circuit_breaker) return 'Circuit breaker abierto — escaneo pausado'
-  if (ctx.market_quality) return `Calidad de mercado baja: ${ctx.market_quality}`
-  if (ctx.htf_conflict) return `Conflicto HTF — sesgo alto ${ctx.htf_conflict} contrario`
-  if (ctx.macro_blocked) return `Contexto macro adverso: ${(ctx.macro_warnings || []).join(', ') || 'restricción general'}`
-  if (ctx.regime_blocked) return `Régimen de mercado desfavorable: ${ctx.regime_reason || ''}`
+  if (ctx.reason) return ctx.reason
 
   // Heuristic fallbacks based on context fields
   if (ctx.pd_position != null) {
@@ -94,8 +89,6 @@ export default function IAWatchlistCard({
   const { symbol, timeframe, resolved_timeframe } = entry
   const status = result?.status
   const isSignal = status === 'SIGNAL'
-  const isError = status === 'ERROR'
-  const isNoSignal = !isSignal && !isError && !!result
   const hasAiBot = aiBotNames?.length > 0
   const direction = result?.direction
 
@@ -205,7 +198,7 @@ export default function IAWatchlistCard({
       )}
 
       {/* NO SIGNAL state — prominently show WHY it was discarded */}
-      {!scanning && isNoSignal && (
+      {!scanning && status === 'NO_SIGNAL' && (
         <div className="space-y-2">
           {/* Rejection reason — BIG and clear */}
           <div className="flex items-start gap-2">

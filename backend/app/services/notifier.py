@@ -5,10 +5,14 @@ Servicio de notificaciones: Telegram y Discord.
 - Las versiones async se usan directamente con httpx si se necesitan desde FastAPI
 """
 import html
+import time
 import httpx
 from loguru import logger
 
 from config.settings import settings
+
+_TELEGRAM_MAX_RETRIES = 3
+_TELEGRAM_RETRY_DELAY = 2  # seconds between retries
 
 
 def _telegram_url(bot_token: str | None = None) -> str:
@@ -23,7 +27,7 @@ def send_telegram_sync(
     level: str = "essential",
     bot_token: str | None = None,
 ) -> None:
-    """Envía un mensaje a Telegram. Si chat_id es None, usa el global.
+    """Envía un mensaje a Telegram con reintentos automáticos.
 
     level: "essential" (trades, circuit breaker, kill switch) or "verbose" (errors, rejections, alerts).
     When TELEGRAM_NOTIFY_LEVEL=essential, verbose messages are skipped.
@@ -46,15 +50,50 @@ def send_telegram_sync(
     }
     if thread_id is not None:
         payload["message_thread_id"] = thread_id
-    try:
-        resp = httpx.post(
-            _telegram_url(token),
-            json=payload,
-            timeout=5,
-        )
-        resp.raise_for_status()
-    except Exception as exc:
-        logger.warning(f"Telegram error: {exc}")
+
+    url = _telegram_url(token)
+    last_exc: Exception | None = None
+
+    for attempt in range(1, _TELEGRAM_MAX_RETRIES + 1):
+        try:
+            resp = httpx.post(url, json=payload, timeout=8)
+            resp.raise_for_status()
+            data = resp.json()
+            if not data.get("ok"):
+                err_code = data.get("error_code")
+                description = data.get("description", "")
+                # Rate-limit: wait and retry
+                if err_code == 429:
+                    retry_after = data.get("parameters", {}).get("retry_after", _TELEGRAM_RETRY_DELAY)
+                    logger.warning(
+                        f"[Telegram] Rate limit (intento {attempt}/{_TELEGRAM_MAX_RETRIES}), "
+                        f"reintentando en {retry_after}s"
+                    )
+                    time.sleep(retry_after)
+                    continue
+                logger.error(
+                    f"[Telegram] Mensaje rechazado (chat={target_chat_id} thread={thread_id} "
+                    f"intento={attempt}): {err_code} — {description}"
+                )
+                return
+            msg_id = data["result"]["message_id"]
+            logger.info(
+                f"[Telegram] ✓ msg_id={msg_id} chat={target_chat_id} thread={thread_id}"
+            )
+            return
+        except Exception as exc:
+            last_exc = exc
+            if attempt < _TELEGRAM_MAX_RETRIES:
+                logger.warning(
+                    f"[Telegram] Error en intento {attempt}/{_TELEGRAM_MAX_RETRIES} "
+                    f"(chat={target_chat_id} thread={thread_id}): {exc} — reintentando en {_TELEGRAM_RETRY_DELAY}s"
+                )
+                time.sleep(_TELEGRAM_RETRY_DELAY)
+            else:
+                logger.error(
+                    f"[Telegram] Fallo definitivo tras {_TELEGRAM_MAX_RETRIES} intentos "
+                    f"(chat={target_chat_id} thread={thread_id}): {last_exc}"
+                )
 
 
 def send_discord_sync(message: str) -> None:
@@ -421,12 +460,15 @@ def notify_webhook_signal(
     chat_id: str | None = None,
     thread_id: int | None = None,
     alerts_only: bool = False,
+    timeframe: str | None = None,
+    bot_name: str | None = None,
 ) -> None:
     """Notifica una señal recibida desde TradingView webhook.
 
     Formato:
         📣 Nueva señal
         📌 BTC/USDT:USDT • 🔴 SHORT (SELL) QUANTUM
+        ⏱ Temporalidad: 15m
         💰 Entry: 62778.3000
 
     Las señales de webhook se envían siempre con QUANTUM BOT NOTIFIER.
@@ -437,12 +479,16 @@ def notify_webhook_signal(
     side_label = "LONG (BUY)" if action == "long" else "SHORT (SELL)"
     strategy_label = f" {strategy}" if strategy else ""
 
+    tf_line = f"\n⏱ Temporalidad: {timeframe}" if timeframe else ""
     price_line = f"\n💰 Entry: {price:.4f}" if price else ""
+    bot_line = f"\n🤖 Bot: {bot_name}" if bot_name else ""
 
     msg = (
         f"📣 <b>Nueva señal</b>\n"
         f"📌 {symbol} • {emoji} {side_label}{strategy_label}"
+        f"{tf_line}"
         f"{price_line}"
+        f"{bot_line}"
     )
     # Las señales van siempre por QUANTUM BOT NOTIFIER.
     bot_token = settings.quantum_bot_token

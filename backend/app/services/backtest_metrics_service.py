@@ -23,6 +23,8 @@ def _calc_metrics(rows: list) -> dict:
     for r in rows:
         pnl = r.realistic_pnl_pct
         if pnl is None:
+            pnl = r.pnl_pct
+        if pnl is None:
             continue
         if pnl > 0:
             wins += 1

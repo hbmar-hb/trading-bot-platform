@@ -1,5 +1,7 @@
 # Guia de Migracion a Hetzner Cloud
 
+> **Nota:** Los precios, nombres de servidor y dominios de ejemplo (p. ej. `tudominio.com`, `trading.tudominio.com`, CPX21 a 7,50 EUR/mes) son **orientativos** y pueden haber cambiado. Ajusta IPs, dominios y tarifas a tu situación real antes de seguir la guía.
+
 ## Resumen
 Migrar Trading Bot Platform desde tu PC Windows local a un VPS en Hetzner Cloud.
 

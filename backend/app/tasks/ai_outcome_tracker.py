@@ -187,9 +187,9 @@ async def _track_async() -> dict:
                 )
             except Exception as sim_exc:
                 logger.warning(f"[AI Tracker] Realistic simulation failed for {sig.ticker}: {sim_exc}")
-                # Fase 2: no ideal fallback. Realistic label stays None.
-                realistic_outcome = None
-                realistic_pnl = None
+                # Fallback: copy ideal outcome
+                realistic_outcome = outcome
+                realistic_pnl = pnl
 
             if outcome:
                 near_miss = None
@@ -436,10 +436,9 @@ async def _update_outcome(
 
             # CATR: actualizar thresholds contextuales con resultado real
             try:
-                catr_outcome = realistic_outcome if realistic_outcome is not None else outcome
                 catr_pnl = realistic_pnl if realistic_pnl is not None else pnl
                 if catr_pnl is not None:
-                    update_catr_from_signal(sig, catr_outcome, catr_pnl)
+                    update_catr_from_signal(sig, outcome, catr_pnl)
             except Exception:
                 pass  # Never fail because of CATR
 
@@ -449,7 +448,7 @@ async def _update_outcome(
                 cb = CircuitBreaker()
                 success_prob = sig.success_probability
                 if success_prob is not None:
-                    cb.record(predicted_prob=success_prob, actual_outcome=(realistic_outcome if realistic_outcome is not None else outcome))
+                    cb.record(predicted_prob=success_prob, actual_outcome=outcome)
             except Exception:
                 pass  # Never fail because of circuit breaker
 
@@ -457,30 +456,17 @@ async def _update_outcome(
             try:
                 from ai.services.shadow_mode import ShadowDeployer
                 sd = ShadowDeployer()
-                sd.resolve(str(sig.id), realistic_outcome if realistic_outcome is not None else outcome, realistic_pnl if realistic_pnl is not None else pnl)
+                sd.resolve(str(sig.id), outcome, pnl)
             except Exception:
                 pass  # Never fail because of shadow mode
 
-            # Fase D: resolve candidate shadow prediction with actual outcome
-            try:
-                from ai.services.candidate_shadow_mode import resolve_candidate_shadow
-                resolve_candidate_shadow(
-                    str(sig.id),
-                    realistic_outcome if realistic_outcome is not None else outcome,
-                    realistic_pnl if realistic_pnl is not None else pnl,
-                )
-            except Exception:
-                pass  # Never fail because of candidate shadow mode
-
-        # Enrich associated LLM diagnoses with final realistic outcome when available
+        # Enrich associated LLM diagnoses with final outcome
         try:
             from sqlalchemy import update
-            llm_outcome = realistic_outcome if realistic_outcome is not None else outcome
-            llm_pnl = realistic_pnl if realistic_pnl is not None else pnl
             await db.execute(
                 update(LLMSignalDiagnosis)
                 .where(LLMSignalDiagnosis.ai_signal_id == signal_id)
-                .values(outcome=llm_outcome, pnl_pct=llm_pnl, resolved_at=now)
+                .values(outcome=outcome, pnl_pct=pnl, resolved_at=now)
             )
             await db.commit()
         except Exception:

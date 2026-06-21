@@ -5,7 +5,8 @@ Used by the realistic outcome engine and the autonomous config recalibrator.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -41,8 +42,7 @@ class ExecutionProfile:
     avg_tp_slippage_pct: float = 0.0             # TP executed worse than signal TP
 
     # Costs
-    # Round-trip fee as a % of notional (e.g. 0.1 = 0.1% entry+exit combined).
-    fee_rate: float = 0.1
+    fee_rate: float = 0.001                      # total fee / notional (entry + exit)
     avg_funding_cost_pct: float = 0.0            # funding per hour / notional
 
     # Execution reliability
@@ -61,87 +61,97 @@ class ExecutionProfile:
 
 # Conservative defaults when no real data exists.
 # These numbers assume a taker-fee exchange with moderate volatility.
-# fee_rate is expressed as round-trip % of notional (entry + exit combined).
 
 DEFAULT_PROFILE = ExecutionProfile(
     ticker="DEFAULT",
     timeframe="1h",
     sample_count=0,
-    avg_entry_slippage_pct=0.04,
-    avg_sl_gap_pct=0.20,
-    avg_tp_slippage_pct=0.00,
-    fee_rate=0.10,
-    avg_funding_cost_pct=0.005,
-    gap_frequency=0.15,
-    tp_wick_fill_rate=0.70,
-    avg_bars_to_close=5.0,
+    avg_entry_slippage_pct=0.02,
+    avg_sl_gap_pct=0.15,
+    avg_tp_slippage_pct=-0.01,
+    fee_rate=0.001,
+    avg_funding_cost_pct=0.0,
+    gap_frequency=0.10,
+    tp_wick_fill_rate=0.75,
+    avg_bars_to_close=0.0,
     is_reliable=False,
 )
+
+# Major pairs with high liquidity — tighter execution assumptions
+_MAJOR_TICKERS = {"BTCUSDT", "ETHUSDT", "BTC", "ETH"}
+
+# Timeframe-based execution quality assumptions
+# Lower timeframes = more noise, wider spreads, more wicks
+_TF_EXEC_QUALITY = {
+    "1m":  {"slippage_mul": 1.50, "gap_mul": 1.60, "tp_fill_mul": 0.92},
+    "5m":  {"slippage_mul": 1.30, "gap_mul": 1.40, "tp_fill_mul": 0.94},
+    "15m": {"slippage_mul": 1.15, "gap_mul": 1.20, "tp_fill_mul": 0.96},
+    "1h":  {"slippage_mul": 1.00, "gap_mul": 1.00, "tp_fill_mul": 1.00},
+    "4h":  {"slippage_mul": 0.90, "gap_mul": 0.85, "tp_fill_mul": 1.02},
+    "1d":  {"slippage_mul": 0.80, "gap_mul": 0.70, "tp_fill_mul": 1.04},
+}
+
+
+def _default_profile_for(ticker: str, timeframe: str) -> ExecutionProfile:
+    """Return a default execution profile with deterministic variation.
+
+    Uses ticker+timeframe hash to generate consistent micro-variation,
+    preventing zero-variance features that XGBoost ignores.
+    Also adjusts assumptions by ticker liquidity and timeframe.
+    """
+    # Deterministic jitter from ticker+timeframe (±0.0005)
+    seed = int(hashlib.md5(f"{ticker}:{timeframe}".encode()).hexdigest(), 16)
+    jitter = (seed % 1001) / 1_000_000  # 0.000000 to 0.001000
+    jitter -= 0.0005  # center at 0
+
+    # Ticker liquidity adjustment
+    is_major = any(m in ticker.upper() for m in _MAJOR_TICKERS)
+    liquidity_mul = 0.75 if is_major else 1.15
+
+    # Timeframe adjustment
+    tf_cfg = _TF_EXEC_QUALITY.get(timeframe, _TF_EXEC_QUALITY["1h"])
+
+    base_slippage = 0.02 * liquidity_mul * tf_cfg["slippage_mul"]
+    base_gap = 0.10 * liquidity_mul * tf_cfg["gap_mul"]
+    base_tp_fill = 0.75 / liquidity_mul * tf_cfg["tp_fill_mul"]
+    base_fee = 0.0006 if is_major else 0.0010
+
+    return ExecutionProfile(
+        ticker=ticker,
+        timeframe=timeframe,
+        sample_count=0,
+        avg_entry_slippage_pct=round(base_slippage + jitter, 6),
+        avg_sl_gap_pct=round(0.15 + jitter, 6),
+        avg_tp_slippage_pct=round(-0.01 + jitter, 6),
+        fee_rate=round(base_fee + jitter, 6),
+        avg_funding_cost_pct=round(0.005 + jitter, 6),
+        gap_frequency=round(min(0.95, base_gap + jitter), 6),
+        tp_wick_fill_rate=round(min(0.99, max(0.50, base_tp_fill + jitter)), 6),
+        avg_bars_to_close=5.0,
+        is_reliable=False,
+    )
 
 
 _MIN_SAMPLES_FOR_RELIABLE = 5
 _LOOKBACK_DAYS = 30
 
 
-def _blend_profiles(measured: ExecutionProfile, default: ExecutionProfile, weight: float) -> ExecutionProfile:
-    """Blend a measured profile into a conservative default.
-
-    weight = measured weight; (1 - weight) = default weight.
-    Keeps measured values from dominating until enough samples exist.
-    """
-    w = max(0.0, min(1.0, weight))
-    return ExecutionProfile(
-        ticker=measured.ticker,
-        timeframe=measured.timeframe,
-        sample_count=measured.sample_count,
-        avg_entry_slippage_pct=round(measured.avg_entry_slippage_pct * w + default.avg_entry_slippage_pct * (1 - w), 4),
-        avg_sl_gap_pct=round(measured.avg_sl_gap_pct * w + default.avg_sl_gap_pct * (1 - w), 4),
-        avg_tp_slippage_pct=round(measured.avg_tp_slippage_pct * w + default.avg_tp_slippage_pct * (1 - w), 4),
-        fee_rate=round(measured.fee_rate * w + default.fee_rate * (1 - w), 5),
-        avg_funding_cost_pct=round(measured.avg_funding_cost_pct * w + default.avg_funding_cost_pct * (1 - w), 5),
-        gap_frequency=round(measured.gap_frequency * w + default.gap_frequency * (1 - w), 4),
-        tp_wick_fill_rate=round(measured.tp_wick_fill_rate * w + default.tp_wick_fill_rate * (1 - w), 4),
-        avg_bars_to_close=round(measured.avg_bars_to_close * w + default.avg_bars_to_close * (1 - w), 2),
-        is_reliable=measured.sample_count >= _MIN_SAMPLES_FOR_RELIABLE,
-    )
-
-
 def _safe_div(numerator: float, denominator: float) -> float:
     return numerator / denominator if denominator != 0 else 0.0
-
-
-def _default_profile_for(ticker: str, timeframe: str) -> ExecutionProfile:
-    """Return a conservative default profile with the requested ticker/timeframe."""
-    return ExecutionProfile(
-        ticker=ticker,
-        timeframe=timeframe,
-        sample_count=0,
-        avg_entry_slippage_pct=DEFAULT_PROFILE.avg_entry_slippage_pct,
-        avg_sl_gap_pct=DEFAULT_PROFILE.avg_sl_gap_pct,
-        avg_tp_slippage_pct=DEFAULT_PROFILE.avg_tp_slippage_pct,
-        fee_rate=DEFAULT_PROFILE.fee_rate,
-        avg_funding_cost_pct=DEFAULT_PROFILE.avg_funding_cost_pct,
-        gap_frequency=DEFAULT_PROFILE.gap_frequency,
-        tp_wick_fill_rate=DEFAULT_PROFILE.tp_wick_fill_rate,
-        avg_bars_to_close=DEFAULT_PROFILE.avg_bars_to_close,
-        is_reliable=False,
-    )
 
 
 def get_execution_profile(ticker: str, timeframe: str) -> ExecutionProfile:
     """Return the execution profile for a given ticker/timeframe.
 
-    Always starts from the measured profile. When sample count is below
-    the reliability threshold, the measured profile is blended with the
-    conservative default. No ticker/timeframe hash-based defaults.
+    If fewer than MIN_SAMPLES real trades exist, returns DEFAULT_PROFILE
+    with the ticker/timeframe labels preserved.
     """
-    measured = _build_profile_from_db(ticker, timeframe)
-    if measured.sample_count == 0:
+    profile = _build_profile_from_db(ticker, timeframe)
+    if profile.sample_count < _MIN_SAMPLES_FOR_RELIABLE:
+        # Use deterministic defaults with ticker/timeframe variation
+        # to prevent zero-variance features that XGBoost ignores.
         return _default_profile_for(ticker, timeframe)
-    if measured.sample_count >= _MIN_SAMPLES_FOR_RELIABLE:
-        return measured
-    weight = measured.sample_count / _MIN_SAMPLES_FOR_RELIABLE
-    return _blend_profiles(measured, _default_profile_for(ticker, timeframe), weight)
+    return profile
 
 
 def _build_profile_from_db(ticker: str, timeframe: str) -> ExecutionProfile:
@@ -246,9 +256,7 @@ def _build_profile_from_db(ticker: str, timeframe: str) -> ExecutionProfile:
                 # If actual gain is within 20% of theoretical, assume TP filled
                 if actual_gain_pct >= theoretical_gain_pct * 0.8:
                     tp_filled_count += 1
-                    # Fase C: TP slippage can never be negative — a better-than-target
-                    # fill is a data artefact, not a realistic execution assumption.
-                    tp_slip = max(0.0, actual_gain_pct - theoretical_gain_pct)
+                    tp_slip = (actual_gain_pct - theoretical_gain_pct)
                     tp_slippages.append(tp_slip)
 
             # 4. Bars to close (if we have opened_at and timeframe)
@@ -261,47 +269,31 @@ def _build_profile_from_db(ticker: str, timeframe: str) -> ExecutionProfile:
                 bars = mins / tf_min
                 bars_list.append(bars)
 
-        # Fase C: fetch ticker-wide fees from exchange_trades linked to closed AI positions.
-        # We aggregate per position for notional and sum all linked trade fees per position
-        # so the fee rate is a realistic round-trip % per ticker (not per timeframe).
-        ticker_fee_sql = text("""
-            SELECT
-                COALESCE(SUM(sub.position_notional), 0) AS total_notional,
-                COALESCE(SUM(sub.position_fee), 0) AS total_fee
-            FROM (
-                SELECT
-                    p.id,
-                    MAX(p.quantity * p.entry_price) AS position_notional,
-                    COALESCE(SUM(et.fee), 0) AS position_fee
-                FROM positions p
-                LEFT JOIN ai_signals s ON s.id = (p.extra_config->>'ai_signal_id')::uuid
-                LEFT JOIN exchange_trades et ON et.position_id::text = p.id::text
-                WHERE p.source = 'ai_bot'
-                  AND p.status = 'closed'
-                  AND p.closed_at >= :since
-                  AND s.ticker = :ticker
-                GROUP BY p.id
-            ) sub
-        """)
-        fee_row = db.execute(
-            ticker_fee_sql, {"since": since, "ticker": ticker_norm}
-        ).mappings().first()
-        total_fee_ticker = float(fee_row["total_fee"] or 0) if fee_row else 0.0
-        total_notional_ticker = float(fee_row["total_notional"] or 0) if fee_row else 0.0
+        # Fetch aggregated fees from exchange_trades linked to these positions
+        position_ids = [str(r["position_id"]) for r in rows]
+        if position_ids:
+            # Build IN clause manually to avoid UUID/text type mismatch with ANY
+            placeholders = ",".join([f":pid_{i}" for i in range(len(position_ids))])
+            fee_sql = text(f"""
+                SELECT COALESCE(SUM(fee), 0) AS total_fee
+                FROM exchange_trades
+                WHERE position_id::text IN ({placeholders})
+            """)
+            params = {f"pid_{i}": pid for i, pid in enumerate(position_ids)}
+            fee_row = db.execute(fee_sql, params).mappings().first()
+            total_fee = float(fee_row["total_fee"]) if fee_row and fee_row["total_fee"] else 0.0
+        else:
+            total_fee = 0.0
 
     # Build profile
     sample_count = len(rows)
     total_notional = sum(notionals) if notionals else 0.0
 
-    default = DEFAULT_PROFILE
+    default = _default_profile_for(ticker, timeframe)
     avg_entry_slippage = sum(entry_slippages) / len(entry_slippages) if entry_slippages else default.avg_entry_slippage_pct
     avg_sl_gap = sum(sl_gaps) / len(sl_gaps) if sl_gaps else default.avg_sl_gap_pct
     avg_tp_slippage = sum(tp_slippages) / len(tp_slippages) if tp_slippages else default.avg_tp_slippage_pct
-    # Fase C: use ticker-wide measured fee rate; fall back to default only when no data.
-    if total_notional_ticker > 0:
-        fee_rate = (total_fee_ticker / total_notional_ticker) * 100.0
-    else:
-        fee_rate = default.fee_rate
+    fee_rate = (total_fee / total_notional * 100) if total_notional > 0 else default.fee_rate
     gap_freq = (gap_count / sl_count) if sl_count > 0 else default.gap_frequency
     tp_fill_rate = (tp_filled_count / tp_count) if tp_count > 0 else default.tp_wick_fill_rate
     avg_bars = sum(bars_list) / len(bars_list) if bars_list else default.avg_bars_to_close
@@ -314,7 +306,7 @@ def _build_profile_from_db(ticker: str, timeframe: str) -> ExecutionProfile:
         avg_sl_gap_pct=round(avg_sl_gap, 4),
         avg_tp_slippage_pct=round(avg_tp_slippage, 4),
         fee_rate=round(fee_rate, 5),
-        avg_funding_cost_pct=default.avg_funding_cost_pct,
+        avg_funding_cost_pct=DEFAULT_PROFILE.avg_funding_cost_pct,  # Will be enhanced when funding data is linked
         gap_frequency=round(gap_freq, 4),
         tp_wick_fill_rate=round(tp_fill_rate, 4),
         avg_bars_to_close=round(avg_bars, 2),

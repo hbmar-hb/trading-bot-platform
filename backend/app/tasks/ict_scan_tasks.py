@@ -124,8 +124,8 @@ async def _scan_bot(bot) -> bool:
     interval_m = int(getattr(bot, 'trigger_interval_minutes', 5) or 5)
     min_confirm = int(getattr(bot, 'min_confirm_candles', 1) or 1)
 
-    if indicator not in ("ict", "quantum_gold"):
-        logger.debug(f"[ICT] Bot {bot.bot_name}: indicador '{indicator}' no soportado aún")
+    if indicator != "ict":
+        logger.debug(f"[ICT] Bot {bot.bot_name}: indicador '{indicator}' no soportado")
         return False
 
     candle_secs = _TIMEFRAME_SECONDS.get(scan_tf, 3600)
@@ -185,36 +185,7 @@ async def _scan_bot(bot) -> bool:
     else:
         analysis_candles = candles[:-1]      # solo velas cerradas
 
-    if indicator == "quantum_gold":
-        from app.engines.quantum_gold_engine import analyze as qg_analyze
-        qg_cfg = bot.ict_config or {}   # reutilizamos ict_config para params QG
-        result = qg_analyze(
-            analysis_candles,
-            ema_fast           = int(qg_cfg.get("ema_fast",           9)),
-            ema_mid            = int(qg_cfg.get("ema_mid",            21)),
-            ema_slow           = int(qg_cfg.get("ema_slow",           50)),
-            ema_trend          = int(qg_cfg.get("ema_trend",         200)),
-            st_atr_len         = int(qg_cfg.get("st_atr_len",         10)),
-            st_factor          = float(qg_cfg.get("st_factor",        3.0)),
-            bb_len             = int(qg_cfg.get("bb_len",             20)),
-            bb_std             = float(qg_cfg.get("bb_std",           2.0)),
-            bb_sqz_threshold   = float(qg_cfg.get("bb_sqz_threshold", 0.9)),
-            rsi_len            = int(qg_cfg.get("rsi_len",            14)),
-            rsi_bull_lo        = int(qg_cfg.get("rsi_bull_lo",        52)),
-            rsi_bull_hi        = int(qg_cfg.get("rsi_bull_hi",        68)),
-            rsi_bear_lo        = int(qg_cfg.get("rsi_bear_lo",        32)),
-            rsi_bear_hi        = int(qg_cfg.get("rsi_bear_hi",        48)),
-            vol_len            = int(qg_cfg.get("vol_len",            20)),
-            vol_mult           = float(qg_cfg.get("vol_mult",         1.4)),
-            atr_len            = int(qg_cfg.get("atr_len",            14)),
-            tp_mult            = float(qg_cfg.get("tp_mult",          2.0)),
-            sl_mult            = float(qg_cfg.get("sl_mult",          1.0)),
-            use_trend_filter   = bool(qg_cfg.get("use_trend_filter",  True)),
-            min_atr_filter     = float(qg_cfg.get("min_atr_filter",   3.0)),
-            use_sess           = bool(qg_cfg.get("use_sess",          True)),
-        )
-    else:
-        result = analyze(analysis_candles, pivot_len, atr_mult, atr_len, entry_mode)
+    result = analyze(analysis_candles, pivot_len, atr_mult, atr_len, entry_mode)
 
     # Actualizar timestamp de último escaneo
     ttl = int(sub_interval_secs * 3)

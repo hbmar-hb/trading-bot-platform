@@ -27,14 +27,11 @@ from loguru import logger
 from app.core.ict_engine import ICTResult, analyze as ict_analyze
 from app.engines.smc_engine import SMCContext, analyze_smc, compute_atr, compute_adx
 from app.engines.adaptive_trend_engine import analyze_adaptive_trend
-from app.engines.dynamic_risk_builder import build_levels as build_dynamic_levels
-from app.engines.smc_macro_engine import build_macro_features
 
 _ADX_TREND_THRESHOLD = 25.0  # below this → ranging market
 
 # V2.1 maximum confluence score (CHoCH 20 + OB 12 + FVG 8 + Sweep 25 + PD 15 + HTF 20)
-# Used to normalize scores to the 0-100 range.  Macro bonuses are added on top
-# and capped at 100 so signals without macro context are not penalised.
+# Used to normalize scores to the 0-100 range.
 _MAX_CONFLUENCE_ABS = 100.0
 
 # ── Adaptive weights ──────────────────────────────────────────────────────────
@@ -85,13 +82,7 @@ class ConfluenceResult:
     stop_loss:    float
     take_profit_1: float
     take_profit_2: float
-    take_profit_3: float | None = None
-    risk_reward:  float = 0.0  # TP1 R:R
-
-    # Confluence-aware dynamic risk plan
-    tp_levels: list[dict] = field(default_factory=list)
-    sl_basis: str = ""
-    tp1_basis: str = ""
+    risk_reward:  float  # TP1 R:R
 
     components: dict = field(default_factory=dict)
     features:   dict = field(default_factory=dict)
@@ -326,9 +317,6 @@ def analyze_confluence(
     signal_time: datetime | None = None,
     confluence_config: dict | None = None,
     htf_bias: str | None = None,
-    macro_context: dict | None = None,
-    candles_1d: list[list] | None = None,
-    candles_1w: list[list] | None = None,
 ) -> Optional[ConfluenceResult]:
     """
     Run ICT + SMC analysis and return a scored ConfluenceResult.
@@ -351,18 +339,6 @@ def analyze_confluence(
         return None
 
     smc = analyze_smc(candles, ict)
-
-    # Fase A: build SMC macro context from 1d/1w candles when available
-    if macro_context is None and candles_1d is not None:
-        macro_context = build_macro_features(
-            candles_1d=candles_1d,
-            candles_1w=candles_1w,
-            ict_ltf=ict,
-            entry_mid=(ict.entry_zone[0] + ict.entry_zone[1]) / 2.0,
-            direction=ict.signal,
-            pd_position=smc.pd_position,
-            candles_ltf=candles,
-        )
 
     df        = pd.DataFrame(candles)[["open", "high", "low", "close", "volume"]].astype(float)
     atr_val   = compute_atr(df, atr_len)
@@ -545,23 +521,6 @@ def analyze_confluence(
         logger.info(f"[CONFLUENCE] {ticker}/{timeframe}: MC high-confidence contradiction, signal suppressed")
         return None
 
-    # ── Fase A: SMC macro bonuses (soft, never a gate) ───────────────────────
-    macro_bonus = 0.0
-    if macro_context:
-        if macro_context.get("nwog_aligned"):
-            macro_bonus += 15.0
-            components["nwog_aligned"] = "NWOG alineado +15pts"
-        if macro_context.get("org_aligned"):
-            macro_bonus += 12.0
-            components["org_aligned"] = "ORG alineado +12pts"
-        if macro_context.get("bisi_present") or macro_context.get("sibi_present"):
-            macro_bonus += 12.0
-            components["bisi_sibi"] = "BISI/SIBI presente +12pts"
-        if macro_context.get("ifvg_present"):
-            macro_bonus += 8.0
-            components["ifvg"] = "IFVG confirmación +8pts"
-    score = min(100.0, score + macro_bonus)
-
     if score >= 60:
         confidence = "HIGH"
     elif score >= 40:
@@ -573,34 +532,139 @@ def analyze_confluence(
     ez  = ict.entry_zone
     mid = (ez[0] + ez[1]) / 2
 
-    # Dynamic SL/TP driven by confluence score + ICT+SMC structure.
-    # The old ATR/forward-level manual block is replaced by dynamic_risk_builder
-    # so that every signal leaves with a realistic minimum R-ratio.
-    plan = build_dynamic_levels(
-        entry_mid=mid,
-        direction=direction,
-        score=score,
-        quality_tier=None,  # quality is computed later; score drives the split
-        ict=ict,
-        atr_value=atr_val,
-        timeframe=timeframe,
-        min_r=1.2,
-        tp2_r=1.8,
-        tp3_r=2.5,
-    )
-    sl = plan.stop_loss
-    tp1 = plan.take_profit_1
-    tp2 = plan.take_profit_2
-    tp3 = plan.take_profit_3
-    rr = plan.risk_reward
-    risk = plan.risk_distance
-    tp1_source = plan.tp1_basis
-    tp2_source = plan.tp_levels[1].kind if len(plan.tp_levels) > 1 else "fallback"
+    # SL: ATR-based for LTF (15m/30m) to avoid noise-hits on micro EQ levels.
+    # For HTF (1h+) use structural EQ levels which represent real support/resistance.
+    # Evidence: PEPE 15m SL @ 0.003376 vs entry @ 0.003369 = 0.2% → impossible.
+    # Score+Timeframe aware SL multipliers: tighter for lower timeframes
+    _SL_ATR_MULT = {"15m": 1.5, "30m": 2.0, "1h": 2.0, "4h": 2.5}
+    atr_sl_mult = _SL_ATR_MULT.get(timeframe, None)
+
+    if is_long:
+        if atr_sl_mult is not None:
+            # LTF: force ATR-based SL, ignore micro EQ levels
+            sl = ez[0] - atr_val * atr_sl_mult
+            risk = mid - sl
+            if risk <= 0:
+                sl = mid * (1.0 - 0.01 * atr_sl_mult)
+                risk = mid - sl
+        else:
+            # HTF: structural EQ levels
+            valid_sl = [l for l in ict.eq_lows if l < mid] if ict.eq_lows else []
+            sl   = max(valid_sl) if valid_sl else ez[0] - atr_val * 2.0
+            risk = mid - sl
+            if risk <= 0:
+                sl   = mid * 0.99
+                risk = mid - sl
+    else:
+        if atr_sl_mult is not None:
+            # LTF: force ATR-based SL
+            sl = ez[1] + atr_val * atr_sl_mult
+            risk = sl - mid
+            if risk <= 0:
+                sl = mid * (1.0 + 0.01 * atr_sl_mult)
+                risk = sl - mid
+        else:
+            # HTF: structural EQ levels
+            valid_sl = [h for h in ict.eq_highs if h > mid] if ict.eq_highs else []
+            sl   = min(valid_sl) if valid_sl else ez[1] + atr_val * 2.0
+            risk = sl - mid
+            if risk <= 0:
+                sl   = mid * 1.01
+                risk = sl - mid
+
+    # TP1 / TP2: use forward structural levels (EQ, FVG) ahead of price
+    forward = ict.forward_levels
+    if len(forward) >= 2:
+        tp1 = forward[0].price
+        tp2 = forward[1].price
+        tp1_source = forward[0].kind
+        tp2_source = forward[1].kind
+    elif len(forward) == 1:
+        tp1 = forward[0].price
+        tp2 = mid + risk * 2.0 if is_long else mid - risk * 2.0
+        tp1_source = forward[0].kind
+        tp2_source = "fallback_2R"
+    else:
+        tp1 = mid + risk * 1.5 if is_long else mid - risk * 1.5
+        tp2 = mid + risk * 2.5 if is_long else mid - risk * 2.5
+        tp1_source = "fallback_1.5R"
+        tp2_source = "fallback_2.5R"
+
+    # Ensure TP1 < TP2 for long, TP1 > TP2 for short
+    if is_long and tp2 <= tp1:
+        tp2 = tp1 + risk * 0.5
+    elif not is_long and tp2 >= tp1:
+        tp2 = tp1 - risk * 0.5
+
+    # ── VALIDACIÓN: TP1 debe estar al menos a 1.5× la distancia del SL ──
+    # Esto garantiza R:R mínimo de 1.5:1 incluso cuando forward levels
+    # estructurales están muy cerca del entry.
+    min_tp1 = mid + risk * 1.5 if is_long else mid - risk * 1.5
+    if is_long and tp1 < min_tp1:
+        tp1 = min_tp1
+        tp1_source = f"{tp1_source}_min1.5R"
+        warnings.append(f"TP1 extended to minimum 1.5×SL ({abs(tp1-mid)/mid*100:.2f}%)")
+    elif not is_long and tp1 > min_tp1:
+        tp1 = min_tp1
+        tp1_source = f"{tp1_source}_min1.5R"
+        warnings.append(f"TP1 extended to minimum 1.5×SL ({abs(tp1-mid)/mid*100:.2f}%)")
+
+    rr = abs(tp1 - mid) / risk if risk > 0 else 0.0
+
+    # Apply MC Setup ranges to SL/TP if available
     sl_adjusted_by_mc = False
     tp_adjusted_by_mc = False
+    if mc_context:
+        # Adjust SL to fall within MC historical range
+        mc_sl_median = mc_context.sl_range.get("median_pct", 0.025)
+        mc_sl_max = mc_context.sl_range.get("max_pct", 0.05)
+        risk_pct = (risk / mid * 100) if risk > 0 else 0.0
+        if risk_pct > 0:
+            if risk_pct > mc_sl_max * 100 * 1.5:
+                # SL too wide → tighten to MC max
+                new_sl = mid * (1.0 - mc_sl_max) if is_long else mid * (1.0 + mc_sl_max)
+                sl = new_sl
+                risk = abs(mid - sl)
+                sl_adjusted_by_mc = True
+                warnings.append(f"SL tightened by MC setup (was {risk_pct:.2f}%, now {mc_sl_max*100:.2f}%)")
+            elif risk_pct < mc_context.sl_range.get("min_pct", 0.01) * 100 * 0.5:
+                # SL too tight → widen to MC median
+                new_sl = mid * (1.0 - mc_sl_median) if is_long else mid * (1.0 + mc_sl_median)
+                sl = new_sl
+                risk = abs(mid - sl)
+                sl_adjusted_by_mc = True
+                warnings.append(f"SL widened by MC setup (was {risk_pct:.2f}%, now {mc_sl_median*100:.2f}%)")
 
-    # Use the adaptive close split from the confluence score
-    tp1_close_pct = plan.tp_levels[0].close_percent if plan.tp_levels else 0.50
+        # Adjust TP to align with MC historical range
+        mc_tp_median = mc_context.tp_range.get("median_pct", 0.04)
+        current_tp1_pct = abs(tp1 - mid) / mid
+        if current_tp1_pct < mc_tp_median * 0.5:
+            # TP too close → extend to MC median
+            tp1 = mid * (1.0 + mc_tp_median) if is_long else mid * (1.0 - mc_tp_median)
+            tp_adjusted_by_mc = True
+            warnings.append(f"TP1 extended by MC setup to {mc_tp_median*100:.2f}%")
+
+        # Recalculate RR and ensure TP ordering after MC adjustments
+        if sl_adjusted_by_mc or tp_adjusted_by_mc:
+            rr = abs(tp1 - mid) / risk if risk > 0 else 0.0
+            if is_long and tp2 <= tp1:
+                tp2 = tp1 + risk * 0.5
+            elif not is_long and tp2 >= tp1:
+                tp2 = tp1 - risk * 0.5
+
+    # Dynamic TP1 closure % based on distance to first structural level
+    # Close LESS in TP1 if the first target is close (price likely reaches 2nd target)
+    # Close MORE in TP1 if the first target is far (harder to reach)
+    if len(forward) >= 1:
+        dist_r = forward[0].distance_pct / (risk / mid * 100) if risk > 0 else 1.5
+        if dist_r < 0.8:
+            tp1_close_pct = 0.35   # 1st level very close → let 65% run to 2nd
+        elif dist_r < 1.5:
+            tp1_close_pct = 0.50   # moderate distance → balanced 50/50
+        else:
+            tp1_close_pct = 0.65   # 1st level far → take 65% at TP1
+    else:
+        tp1_close_pct = 0.50
 
     # ── Ensemble indicators (RSI / Stoch / Volume Profile) ──────────────────
     rsi_val = _compute_rsi(df["close"], 14)
@@ -627,7 +691,7 @@ def analyze_confluence(
     # Serialize forward and support levels for storage / downstream use
     forward_levels_serial = [
         {"price": round(l.price, 6), "kind": l.kind, "distance_pct": l.distance_pct, "liquidity_type": l.liquidity_type}
-        for l in ict.forward_levels
+        for l in forward
     ]
     support_levels_serial = [
         {"price": round(l.price, 6), "kind": l.kind, "distance_pct": l.distance_pct}
@@ -645,10 +709,10 @@ def analyze_confluence(
 
     # Forward-level-derived features for ML training
     risk_pct = (risk / mid * 100) if risk > 0 else 0.0
-    if ict.forward_levels and risk_pct > 0:
-        tp1_distance_r = round(ict.forward_levels[0].distance_pct / risk_pct, 3)
-        tp1_strength = round(_poi_strength.get(ict.forward_levels[0].kind, 0.5), 2)
-        forward_density = len(ict.forward_levels)
+    if forward and risk_pct > 0:
+        tp1_distance_r = round(forward[0].distance_pct / risk_pct, 3)
+        tp1_strength = round(_poi_strength.get(forward[0].kind, 0.5), 2)
+        forward_density = len(forward)
     else:
         # Fallback mechanical: model learns that 1.5R mechanical != 0.8R structural
         tp1_distance_r = 1.5
@@ -693,22 +757,6 @@ def analyze_confluence(
         "tp1_source":        tp1_source,
         "tp2_source":        tp2_source,
         "tp1_close_pct":     tp1_close_pct,
-        "tp_levels":         [
-            {
-                "level": tp.level,
-                "price": round(tp.price, 6),
-                "close_percent": tp.close_percent,
-                "r_multiple": tp.r_multiple,
-                "kind": tp.kind,
-            }
-            for tp in (plan.tp_levels if plan else [])
-        ],
-        "sl_basis":          plan.sl_basis if plan else "",
-        "tp1_basis":         plan.tp1_basis if plan else "",
-        "risk_reward":       round(rr, 2),
-        # SMC macro features (Fase A)
-        "macro_context":     macro_context or {},
-        "macro_bonus":       round(macro_bonus, 1),
         # Forward-level ML features (P0)
         "tp1_distance_r":    tp1_distance_r,
         "tp1_strength":      tp1_strength,
@@ -748,20 +796,7 @@ def analyze_confluence(
         stop_loss     = round(sl, 6),
         take_profit_1 = round(tp1, 6),
         take_profit_2 = round(tp2, 6),
-        take_profit_3 = round(tp3, 6) if tp3 is not None else None,
         risk_reward   = round(rr, 2),
-        tp_levels     = [
-            {
-                "level": tp.level,
-                "price": round(tp.price, 6),
-                "close_percent": tp.close_percent,
-                "r_multiple": tp.r_multiple,
-                "kind": tp.kind,
-            }
-            for tp in (plan.tp_levels if plan else [])
-        ],
-        sl_basis      = plan.sl_basis if plan else "",
-        tp1_basis     = plan.tp1_basis if plan else "",
         components    = components,
         features      = features,
         warnings      = warnings,

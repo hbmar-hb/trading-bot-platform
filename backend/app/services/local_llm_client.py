@@ -23,7 +23,7 @@ class LocalLLMTip(BaseModel):
     confidence: str  # high | medium | low
 
 
-DEFAULT_TIMEOUT = 20.0
+DEFAULT_TIMEOUT = 120.0
 
 
 def _build_tip_prompt(event: dict) -> str:
@@ -77,10 +77,17 @@ def _strip_markdown(content: str) -> str:
     return content.strip()
 
 
-async def generate_tip(event: dict) -> LocalLLMTip:
-    """Generate a trading tip from a scan event using the local LLM."""
+async def generate_tip(event: dict, *, heavy: bool = False) -> LocalLLMTip:
+    """Generate a trading tip from a scan event using the local LLM.
+
+    heavy=True uses the slow/capable model (background tasks).
+    heavy=False (default) uses the fast model (interactive/user-facing).
+    """
     local_url = getattr(settings, "local_llm_url", None)
-    model = getattr(settings, "local_llm_model", "mixtral:8x7b")
+    if heavy:
+        model = getattr(settings, "local_llm_model_heavy", "mixtral:8x7b")
+    else:
+        model = getattr(settings, "local_llm_model", "mistral:7b")
 
     if not local_url:
         return LocalLLMTip(
@@ -103,7 +110,7 @@ async def generate_tip(event: dict) -> LocalLLMTip:
 
     try:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.post(f"{local_url}/chat/completions", json=payload)
+            resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
             resp.raise_for_status()
             data = resp.json()
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")

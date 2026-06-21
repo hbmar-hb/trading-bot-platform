@@ -1391,8 +1391,11 @@ export default function ChartPage() {
                     active={!!activeIndicators[ind.id]}
                     onChange={(v) => {
                       setActiveIndicators(prev => ({ ...prev, [ind.id]: v }))
-                      if (v) setOpenPanels(prev => ({ ...prev, [ind.id]: true }))
                     }}
+                    onSettings={ind.PanelComponent ? () => {
+                      setOpenPanels(prev => ({ ...prev, [ind.id]: true }))
+                      setShowIndicatorsMenu(false)
+                    } : undefined}
                     color="#22c55e"
                     label={ind.name}
                   />
@@ -1617,29 +1620,35 @@ export default function ChartPage() {
             ))}
 
             {/* Indicator Badges + Settings Panels */}
-            {indicators.map(ind => {
-              if (!activeIndicators[ind.id]) return null
-              const Badge = ind.BadgeComponent
-              const Panel = ind.PanelComponent
-              return (
-                <div key={ind.id}>
-                  {Badge && (
-                    <Badge
-                      result={indResults[ind.id]}
-                      onOpenSettings={() => setOpenPanels(prev => ({ ...prev, [ind.id]: true }))}
-                      onClose={() => setActiveIndicators(prev => ({ ...prev, [ind.id]: false }))}
-                    />
-                  )}
-                  {Panel && openPanels[ind.id] && (
-                    <Panel
-                      config={getConfig(ind.id)}
-                      onChange={(next) => setConfig(ind.id, next)}
-                      onClose={() => setOpenPanels(prev => ({ ...prev, [ind.id]: false }))}
-                    />
-                  )}
-                </div>
-              )
-            })}
+            {(() => {
+              const active = indicators.filter(ind => activeIndicators[ind.id])
+              return active.map((ind, idx) => {
+                const Badge = ind.BadgeComponent
+                const Panel = ind.PanelComponent
+                return (
+                  <div
+                    key={ind.id}
+                    className="absolute top-0 left-0 z-10"
+                    style={{ transform: `translateY(${8 + idx * 44}px)` }}
+                  >
+                    {Badge && (
+                      <Badge
+                        result={indResults[ind.id]}
+                        onOpenSettings={() => setOpenPanels(prev => ({ ...prev, [ind.id]: true }))}
+                        onClose={() => setActiveIndicators(prev => ({ ...prev, [ind.id]: false }))}
+                      />
+                    )}
+                    {Panel && openPanels[ind.id] && (
+                      <Panel
+                        config={getConfig(ind.id)}
+                        onChange={(next) => setConfig(ind.id, next)}
+                        onClose={() => setOpenPanels(prev => ({ ...prev, [ind.id]: false }))}
+                      />
+                    )}
+                  </div>
+                )
+              })
+            })()}
           </div>
 
           {/* ── Sidebar ──────────────────────────────────────────────────────── */}

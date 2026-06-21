@@ -21,12 +21,6 @@ from app.schemas.analytics import (
 )
 from app.schemas.exchange_trade import TradeDetailResponse
 from app.services.database import get_db
-from app.services.unified_pnl_service import (
-    UnifiedTrade,
-    build_daily_pnl_curve,
-    compute_summary_from_unified,
-    get_closed_trades_unified,
-)
 
 router = APIRouter(prefix="/analytics", tags=["analytics"], dependencies=[Depends(get_current_authorized_user)])
 
@@ -62,41 +56,44 @@ async def get_summary(
 ):
     """
     Estadísticas globales + por bot + curva de equity.
-
-    Usa el servicio de PnL unificado: ExchangeTrade para trades reales y
-    Position para trades en paper, evitando doble conteo.
+    
+    Ahora usa exchange_trades como fuente única de verdad para consistencia
+    con el resto de endpoints de analytics.
     """
-    exclude_sources = None
-    source_filter = source
-    mode = "total"
-    if source is None:
-        # Default analytics view: exclude manually-imported exchange trades
-        exclude_sources = ["manual"]
-    elif source == "paper":
-        source_filter = None
-        mode = "paper"
-
-    trades = await get_closed_trades_unified(
-        db,
-        user_id=user_id,
-        bot_id=bot_id,
-        source=source_filter,
-        exclude_sources=exclude_sources,
-        from_date=from_date,
-        to_date=to_date,
-        mode=mode,
-        order_desc=False,
+    from datetime import timedelta
+    
+    # Query base para exchange_trades
+    query = select(ExchangeTrade).where(
+        ExchangeTrade.user_id == user_id,
+        ExchangeTrade.closed_at.is_not(None),
+        ExchangeTrade.realized_pnl.is_not(None),
     )
+    
+    # Filtros de fecha
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+    query = _apply_source_filter(query, source)
 
+    # Ordenar por fecha para equity curve
+    query = query.order_by(ExchangeTrade.closed_at)
+    
+    result = await db.execute(query)
+    trades = result.scalars().all()
+    
     # Estadísticas globales
-    global_stats = compute_summary_from_unified(trades)
-
+    global_stats = _compute_summary_from_trades(trades)
+    
     # ── Stats por bot ─────────────────────────────────────────
-    trades_by_bot: dict[uuid.UUID, list[UnifiedTrade]] = {}
+    # Agrupar trades por bot
+    trades_by_bot: dict[uuid.UUID, list] = {}
     for trade in trades:
         if trade.bot_id:
             trades_by_bot.setdefault(trade.bot_id, []).append(trade)
-
+    
     # Cargar todos los bots del usuario (excluyendo manuales)
     all_bots_result = await db.execute(
         select(BotConfig).where(
@@ -105,23 +102,13 @@ async def get_summary(
         )
     )
     all_bots = {b.id: b for b in all_bots_result.scalars()}
-
+    
     by_bot: list[BotStats] = []
-    for bot_id_key, bot in all_bots.items():
-        bot_trades = trades_by_bot.get(bot_id_key, [])
-        if bot_trades:
-            stats = compute_summary_from_unified(bot_trades)
-        else:
-            zero = Decimal("0")
-            stats = TradeSummary(
-                total_trades=0, winning_trades=0, losing_trades=0,
-                win_rate=0.0, profit_factor=None, total_pnl=zero,
-                average_pnl=zero, best_trade=zero, worst_trade=zero,
-                max_drawdown=zero, avg_duration_hours=0.0, current_streak=0,
-                long_trades=0, short_trades=0, long_win_rate=0.0,
-                short_win_rate=0.0, long_pnl=zero, short_pnl=zero,
-            )
-
+    for bot_id_key, bot_trades in trades_by_bot.items():
+        bot = all_bots.get(bot_id_key)
+        if not bot:
+            continue
+        stats = _compute_summary_from_trades(bot_trades)
         by_bot.append(BotStats(
             bot_id=bot.id,
             bot_name=bot.bot_name,
@@ -136,24 +123,35 @@ async def get_summary(
             best_trade=stats.best_trade,
             worst_trade=stats.worst_trade,
         ))
-
+    
+    # Bots sin trades
+    for bot_id_key, bot in all_bots.items():
+        if bot_id_key not in trades_by_bot:
+            zero = Decimal("0")
+            by_bot.append(BotStats(
+                bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
+                status=bot.status, total_trades=0, winning_trades=0,
+                win_rate=0.0, profit_factor=None, total_pnl=zero,
+                avg_pnl=zero, best_trade=zero, worst_trade=zero,
+            ))
+    
     # Ordenar: más trades primero
     by_bot.sort(key=lambda b: b.total_trades, reverse=True)
-
+    
     # ── Curva de equity ───────────────────────────────────────
     equity_curve: list[EquityPoint] = []
     cumulative = Decimal("0")
     for trade in trades:
-        if trade.closed_at:
+        if trade.closed_at and trade.realized_pnl is not None:
             cumulative += trade.realized_pnl
             equity_curve.append(EquityPoint(
                 timestamp=trade.closed_at,
                 cumulative_pnl=cumulative,
                 trade_pnl=trade.realized_pnl,
                 symbol=trade.symbol,
-                side=trade.side,
+                side=trade.side or "long",
             ))
-
+    
     return AnalyticsSummaryResponse(
         global_stats=global_stats,
         by_bot=by_bot,
@@ -167,36 +165,42 @@ async def get_bot_stats(
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """Stats para un bot usando el PnL unificado (real + paper)."""
-    bot_result = await db.execute(
-        select(BotConfig).where(BotConfig.id == bot_id, BotConfig.user_id == user_id)
+    result = await db.execute(
+        select(Position, BotConfig)
+        .join(BotConfig, Position.bot_id == BotConfig.id)
+        .where(
+            BotConfig.id == bot_id,
+            BotConfig.user_id == user_id,
+            Position.status == "closed",
+        )
     )
-    bot = bot_result.scalar_one_or_none()
-    if not bot:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Bot not found")
+    rows = result.all()
+    zero = Decimal("0")
 
-    trades = await get_closed_trades_unified(
-        db,
-        user_id=user_id,
-        bot_id=bot_id,
-        mode="total",
-        order_desc=False,
-    )
-    stats = compute_summary_from_unified(trades)
+    if not rows:
+        bot_result = await db.execute(
+            select(BotConfig).where(BotConfig.id == bot_id, BotConfig.user_id == user_id)
+        )
+        bot = bot_result.scalar_one_or_none()
+        if not bot:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        return BotStats(
+            bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
+            status=bot.status, total_trades=0, winning_trades=0,
+            win_rate=0.0, profit_factor=None, total_pnl=zero,
+            avg_pnl=zero, best_trade=zero, worst_trade=zero,
+        )
+
+    positions = [pos for pos, _ in rows]
+    bot = rows[0][1]
+    stats = _compute_summary(positions)
 
     return BotStats(
-        bot_id=bot.id,
-        bot_name=bot.bot_name,
-        symbol=bot.symbol,
-        status=bot.status,
-        total_trades=stats.total_trades,
-        winning_trades=stats.winning_trades,
-        win_rate=stats.win_rate,
-        profit_factor=stats.profit_factor,
-        total_pnl=stats.total_pnl,
-        avg_pnl=stats.average_pnl,
-        best_trade=stats.best_trade,
+        bot_id=bot.id, bot_name=bot.bot_name, symbol=bot.symbol,
+        status=bot.status, total_trades=stats.total_trades,
+        winning_trades=stats.winning_trades, win_rate=stats.win_rate,
+        profit_factor=stats.profit_factor, total_pnl=stats.total_pnl,
+        avg_pnl=stats.average_pnl, best_trade=stats.best_trade,
         worst_trade=stats.worst_trade,
     )
 
@@ -225,39 +229,47 @@ async def get_pnl_chart(
     user_id: uuid.UUID = Depends(get_current_user_id),
     db: AsyncSession = Depends(get_db),
 ):
-    """PnL diario + acumulado desde fuente unificada (real + paper)."""
-    exclude_sources = None
-    source_filter = source
-    mode = "total"
-    if source is None:
-        exclude_sources = ["manual"]
-    elif source == "paper":
-        source_filter = None
-        mode = "paper"
+    """PnL diario + acumulado desde exchange_trades."""
+    day_col = cast(ExchangeTrade.closed_at, Date).label("day")
 
-    trades = await get_closed_trades_unified(
-        db,
-        user_id=user_id,
-        bot_id=bot_id,
-        symbol=symbol,
-        source=source_filter,
-        exclude_sources=exclude_sources,
-        from_date=from_date,
-        to_date=to_date,
-        mode=mode,
-        order_desc=False,
+    query = (
+        select(
+            day_col,
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("daily_pnl"),
+            func.count().label("trade_count"),
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl.is_not(None),
+            ExchangeTrade.realized_pnl != 0,
+        )
     )
 
-    curve = build_daily_pnl_curve(trades)
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if symbol:
+        query = query.where(ExchangeTrade.symbol == symbol)
+    query = _apply_source_filter(query, source)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+
+    query = query.group_by(day_col).order_by(day_col)
+    result = await db.execute(query)
+    rows = result.all()
+
     cumulative = Decimal("0")
     points: list[DailyPnlPoint] = []
-    for row in curve:
-        cumulative = row["cumulative_pnl"]
+    for row in rows:
+        daily = row.daily_pnl or Decimal("0")
+        cumulative += daily
         points.append(DailyPnlPoint(
-            date=row["date"],
-            daily_pnl=row["daily_pnl"],
+            date=str(row.day),
+            daily_pnl=daily,
             cumulative_pnl=cumulative,
-            trade_count=row["trade_count"],
+            trade_count=row.trade_count,
         ))
     return points
 
@@ -271,33 +283,38 @@ async def get_activity_heatmap(
     db: AsyncSession = Depends(get_db),
 ):
     """Heatmap de actividad: trades por día (para gráfico tipo GitHub)."""
-    trades = await get_closed_trades_unified(
-        db,
-        user_id=user_id,
-        bot_id=bot_id,
-        exclude_sources=["manual"],
-        from_date=from_date,
-        to_date=to_date,
-        mode="total",
-        order_desc=False,
+    day_col = cast(ExchangeTrade.closed_at, Date).label("day")
+
+    query = (
+        select(
+            day_col,
+            func.count().label("trade_count"),
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("daily_pnl")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+        )
     )
 
-    daily: dict[str, dict] = {}
-    for t in trades:
-        if not t.closed_at:
-            continue
-        ds = t.closed_at.strftime("%Y-%m-%d")
-        cell = daily.setdefault(ds, {"count": 0, "pnl": Decimal("0")})
-        cell["count"] += 1
-        cell["pnl"] += t.realized_pnl
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+
+    query = query.group_by(day_col).order_by(day_col)
+    result = await db.execute(query)
+    rows = result.all()
 
     return [
         ActivityPoint(
-            date=ds,
-            count=data["count"],
-            pnl=data["pnl"],
+            date=str(row.day),
+            count=row.trade_count,
+            pnl=row.daily_pnl or Decimal("0")
         )
-        for ds, data in sorted(daily.items())
+        for row in rows
     ]
 
 
@@ -312,48 +329,70 @@ async def get_hourly_distribution(
     db: AsyncSession = Depends(get_db),
 ):
     """Distribución de trades por hora del día (0-23)."""
-    exclude_sources = None
-    source_filter = source
-    mode = "total"
-    if source is None:
-        exclude_sources = ["manual"]
-    elif source == "paper":
-        source_filter = None
-        mode = "paper"
+    hour_col = func.extract('hour', ExchangeTrade.closed_at).label("hour")
 
-    trades = await get_closed_trades_unified(
-        db,
-        user_id=user_id,
-        bot_id=bot_id,
-        symbol=symbol,
-        source=source_filter,
-        exclude_sources=exclude_sources,
-        from_date=from_date,
-        to_date=to_date,
-        mode=mode,
-        order_desc=False,
+    query = (
+        select(
+            hour_col,
+            func.count().label("trade_count"),
+            func.sum(func.coalesce(ExchangeTrade.realized_pnl, 0)).label("hourly_pnl")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl.is_not(None),
+        )
     )
 
-    hourly: dict[int, dict] = {}
-    for t in trades:
-        if not t.closed_at:
-            continue
-        hour = t.closed_at.hour
-        cell = hourly.setdefault(hour, {"trades": 0, "wins": 0, "pnl": Decimal("0")})
-        cell["trades"] += 1
-        cell["pnl"] += t.realized_pnl
-        if t.realized_pnl > 0:
-            cell["wins"] += 1
+    if from_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        query = query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        query = query.where(ExchangeTrade.bot_id == bot_id)
+    if symbol:
+        query = query.where(ExchangeTrade.symbol == symbol)
+    query = _apply_source_filter(query, source)
+
+    query = query.group_by(hour_col).order_by(hour_col)
+    result = await db.execute(query)
+    rows = result.all()
+
+    # Calcular wins por hora (subquery separada para accuracy)
+    wins_query = (
+        select(
+            func.extract('hour', ExchangeTrade.closed_at).label("hour"),
+            func.count().label("win_count")
+        )
+        .where(
+            ExchangeTrade.user_id == user_id,
+            ExchangeTrade.closed_at.is_not(None),
+            ExchangeTrade.realized_pnl > 0,
+        )
+    )
+    if from_date:
+        wins_query = wins_query.where(cast(ExchangeTrade.closed_at, Date) >= from_date)
+    if to_date:
+        wins_query = wins_query.where(cast(ExchangeTrade.closed_at, Date) <= to_date)
+    if bot_id:
+        wins_query = wins_query.where(ExchangeTrade.bot_id == bot_id)
+    if symbol:
+        wins_query = wins_query.where(ExchangeTrade.symbol == symbol)
+    wins_query = _apply_source_filter(wins_query, source)
+    wins_query = wins_query.group_by(func.extract('hour', ExchangeTrade.closed_at))
+
+    wins_result = await db.execute(wins_query)
+    wins_by_hour = {int(row.hour): row.win_count for row in wins_result.all()}
 
     return [
         HourlyStats(
-            hour=hour,
-            trades=data["trades"],
-            wins=data["wins"],
-            pnl=data["pnl"],
-            win_rate=round(data["wins"] / data["trades"], 4) if data["trades"] > 0 else 0.0,
+            hour=int(row.hour),
+            trades=row.trade_count,
+            wins=wins_by_hour.get(int(row.hour), 0),
+            pnl=row.hourly_pnl or Decimal("0"),
+            win_rate=round(wins_by_hour.get(int(row.hour), 0) / row.trade_count, 4) if row.trade_count > 0 else 0.0
         )
-        for hour, data in sorted(hourly.items())
+        for row in rows
     ]
 
 

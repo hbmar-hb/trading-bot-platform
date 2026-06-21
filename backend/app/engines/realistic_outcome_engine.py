@@ -58,27 +58,6 @@ def _verify_no_look_ahead(signal, candles_after: list) -> None:
             )
 
 
-def _extract_tp_levels(signal) -> list[dict]:
-    """Return ordered TP levels from signal features, with legacy fallback."""
-    feats = getattr(signal, "features", None) or {}
-    levels = feats.get("tp_levels")
-    if levels:
-        return [
-            {
-                "level": int(lvl.get("level", i + 1)),
-                "price": float(lvl["price"]),
-                "close_percent": float(lvl.get("close_percent", 1.0)),
-                "r_multiple": float(lvl.get("r_multiple", 1.0)),
-            }
-            for i, lvl in enumerate(sorted(levels, key=lambda x: int(x.get("level", 0))))
-        ]
-    if signal.take_profit_1:
-        return [
-            {"level": 1, "price": float(signal.take_profit_1), "close_percent": 1.0, "r_multiple": 1.5},
-        ]
-    return []
-
-
 def simulate_outcome(
     signal,
     candles_after: list,
@@ -87,10 +66,16 @@ def simulate_outcome(
 ) -> RealisticOutcome:
     """Run realistic walk-forward simulation for a single AI signal.
 
-    Supports multi-level TP plans (tp_levels in signal.features).  When a TP
-    level fills, only its close_percent portion is exited; the remaining
-    position continues until the next TP or the SL.
+    Args:
+        signal: AISignal instance (or duck-typed object with required attrs)
+        candles_after: list of OHLCV candles after signal_time (same format as tracker)
+        profile: ExecutionProfile to use. If None, fetched from analytics service.
+        notional: assumed position notional in USDT for cost calculation.
+
+    Returns:
+        RealisticOutcome with net P&L and resolution details.
     """
+    # Anti-look-ahead verification
     _verify_no_look_ahead(signal, candles_after)
 
     rng = _seed_from_signal_id(str(signal.id))
@@ -117,6 +102,7 @@ def simulate_outcome(
 
     # ── 1. Apply entry slippage ──
     entry_slippage = profile.avg_entry_slippage_pct / 100.0
+    # Slippage always makes entry worse
     if is_long:
         realistic_entry = float(signal.entry_price) * (1.0 + entry_slippage)
     else:
@@ -126,7 +112,7 @@ def simulate_outcome(
 
     # ── 2. Compute real risk distance ──
     sl = float(signal.stop_loss)
-    tp_levels = _extract_tp_levels(signal)
+    tp1 = float(signal.take_profit_1)
     real_risk_distance = abs(realistic_entry - sl)
     if real_risk_distance <= 0:
         notes.append("Zero risk distance after slippage — invalid setup")
@@ -136,14 +122,10 @@ def simulate_outcome(
         )
 
     # ── 3. Walk-forward with realistic execution ──
-    # Track which TP levels have been filled and the remaining position.
-    remaining_pct = 1.0
-    closed_pct = 0.0
-    weighted_exit_price = 0.0  # average exit price weighted by closed %
-    any_tp_wicked = False
-    last_exit_price = realistic_entry
+    tp_wicked = False  # Tracks if TP was touched but not filled (wick)
 
     for i, candle in enumerate(candles_after, start=1):
+        # candle format: [timestamp, open, high, low, close, volume, ...]
         if len(candle) < 5:
             continue
         open_p = float(candle[1])
@@ -151,10 +133,60 @@ def simulate_outcome(
         low = float(candle[3])
         close = float(candle[4])
 
-        # Stop-loss check first
-        sl_hit = (low <= sl) if is_long else (high >= sl)
-        if sl_hit:
-            failure_type = "FAILURE_BEHAVIORAL" if any_tp_wicked else "FAILURE_MAX_ADVERSE"
+        candle_range = high - low if high != low else 1e-9
+
+        # Determine if TP and/or SL were touched in this candle
+        if is_long:
+            tp_hit = high >= tp1
+            sl_hit = low <= sl
+        else:
+            tp_hit = low <= tp1
+            sl_hit = high >= sl
+
+        if tp_hit and sl_hit:
+            # Both touched — realistic probabilistic tie-breaker
+            tp_sl_spread = abs(tp1 - sl)
+            volatility_factor = min(1.0, candle_range / max(tp_sl_spread, 1e-9))
+
+            if is_long:
+                dist_to_tp = abs(high - tp1)
+                dist_to_sl = abs(low - sl)
+            else:
+                dist_to_tp = abs(tp1 - low)
+                dist_to_sl = abs(sl - high)
+
+            total_dist = dist_to_tp + dist_to_sl + 1e-9
+            tp_prob = 1.0 - (dist_to_tp / total_dist)
+            tp_prob = tp_prob * (1.0 - volatility_factor * 0.3) + 0.5 * volatility_factor * 0.3
+
+            outcome = "SUCCESS" if rng.random() < tp_prob else "FAILURE_MAX_ADVERSE"
+            ref = tp1 if outcome == "SUCCESS" else sl
+            notes.append(
+                f"Bar {i}: both TP and SL touched (vol_factor={volatility_factor:.2f}, "
+                f"tp_prob={tp_prob:.2f}) → {outcome}"
+            )
+            return _resolve(signal, outcome, ref, i, realistic_entry, profile, notional, notes, rng)
+
+        elif tp_hit:
+            # TP touched — but was it a wick or a real fill?
+            if rng.random() < profile.tp_wick_fill_rate:
+                # TP filled with slippage
+                tp_slippage = profile.avg_tp_slippage_pct / 100.0
+                if is_long:
+                    fill_tp = tp1 * (1.0 + tp_slippage)
+                else:
+                    fill_tp = tp1 * (1.0 - tp_slippage)
+                notes.append(f"Bar {i}: TP filled @ {fill_tp:.6f} (slippage {profile.avg_tp_slippage_pct:.4f}%)")
+                return _resolve(signal, "SUCCESS", fill_tp, i, realistic_entry, profile, notional, notes, rng)
+            else:
+                # Wick only — mark and continue
+                tp_wicked = True
+                notes.append(f"Bar {i}: TP wick only (no fill), continuing")
+                continue
+
+        elif sl_hit:
+            # SL touched — did it gap?
+            failure_type = "FAILURE_BEHAVIORAL" if tp_wicked else "FAILURE_MAX_ADVERSE"
             if rng.random() < profile.gap_frequency:
                 gap = profile.avg_sl_gap_pct / 100.0
                 if is_long:
@@ -165,56 +197,15 @@ def simulate_outcome(
                     f"Bar {i}: {failure_type} → SL gapped to {fill_sl:.6f} "
                     f"(gap {profile.avg_sl_gap_pct:.4f}%)"
                 )
+                return _resolve(signal, failure_type, fill_sl, i, realistic_entry, profile, notional, notes, rng)
             else:
-                fill_sl = sl
                 notes.append(f"Bar {i}: {failure_type} → SL filled @ {sl:.6f}")
+                return _resolve(signal, failure_type, sl, i, realistic_entry, profile, notional, notes, rng)
 
-            # Close remaining position at SL
-            exit_pnl_pct = _pnl_pct(realistic_entry, fill_sl, is_long)
-            partial_pnl = exit_pnl_pct * remaining_pct
-            weighted_exit_price += fill_sl * remaining_pct
-            return _resolve_multi(
-                signal, failure_type, realistic_entry, last_exit_price,
-                weighted_exit_price, closed_pct, remaining_pct, partial_pnl,
-                profile, i, notes, rng,
-            )
+        else:
+            continue
 
-        # TP level checks in order
-        for lvl in tp_levels:
-            if lvl.get("filled"):
-                continue
-            tp_price = lvl["price"]
-            tp_hit = (high >= tp_price) if is_long else (low <= tp_price)
-            if not tp_hit:
-                continue
-
-            if rng.random() < profile.tp_wick_fill_rate:
-                # Fase C: TP slippage is a cost, never a bonus. Clamp to >= 0.
-                tp_slippage = max(0.0, profile.avg_tp_slippage_pct) / 100.0
-                if is_long:
-                    fill_tp = tp_price * (1.0 + tp_slippage)
-                else:
-                    fill_tp = tp_price * (1.0 - tp_slippage)
-                notes.append(f"Bar {i}: TP{lvl['level']} filled @ {fill_tp:.6f}")
-                lvl["filled"] = True
-                close_pct = min(lvl["close_percent"], remaining_pct)
-                remaining_pct -= close_pct
-                closed_pct += close_pct
-                weighted_exit_price += fill_tp * close_pct
-                last_exit_price = fill_tp
-
-                if remaining_pct <= 0:
-                    # Fully closed by TP sequence
-                    return _resolve_multi(
-                        signal, "SUCCESS", realistic_entry, last_exit_price,
-                        weighted_exit_price, closed_pct, 0.0, 0.0,
-                        profile, i, notes, rng,
-                    )
-            else:
-                any_tp_wicked = True
-                notes.append(f"Bar {i}: TP{lvl['level']} wick only (no fill), continuing")
-
-    # No resolution within available candles
+    # No resolution within available candles (not yet expired by time)
     notes.append("No resolution within candle window — INCONCLUSIVE")
     return RealisticOutcome(
         outcome="INCONCLUSIVE",
@@ -227,52 +218,49 @@ def simulate_outcome(
     )
 
 
-def _pnl_pct(entry: float, exit_price: float, is_long: bool) -> float:
-    if is_long:
-        return ((exit_price - entry) / entry) * 100.0
-    return ((entry - exit_price) / entry) * 100.0
-
-
-def _resolve_multi(
+def _resolve(
     signal,
     outcome: str,
-    fill_price: float,
-    last_exit_price: float,
-    weighted_exit_price: float,
-    closed_pct: float,
-    remaining_pct: float,
-    remaining_pnl_pct: float,
-    profile: ExecutionProfile,
+    exit_price: float,
     bars: int,
+    fill_price: float,
+    profile: ExecutionProfile,
+    notional: float,
     notes: list[str],
     rng: random.Random,
 ) -> RealisticOutcome:
-    """Compute net P&L for a partially-closed position."""
+    """Compute net P&L after applying all costs."""
     is_long = signal.direction == "long"
+    entry = fill_price
 
-    # weighted_exit_price already contains every closed portion (including the
-    # remaining size closed at SL) weighted by its close_percent.  Because the
-    # weights sum to 1.0, it is the effective average exit price.
-    avg_exit = weighted_exit_price
+    # Gross P&L in price terms
+    if is_long:
+        price_pnl = exit_price - entry
+    else:
+        price_pnl = entry - exit_price
 
-    # Total gross PnL %
-    total_pnl_pct = _pnl_pct(fill_price, avg_exit, is_long) if avg_exit > 0 else 0.0
+    # Convert to % of notional
+    pnl_pct_raw = (price_pnl / entry) * 100.0
 
-    # Costs: apply to the whole notional once (entry + exit round-trip)
-    fee_cost_pct = profile.fee_rate
+    # ── Costs ──
+    # Fee: entry + exit (round trip)
+    fee_cost_pct = profile.fee_rate * 100.0 * 2.0  # entry + exit
+
+    # Funding: approximate based on bars held
     tf_min = _tf_to_minutes(signal.timeframe)
     hours_held = (bars * tf_min) / 60.0
     funding_hours = min(hours_held, 24.0)
     funding_cost_pct = profile.avg_funding_cost_pct * funding_hours
-    total_cost_pct = fee_cost_pct + funding_cost_pct
 
-    pnl_net = total_pnl_pct - total_cost_pct
+    total_cost_pct = fee_cost_pct + funding_cost_pct
+    pnl_net = pnl_pct_raw - total_cost_pct
 
     notes.append(
         f"Costs: fee={fee_cost_pct:.3f}%, funding({funding_hours:.1f}h)={funding_cost_pct:.3f}% "
         f"→ net P&L={pnl_net:.3f}%"
     )
 
+    # Final outcome check: even if TP "touched", after costs it might be a loss
     if outcome == "SUCCESS" and pnl_net <= 0:
         outcome = "FAILURE_MAX_ADVERSE"
         notes.append("SUCCESS reversed to FAILURE_MAX_ADVERSE after costs")
@@ -282,7 +270,7 @@ def _resolve_multi(
         pnl_pct=round(pnl_net, 3),
         bars=bars,
         fill_price=round(fill_price, 6),
-        exit_price=round(avg_exit, 6) if avg_exit > 0 else None,
+        exit_price=round(exit_price, 6),
         costs_pct=round(total_cost_pct, 3),
         notes=notes,
     )

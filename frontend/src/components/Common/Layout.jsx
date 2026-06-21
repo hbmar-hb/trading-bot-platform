@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import Navbar from './Navbar'
 import BottomNav from './BottomNav'
 import ToastContainer from './ToastContainer'
+import AssistantWidget from './AssistantWidget'
 import useUiStore from '@/store/uiStore'
 import useAuthStore from '@/store/authStore'
 import { authService } from '@/services/auth'
@@ -34,6 +35,7 @@ export default function Layout({ children }) {
       </main>
 
       <BottomNav />
+      <AssistantWidget />
     </div>
   )
 }

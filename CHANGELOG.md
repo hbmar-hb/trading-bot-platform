@@ -1,5 +1,42 @@
 # Changelog
 
+## 2026-06-20 — Sincronización de Documentación
+
+### 📚 Documentación
+
+- Creado `README.md` raíz con descripción de la plataforma, stack, requisitos, arranque local, estructura de carpetas y mapa de documentación.
+- Actualizada `IA_ENGINE_USER_REPORT.md` con las nuevas funcionalidades de junio de 2026: panel expandido, Scanner Live, Dashboard IA, Monte Carlo, roles, chat y asistente.
+- Actualizada la documentación embebida en la aplicación (`DocumentationPage.jsx`) con secciones para Scanner Live, Monte Carlo, Chat, Roles, Administración del Sistema y Asistente de IA.
+- Revisadas las guías de migración para marcar datos de ejemplo (IP, dominios, costos) y evitar confusiones.
+
+## 2026-06-18 — Scanner Live, Monte Carlo, Admin System y Asistente
+
+### 🚀 Nuevas Funcionalidades
+
+- **Scanner Live** — Nueva pestaña en IA Engine que muestra el escaneo del mercado en tiempo real: pares analizados, señales generadas, rechazos por gates, KPIs de las últimas 24h y consejos generados por un LLM local.
+- **Módulo Monte Carlo** — Permite crear estrategias en Python, ejecutar backtests históricos y lanzar simulaciones de equity con múltiples métodos (shuffle, bootstrap, perturbación de parámetros, equity path). Requiere rol `moderator`.
+- **Panel de Administración del Sistema** — Nuevo panel exclusivo para `admin` con checks de infraestructura, logs, salud de base de datos, modelos ML, Celery, exchange y shadow mode.
+- **Asistente de IA** — Widget flotante de chat que responde dudas sobre la plataforma usando un modelo local vía Ollama (requiere configuración del puente `ollama-bridge`).
+- **Chat interno** — Salas estilo Discord con mensajería en tiempo real por WebSocket, salas privadas, menciones, selector de color y reacciones.
+
+### 🔐 Roles y Seguridad
+
+- Nuevo sistema de roles: `admin`, `moderator` y `rol1`.
+- `rol1` tiene acceso restringido a funcionalidades básicas (chat, paper trading, optimizador y señales).
+- Flujos de autenticación mejorados: verificación de email, recuperación de contraseña, cambio forzado de contraseña y generador de contraseñas.
+
+### ⚡ Mejoras
+
+- Mayor resiliencia en el escaneo IA: manejo de duplicados, race conditions y recuperación ante fallos de fetch de velas.
+- Publicación de eventos en tiempo real para señales duplicadas y errores del scanner.
+- Mejoras en shadow mode y candidate model para la promoción automática de modelos.
+
+### 🛠️ Infraestructura
+
+- Servicio opcional `ollama-bridge` en `docker-compose.yml` para exponer Ollama local dentro de los contenedores.
+- Ajustes en Nginx para rutas `/api/` y `/assistant`.
+- Recuperación masiva del repositorio desde backup de emergencia el 17 de junio de 2026.
+
 ## 2026-06-12 — Verificación y fixes de Analytics
 
 ### 🐛 Bug Fixes

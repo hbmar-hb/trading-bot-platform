@@ -1,4 +1,6 @@
-# Guía de Migración — VPS Nuevo (167.233.99.178)
+# Guía de Migración — VPS Nuevo
+
+> **Nota:** La IP `167.233.99.178` y los recursos listados en esta guía son un **ejemplo concreto de una migración realizada**. Reemplázalos por la IP, tamaño de servidor y recursos de tu VPS destino antes de ejecutar los comandos.
 
 Migrar Trading Bot Platform desde el VPS actual al nuevo servidor con más capacidad.
 

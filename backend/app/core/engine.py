@@ -21,6 +21,7 @@ from app.models.bot_log import BotLog
 from app.models.paper_balance import PaperBalance
 from app.models.position import Position
 from app.models.signal_log import SignalLog
+from app.models.trading_signal import TradingSignal
 from app.services.cache import publish_position_update_sync
 from app.services.database import SessionLocal
 from loguru import logger
@@ -579,11 +580,29 @@ def _get_active_bot(db: Session, bot_id: uuid.UUID) -> BotConfig | None:
     ).first()
 
 
+def _update_trading_signal_status(
+    db: Session,
+    signal_hash: str | None,
+    status: str,
+    error_message: str | None = None,
+) -> None:
+    """Actualiza el TradingSignal asociado a un SignalLog por su signal_hash."""
+    if not signal_hash:
+        return
+    ts = db.query(TradingSignal).filter(TradingSignal.signal_id == signal_hash).first()
+    if ts:
+        ts.status = status
+        ts.processed_at = datetime.now(timezone.utc)
+        if error_message:
+            ts.error_message = error_message[:500]
+
+
 def _mark_signal_processed(db: Session, signal_id: uuid.UUID) -> None:
     signal = db.query(SignalLog).filter(SignalLog.id == signal_id).first()
     if signal:
         signal.processed = True
         signal.processed_at = datetime.now(timezone.utc)
+        _update_trading_signal_status(db, signal.signal_hash, "processed")
 
 
 def _mark_signal_error(db: Session, signal_id: uuid.UUID, error: str) -> None:
@@ -592,6 +611,7 @@ def _mark_signal_error(db: Session, signal_id: uuid.UUID, error: str) -> None:
         signal.processed = True
         signal.processed_at = datetime.now(timezone.utc)
         signal.error_message = error[:500]
+        _update_trading_signal_status(db, signal.signal_hash, "error", error)
     db.commit()
 
 

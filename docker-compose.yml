@@ -55,6 +55,8 @@ services:
         condition: service_healthy
     ports:
       - "8100:8000"
+    volumes:
+      - ./backend/ai/knowledge:/app/ai/knowledge:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   # ─────────────────────────────────────────
@@ -98,6 +100,29 @@ services:
       celery -A app.services.celery_app beat
       --loglevel=info
       --schedule=/app/celerybeat-data/celerybeat-schedule
+
+  # ─────────────────────────────────────────
+  # Ollama Bridge (SSH tunnel → host localhost:11434)
+  # Expone el Ollama del portátil (via VSCode forward) a los contenedores
+  # ─────────────────────────────────────────
+  ollama-bridge:
+    image: alpine:3.19
+    restart: unless-stopped
+    command: >
+      sh -c "apk add --no-cache openssh-client &&
+      ssh -N
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o ServerAliveInterval=30
+      -o ServerAliveCountMax=3
+      -o ExitOnForwardFailure=yes
+      -i /ssh/id_ed25519
+      -L 0.0.0.0:11434:127.0.0.1:11434
+      deploy@172.18.0.1"
+    volumes:
+      - /home/deploy/.ssh:/ssh:ro
+    expose:
+      - "11434"
 
   # ─────────────────────────────────────────
   # Frontend (React + Vite)

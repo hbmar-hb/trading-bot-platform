@@ -18,7 +18,6 @@ from loguru import logger
 
 from app.services.database import SessionLocal
 from app.models.bot_config import BotConfig
-from config.settings import settings
 def _to_compact_ticker(symbol: str) -> str:
     if not symbol:
         return symbol
@@ -39,12 +38,6 @@ from app.services.rejection_feedback_optimizer import (
 @shared_task(bind=True, max_retries=3, default_retry_delay=60)
 def calibrate_from_rejections(self):
     """Celery task — calibrate all AI bots from audited rejection data."""
-    if not settings.ai_auto_calibration_enabled:
-        logger.info(
-            "[REJECTION_FEEDBACK] Skipped: ai_auto_calibration_enabled is false"
-        )
-        return {"status": "frozen", "adjusted": 0}
-
     try:
         with SessionLocal() as db:
             bots = (

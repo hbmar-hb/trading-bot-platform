@@ -99,22 +99,6 @@ class SignalRiskPlanner:
             quality, score, prob, regime, forward_levels, entry_price, sl_price, direction
         )
 
-        # Fase B: if the signal carries a confluence-aware dynamic TP plan,
-        # override the generic SAPP structure with the signal's own levels.
-        signal_tp_levels = (getattr(signal, "features", None) or {}).get("tp_levels")
-        if signal_tp_levels:
-            dynamic_tps: List[TPLevel] = []
-            for lvl in signal_tp_levels:
-                dynamic_tps.append(TPLevel(
-                    level=int(lvl.get("level", len(dynamic_tps) + 1)),
-                    close_percent=float(lvl.get("close_percent", 0.33)),
-                    r_multiple=float(lvl.get("r_multiple", 1.0)),
-                    action_after_hit="breakeven" if len(dynamic_tps) == 0 else "trailing",
-                    price=float(lvl.get("price", 0)) or None,
-                ))
-            if dynamic_tps:
-                tp_levels = dynamic_tps
-
         # 4. SL dinámico (distancia desde entrada)
         sl_mult = self._sl_multiplier(score, prob, regime)
         sl_distance = atr * sl_mult if atr > 0 else 0.015

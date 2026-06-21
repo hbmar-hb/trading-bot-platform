@@ -550,7 +550,7 @@ function flattenBot(bot) {
     ai_pf_symbol:        bot.ai_signal_config?.portfolio_limits?.max_symbol_exposure_pct      ?? 30,
     ai_pf_dir:           bot.ai_signal_config?.portfolio_limits?.max_directional_exposure_pct ?? 40,
     ai_pf_alt:           bot.ai_signal_config?.portfolio_limits?.alt_correlation_threshold    ?? 3,
-    trigger_indicator:        bot.trigger_indicator        ?? '',
+    trigger_indicator:        bot.trigger_indicator === 'ict' ? 'ict' : '',
     trigger_timeframe:        bot.trigger_timeframe        ?? '',
     trigger_min_grade:        bot.trigger_min_grade        ?? 'A+,A,A-',
     trigger_timing:           bot.trigger_timing           ?? 'candle_close',
@@ -1319,7 +1319,6 @@ export default function BotEditPage() {
                   <Field label="Indicador">
                     <select value={form.trigger_indicator} onChange={e => set('trigger_indicator', e.target.value)} className="input">
                       <option value="ict">ICT / SMC — Order Blocks + FVG + BOS/CHoCH</option>
-                      <option value="quantum_gold">⚡ Quantum Gold — EMA + Supertrend + BB + RSI (XAUUSD)</option>
                     </select>
                   </Field>
 
@@ -1366,144 +1365,6 @@ export default function BotEditPage() {
                     </div>
                   )}
 
-                  {form.trigger_indicator === 'quantum_gold' && (
-                    <div className="rounded-xl border border-yellow-700/40 bg-yellow-900/10 px-4 py-3 space-y-4">
-                      <p className="text-[11px] font-bold text-yellow-500 uppercase tracking-wide">Parámetros ⚡ Quantum Gold</p>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">EMA Ribbon</p>
-                        <div className="grid grid-cols-4 gap-2">
-                          {[['EMA Rápida','ema_fast',9],['EMA Media','ema_mid',21],['EMA Lenta','ema_slow',50],['EMA Tendencia','ema_trend',200]].map(([lbl,key,def]) => (
-                            <div key={key}>
-                              <label className="block text-[10px] text-slate-500 dark:text-gray-400 mb-1">{lbl}</label>
-                              <input type="number" min={2} max={500} value={form.ind_config[key] ?? def}
-                                onChange={e => setInd(key, parseInt(e.target.value))} className="input w-full text-sm" />
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">RSI — zonas de señal</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-1.5">
-                            <p className="text-[10px] text-emerald-400">LONG (zona bull)</p>
-                            <div className="flex gap-2">
-                              <div className="flex-1">
-                                <label className="block text-[10px] text-slate-400 mb-0.5">Mín.</label>
-                                <input type="number" min={1} max={100} value={form.ind_config.rsi_bull_lo ?? 45}
-                                  onChange={e => setInd('rsi_bull_lo', parseInt(e.target.value))} className="input w-full text-sm" />
-                              </div>
-                              <div className="flex-1">
-                                <label className="block text-[10px] text-slate-400 mb-0.5">Máx.</label>
-                                <input type="number" min={1} max={100} value={form.ind_config.rsi_bull_hi ?? 75}
-                                  onChange={e => setInd('rsi_bull_hi', parseInt(e.target.value))} className="input w-full text-sm" />
-                              </div>
-                            </div>
-                          </div>
-                          <div className="space-y-1.5">
-                            <p className="text-[10px] text-red-400">SHORT (zona bear)</p>
-                            <div className="flex gap-2">
-                              <div className="flex-1">
-                                <label className="block text-[10px] text-slate-400 mb-0.5">Mín.</label>
-                                <input type="number" min={1} max={100} value={form.ind_config.rsi_bear_lo ?? 25}
-                                  onChange={e => setInd('rsi_bear_lo', parseInt(e.target.value))} className="input w-full text-sm" />
-                              </div>
-                              <div className="flex-1">
-                                <label className="block text-[10px] text-slate-400 mb-0.5">Máx.</label>
-                                <input type="number" min={1} max={100} value={form.ind_config.rsi_bear_hi ?? 55}
-                                  onChange={e => setInd('rsi_bear_hi', parseInt(e.target.value))} className="input w-full text-sm" />
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">Supertrend</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Período ATR</label>
-                            <input type="number" min={1} max={50} value={form.ind_config.st_atr_len ?? 10}
-                              onChange={e => setInd('st_atr_len', parseInt(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Factor</label>
-                            <input type="number" min={0.5} max={10} step={0.5} value={form.ind_config.st_factor ?? 3.0}
-                              onChange={e => setInd('st_factor', parseFloat(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">Bollinger Bands + Squeeze</p>
-                        <div className="grid grid-cols-3 gap-2">
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Período</label>
-                            <input type="number" min={5} max={50} value={form.ind_config.bb_len ?? 20}
-                              onChange={e => setInd('bb_len', parseInt(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Desv. std.</label>
-                            <input type="number" min={0.5} max={4} step={0.5} value={form.ind_config.bb_std ?? 2.0}
-                              onChange={e => setInd('bb_std', parseFloat(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Sqz umbral (%)</label>
-                            <input type="number" min={0.1} max={5} step={0.1} value={form.ind_config.bb_sqz_threshold ?? 0.9}
-                              onChange={e => setInd('bb_sqz_threshold', parseFloat(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                        </div>
-                      </div>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">SL / TP (× ATR)</p>
-                        <div className="grid grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Stop Loss</label>
-                            <input type="number" min={0.5} max={5} step={0.5} value={form.ind_config.sl_mult ?? 1.0}
-                              onChange={e => setInd('sl_mult', parseFloat(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Take Profit</label>
-                            <input type="number" min={0.5} max={10} step={0.5} value={form.ind_config.tp_mult ?? 2.0}
-                              onChange={e => setInd('tp_mult', parseFloat(e.target.value))} className="input w-full text-sm" />
-                          </div>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-1">R:R = 1:{((form.ind_config.tp_mult ?? 2.0) / (form.ind_config.sl_mult ?? 1.0)).toFixed(1)}</p>
-                      </div>
-
-                      <div>
-                        <p className="text-[10px] font-semibold text-slate-500 dark:text-gray-400 uppercase mb-2">Filtros</p>
-                        <div className="space-y-2">
-                          {[
-                            ['use_trend_filter', false, 'Filtro de tendencia (E50 > E200)', 'Exige que EMA50 > EMA200 además del precio. Recomendado off en 1h+'],
-                            ['use_sess',         false, 'Solo sesión Londres/NY',           'Filtra velas fuera del horario de alta liquidez (útil en LTF)'],
-                          ].map(([key, def, label, hint]) => (
-                            <label key={key} className="flex items-start gap-2 cursor-pointer">
-                              <input type="checkbox" checked={form.ind_config[key] ?? def}
-                                onChange={e => setInd(key, e.target.checked)}
-                                className="mt-0.5 w-3.5 h-3.5 rounded border-slate-300 text-yellow-500 focus:ring-yellow-400" />
-                              <span>
-                                <span className="text-xs text-slate-700 dark:text-gray-200">{label}</span>
-                                <span className="block text-[10px] text-slate-400">{hint}</span>
-                              </span>
-                            </label>
-                          ))}
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">ATR mínimo ($ — 0 = desactivado)</label>
-                            <input type="number" min={0} max={50} step={0.5} value={form.ind_config.min_atr_filter ?? 3.0}
-                              onChange={e => setInd('min_atr_filter', parseFloat(e.target.value))} className="input w-40 text-sm" />
-                          </div>
-                          <div>
-                            <label className="block text-[10px] text-slate-400 mb-0.5">Volumen mínimo (× SMA — 1.0 = desactivado)</label>
-                            <input type="number" min={0.5} max={3} step={0.1} value={form.ind_config.vol_mult ?? 1.0}
-                              onChange={e => setInd('vol_mult', parseFloat(e.target.value))} className="input w-40 text-sm" />
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
 
                   <Field label="Temporalidad del scan" hint="El bot escaneará esta TF buscando confluencias. Puede diferir del TF de ejecución.">
                     <select value={form.trigger_timeframe} onChange={e => set('trigger_timeframe', e.target.value)} className="input">
@@ -1516,15 +1377,11 @@ export default function BotEditPage() {
 
                   <Field label="Tipos de señal que activan el bot">
                     <div className="space-y-2">
-                      {(form.trigger_indicator === 'quantum_gold' ? [
-                        { g: 'A+', color: 'emerald', dir: 'LONG/SHORT', desc: 'BB breakout de squeeze — expansión tras compresión (máxima calidad)' },
-                        { g: 'A',  color: 'blue',    dir: 'LONG/SHORT', desc: 'Cruce EMA 9/21 — alineación de ribbon con tendencia' },
-                        { g: 'A-', color: 'red',     dir: 'LONG/SHORT', desc: 'Cruce RSI 50 — confirmación de momentum (más frecuente)' },
-                      ] : [
+                      {[
                         { g: 'A+', color: 'emerald', dir: 'LONG',       desc: 'BOS alcista — ruptura de estructura al alza' },
                         { g: 'A',  color: 'blue',    dir: 'LONG/SHORT', desc: 'CHoCH — cambio de carácter (reversión de tendencia)' },
                         { g: 'A-', color: 'red',     dir: 'SHORT',      desc: 'BOS bajista — ruptura de estructura a la baja' },
-                      ]).map(({ g, color, dir, desc }) => {
+                      ].map(({ g, color, dir, desc }) => {
                         const grades = form.trigger_min_grade ? form.trigger_min_grade.split(',') : []
                         const checked = grades.includes(g)
                         const toggle = () => {
@@ -1557,14 +1414,6 @@ export default function BotEditPage() {
                       {(() => {
                         const grades = form.trigger_min_grade ? form.trigger_min_grade.split(',') : []
                         const hasAp = grades.includes('A+'), hasA = grades.includes('A'), hasAm = grades.includes('A-')
-                        const isQG = form.trigger_indicator === 'quantum_gold'
-                        if (isQG) {
-                          const labels = []
-                          if (hasAp) labels.push('BB squeeze breakout')
-                          if (hasA)  labels.push('cruce EMA 9/21')
-                          if (hasAm) labels.push('cruce RSI 50')
-                          return labels.length ? `Activa por: ${labels.join(', ')} — LONG o SHORT según tendencia` : 'Selecciona al menos un tipo'
-                        }
                         if (hasAp && hasA && hasAm) return 'Ejecutará LONG (BOS↑ y CHoCH↑) y SHORT (BOS↓ y CHoCH↓)'
                         if (hasAp && hasA)  return 'Solo LONG: BOS alcista y CHoCH alcista'
                         if (hasA  && hasAm) return 'Solo SHORT: CHoCH bajista y BOS bajista'
@@ -1618,7 +1467,7 @@ export default function BotEditPage() {
                   <div className="rounded-lg bg-emerald-900/30 border border-emerald-500/20 px-3 py-2.5 text-xs space-y-1">
                     <p className="font-semibold text-emerald-300">El bot se activará cuando:</p>
                     <ul className="list-disc list-inside space-y-0.5 text-emerald-400/80">
-                      <li>{form.trigger_indicator === 'quantum_gold' ? '⚡ Quantum Gold' : 'ICT'} detecte confluencia en <strong>{form.trigger_timeframe || form.timeframe}</strong></li>
+                      <li>ICT detecte confluencia en <strong>{form.trigger_timeframe || form.timeframe}</strong></li>
                       <li>Señal de tipo: <strong>{form.trigger_min_grade || 'A+,A,A-'}</strong></li>
                       <li>{form.trigger_timing === 'candle_close' ? 'Al cierre de la vela' : `Durante la vela — cada ~${intervalMin} min`}</li>
                       {form.min_confirm_candles > 1 && <li>Confirmado <strong>{form.min_confirm_candles}×</strong> seguidas</li>}

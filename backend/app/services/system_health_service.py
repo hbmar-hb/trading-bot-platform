@@ -209,6 +209,13 @@ async def check_database() -> HealthResult:
                 for r in positions.all()
             ]
 
+            # Último scan automático (independientemente de si generó señal)
+            last_scan = await db.execute(
+                text("SELECT MAX(scanned_at) as last FROM ai_latest_scans")
+            )
+            last_scan_at = last_scan.scalar()
+            info["last_scan_at"] = last_scan_at.isoformat() if last_scan_at else None
+
             # Bot logs de error recientes
             recent_logs = await db.execute(
                 text("""
@@ -226,8 +233,21 @@ async def check_database() -> HealthResult:
     except Exception as exc:
         return HealthResult("database", False, {}, [f"🔴 DB query failed: {exc}"])
 
+    scanner_stuck = False
+    if last_scan_at:
+        scan_age_min = (datetime.now(timezone.utc) - last_scan_at).total_seconds() / 60
+        info["last_scan_age_min"] = round(scan_age_min, 1)
+        if scan_age_min > 120:
+            scanner_stuck = True
+            issues.append(f"🔴 Último scan hace {scan_age_min:.0f} min — scanner posiblemente atascado")
+        elif scan_age_min > 30:
+            issues.append(f"🟡 Último scan hace {scan_age_min:.0f} min")
+
     if sig_count_2h == 0:
-        issues.append("🔴 0 señales en últimas 2h — scanner posiblemente atascado")
+        if scanner_stuck:
+            issues.append("🔴 0 señales en últimas 2h y scanner atascado")
+        else:
+            issues.append("🟡 0 señales en últimas 2h — scanner activo pero sin confluencias")
     elif sig_count_2h < SIGNALS_2H_MIN:
         issues.append(f"🟡 Solo {sig_count_2h} señales en 2h (min={SIGNALS_2H_MIN})")
 
@@ -276,7 +296,16 @@ def check_models() -> HealthResult:
                 except Exception:
                     pass
         else:
-            issues.append("🔴 adaptive_weights.json no encontrado")
+            # No pesos adaptativos legacy; verificar si existen modelos ensemble o retrain
+            ensemble_path = models_dir / "ensemble_v1.pkl"
+            retrain_meta_path = models_dir / "retrain_meta.json"
+            if ensemble_path.exists() or retrain_meta_path.exists():
+                info["fallback_models"] = [
+                    p.name for p in [ensemble_path, retrain_meta_path] if p.exists()
+                ]
+                issues.append("🟡 adaptive_weights.json no encontrado — usando modelos ensemble/retrain")
+            else:
+                issues.append("🔴 adaptive_weights.json no encontrado y tampoco hay modelos ensemble/retrain")
     except Exception as exc:
         issues.append(f"🔴 Error leyendo adaptive_weights.json: {exc}")
 

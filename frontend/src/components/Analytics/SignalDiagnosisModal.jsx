@@ -113,7 +113,7 @@ function AdminDiagnosisView({ data }) {
 
       <div className="p-3 border-t border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-800/50 flex items-center justify-between text-[11px] text-slate-400">
         <div className="flex items-center gap-3">
-          <span>Modelo: <span className="text-slate-600 dark:text-slate-300 font-medium">{data.model_used || 'moonshot-v1-8k'}</span></span>
+          <span>Modelo: <span className="text-slate-600 dark:text-slate-300 font-medium">{data.model_used || 'internal'}</span></span>
           {data.latency_ms != null && <span className="flex items-center gap-1"><Clock size={11} />{data.latency_ms}ms</span>}
         </div>
         <span>{data.created_at ? new Date(data.created_at).toLocaleString('es-ES') : ''}</span>

@@ -15,11 +15,7 @@ env/
 test_*.py
 *_test.py
 tests/
-scripts/*
-!scripts/train_candidate_model.py
-!scripts/recalculate_smc_macro_context.py
-!scripts/backfill_candidate_shadow.py
-!scripts/monitor_shadow_mode.py
+scripts/
 
 # Fix scripts locales
 fix_*.py

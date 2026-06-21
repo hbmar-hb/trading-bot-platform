@@ -100,10 +100,7 @@ def build_training_set(signals: list) -> tuple[list[dict], list[float], list[flo
             continue
 
         total_count += 1
-        outcome = s.realistic_outcome
-
-        if outcome is None:
-            continue
+        outcome = s.realistic_outcome or s.outcome
 
         if outcome in ("SUCCESS", "FAILURE"):
             X.append(dict(s.features))
@@ -131,8 +128,8 @@ def build_training_set(signals: list) -> tuple[list[dict], list[float], list[flo
 
 def check_censored_ratio(signals: list) -> dict:
     """Check if dataset has too many censored signals for reliable training."""
-    total = len([s for s in signals if s.realistic_outcome is not None])
-    censored = len([s for s in signals if s.realistic_outcome == "CENSORED"])
+    total = len([s for s in signals if s.outcome != "PENDING"])
+    censored = len([s for s in signals if s.outcome == "CENSORED"])
     if total == 0:
         return {"passes": False, "censored_ratio": 0.0, "reason": "no_signals"}
     ratio = censored / total

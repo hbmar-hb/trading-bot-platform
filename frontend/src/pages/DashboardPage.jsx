@@ -367,7 +367,19 @@ export default function DashboardPage() {
       }).catch(() => {})
     }
 
-    botsService.list().then(r => setBots(r.data)).catch(() => {})
+    botsService.list()
+      .then(r => {
+        if (Array.isArray(r.data)) {
+          setBots(r.data)
+        } else {
+          console.error('La API /bots no devolvió un array:', r.data)
+          setBots([])
+        }
+      })
+      .catch(err => {
+        console.error('Error cargando bots:', err)
+        setBots([])
+      })
     loadAccounts()
     loadBalances()
 

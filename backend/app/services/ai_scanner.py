@@ -21,7 +21,7 @@ from ai import ensemble_registry
 
 # NOTE: semaphore is NOT module-level — Celery fork workers would bind it to the
 # parent event loop. Each caller creates its own and passes it in via _sem.
-_DEFAULT_CONCURRENCY = 3
+_DEFAULT_CONCURRENCY = 6
 
 from app.core.constants import htf_for
 
@@ -95,23 +95,6 @@ def build_context(ict, last_close: float) -> dict:
     }
 
 
-def _components_from_ict(ict, htf_bias: str | None = None) -> dict:
-    """Build a minimal components dict for NO_SIGNAL results so the UI can still
-    show which structural pillars are present."""
-    components: dict = {}
-    if htf_bias:
-        components["htf_bias"] = f"Sesgo HTF {htf_bias}"
-    # Structure
-    if ict.last_break:
-        components["structure"] = f"{ict.last_break.kind} — {ict.last_break.direction}"
-    # POI / trigger
-    if ict.active_ob:
-        components["trigger"] = "Order Block activo"
-    elif ict.active_fvgs:
-        components["trigger"] = "Fair Value Gap activo"
-    return components
-
-
 # ── Core analysis ─────────────────────────────────────────────────────────────
 
 def build_signal(
@@ -164,12 +147,6 @@ def build_signal(
     last_close  = float(ohlcv[-1][4])
     signal_time = datetime.fromtimestamp(ohlcv[-2][0] / 1000, tz=timezone.utc)
 
-    # Fase A: reuse current candles as HTF macro data when timeframe itself is daily/weekly
-    if candles_1d is None and timeframe == "1d":
-        candles_1d = ohlcv[:-1]
-    if candles_1w is None and timeframe == "1w":
-        candles_1w = ohlcv[:-1]
-
     ict     = ict_analyze(closed)
     context = build_context(ict, last_close)
 
@@ -183,52 +160,24 @@ def build_signal(
 
     if adaptive_params is None and regime_info:
         try:
-            # In async endpoints the event loop is already running; calling the
-            # synchronous wrapper would block all other requests. Only run the
-            # sync resolver when we are in a synchronous context (Celery worker).
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is None:
-            try:
-                from app.services.scanner_regime_optimizer import get_adaptive_params_sync
-                adaptive_params = get_adaptive_params_sync(
-                    symbol=symbol,
-                    timeframe=timeframe,
-                    regime=regime_info.regime,
-                    regime_confidence=regime_info.confidence,
-                    adx=regime_info.adx,
-                    atr_percentile=regime_info.atr_percentile,
-                    rel_volume=regime_info.rel_volume,
-                    realized_vol=regime_info.realized_vol,
-                )
-            except Exception:
-                pass  # Never block signal because optimizer failed
-        else:
-            logger.debug(
-                f"[build_signal] Skipping sync adaptive resolver for {symbol}/{timeframe}: "
-                "already inside an event loop"
+            from app.services.scanner_regime_optimizer import get_adaptive_params_sync
+            adaptive_params = get_adaptive_params_sync(
+                symbol=symbol,
+                timeframe=timeframe,
+                regime=regime_info.regime,
+                regime_confidence=regime_info.confidence,
+                adx=regime_info.adx,
+                atr_percentile=regime_info.atr_percentile,
+                rel_volume=regime_info.rel_volume,
+                realized_vol=regime_info.realized_vol,
             )
+        except Exception:
+            pass  # Never block signal because optimizer failed
 
-    result = analyze_confluence(
-        closed,
-        symbol,
-        timeframe,
-        adaptive_params=adaptive_params,
-        candles_1d=candles_1d,
-        candles_1w=candles_1w,
-    )
+    result = analyze_confluence(closed, symbol, timeframe, adaptive_params=adaptive_params)
 
     if not result:
-        components = _components_from_ict(ict, htf_bias=None)
-        return {
-            "symbol": symbol,
-            "status": "NO_SIGNAL",
-            "context": context,
-            "components": components,
-            "features": {"htf_bias": None, "htf_aligned": False},
-        }, None
+        return {"symbol": symbol, "status": "NO_SIGNAL", "context": context}, None
 
     # Evaluación 1: Regime is NOT a model feature — save for post-processing only
     regime = regime_info.regime if regime_info else "unknown"
@@ -243,11 +192,9 @@ def build_signal(
         )
         if not aligned:
             return {
-                "symbol":     symbol,
-                "status":     "NO_SIGNAL",
-                "context":    {**context, "htf_conflict": htf_bias},
-                "components": result.components,
-                "features":   {**result.features, "htf_bias": htf_bias, "htf_aligned": False},
+                "symbol":  symbol,
+                "status":  "NO_SIGNAL",
+                "context": {**context, "htf_conflict": htf_bias},
             }, None
 
     result.features["htf_bias"]    = htf_bias
@@ -259,20 +206,13 @@ def build_signal(
         macro = macro_gate_for_signal(symbol, result.direction)
         if macro["blocked"]:
             return {
-                "symbol":     symbol,
-                "status":     "NO_SIGNAL",
-                "context":    {**context, "macro_blocked": True, "macro_warnings": macro["warnings"]},
-                "components": result.components,
-                "features":   {**result.features, "htf_bias": htf_bias, "htf_aligned": htf_bias is not None},
+                "symbol": symbol,
+                "status": "NO_SIGNAL",
+                "context": {**context, "macro_blocked": True, "macro_warnings": macro["warnings"]},
             }, None
         if macro["caution"]:
             result.warnings = list(result.warnings or []) + macro["warnings"]
-        # Keep the SMC macro_context computed by the confluence engine; store
-        # the macro gate (funding/news) context under a separate key.
-        result.features["macro_gate_context"] = macro.get("context", {})
-        result.features["macro_gate_blocked"] = macro["blocked"]
-        result.features["macro_gate_caution"] = macro["caution"]
-        result.features["macro_gate_warnings"] = macro["warnings"]
+        result.features["macro_context"] = macro.get("context", {})
     except Exception:
         pass  # Never block signal because macro service failed
 
@@ -294,8 +234,6 @@ def build_signal(
 
     # Ensemble / XGBoost success probability (0-1, higher = more likely success)
     success_prob = None
-    shadow_success_prob = None
-    candidate_prob = None
     try:
         # Prefer hybrid ensemble if available
         if ensemble_registry.model_ready():
@@ -319,15 +257,20 @@ def build_signal(
             if raw is not None and calibrated is not None:
                 result.features["success_probability_raw"] = float(raw)
                 result.features["success_probability_calibrated"] = float(calibrated)
-
-        # Pre-compute probabilities for shadow mode (recorded after DB commit)
-        if anti_fake_registry.model_ready():
-            shadow_success_prob = anti_fake_registry.predict_calibrated_success_probability(result.features)
-        from ai.services import candidate_model
-        if candidate_model.model_ready():
-            candidate_prob = candidate_model.predict_success_probability(result.features)
     except Exception:
         pass  # Model not ready or prediction failed — fall back to heuristic only
+
+    # Pre-compute probabilities for shadow mode (recorded after DB commit)
+    shadow_success_prob = None
+    candidate_prob = None
+    try:
+        if anti_fake_registry.model_ready():
+            shadow_success_prob = anti_fake_registry.predict_calibrated_success_probability(result.features)
+        from ai.services import candidate_shadow_mode
+        if candidate_shadow_mode.model_ready():
+            candidate_prob = candidate_shadow_mode.predict_success_probability(result.features)
+    except Exception:
+        pass
 
     # Evaluación 1: Apply regime-adjusted thresholds AFTER ensemble prediction
     try:
@@ -387,9 +330,6 @@ def build_signal(
         signal_time       = signal_time,
         created_at        = datetime.now(timezone.utc),
     )
-    # Probabilities are pre-computed above; the caller must record shadow mode
-    # predictions AFTER the AISignal is committed and refreshed so that the
-    # real signal_id is available (recording here with sig.id produces "None").
     return {
         "symbol": symbol,
         "status": "SIGNAL",
@@ -402,105 +342,6 @@ def build_signal(
     }, sig
 
 
-def record_shadow_for_signal(signal_id: str, result_dict: dict) -> None:
-    """Record live/shadow/candidate predictions after the signal has a real DB id.
-
-    Must be called by the caller AFTER the AISignal has been committed and
-    refreshed, otherwise signal_id will be "None" and shadow resolution will
-    never match.
-    """
-    if not signal_id or signal_id == "None":
-        return
-    probs = result_dict.get("_shadow_probs") or {}
-    live = probs.get("live")
-    shadow = probs.get("shadow")
-    candidate = probs.get("candidate")
-
-    if live is not None and shadow is not None:
-        try:
-            from ai.services.shadow_mode import record_shadow
-            record_shadow(signal_id=signal_id, live_prob=live, shadow_prob=shadow)
-        except Exception:
-            pass
-
-    if live is not None and candidate is not None:
-        try:
-            from ai.services.candidate_shadow_mode import record_candidate_shadow
-            record_candidate_shadow(signal_id=signal_id, live_prob=live, candidate_prob=candidate)
-        except Exception:
-            pass
-
-
-async def persist_signal_async(db: AsyncSession, sig: AISignal) -> AISignal:
-    """Persist a signal, returning an existing row if the same candle already exists.
-
-    The natural key used for deduplication matches the one in ai_scan_task.py:
-    (ticker, timeframe, direction, signal_time).
-    """
-    stmt = (
-        select(AISignal)
-        .where(
-            AISignal.ticker == sig.ticker,
-            AISignal.timeframe == sig.timeframe,
-            AISignal.direction == sig.direction,
-            AISignal.signal_time == sig.signal_time,
-        )
-        .limit(1)
-    )
-    existing = (await db.execute(stmt)).scalar_one_or_none()
-    if existing:
-        logger.info(
-            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
-        )
-        return existing
-
-    db.add(sig)
-    try:
-        await db.commit()
-        await db.refresh(sig)
-        return sig
-    except IntegrityError:
-        await db.rollback()
-        logger.warning(
-            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
-        )
-        existing = (await db.execute(stmt)).scalar_one()
-        return existing
-
-
-def persist_signal_sync(db, sig: AISignal) -> AISignal:
-    """Synchronous version of persist_signal_async for Celery/sync tasks."""
-    stmt = (
-        select(AISignal)
-        .where(
-            AISignal.ticker == sig.ticker,
-            AISignal.timeframe == sig.timeframe,
-            AISignal.direction == sig.direction,
-            AISignal.signal_time == sig.signal_time,
-        )
-        .limit(1)
-    )
-    existing = db.execute(stmt).scalar_one_or_none()
-    if existing:
-        logger.info(
-            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
-        )
-        return existing
-
-    db.add(sig)
-    try:
-        db.commit()
-        db.refresh(sig)
-        return sig
-    except IntegrityError:
-        db.rollback()
-        logger.warning(
-            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
-        )
-        existing = db.execute(stmt).scalar_one()
-        return existing
-
-
 async def fetch_ohlcv(
     symbol: str,
     timeframe: str,
@@ -509,23 +350,11 @@ async def fetch_ohlcv(
     sem = _sem or asyncio.Semaphore(_DEFAULT_CONCURRENCY)
     ccxt_sym = to_ccxt(symbol)
     async with sem:
-        exchange = ccxt.binance({
-            "timeout": 10000,
-            "enableRateLimit": True,
-            "options": {"defaultType": "swap"},
-        })
+        exchange = ccxt.binance({"options": {"defaultType": "swap"}})
         try:
-            for attempt in range(3):
-                try:
-                    ohlcv = await exchange.fetch_ohlcv(ccxt_sym, timeframe, limit=200)
-                    if ohlcv and len(ohlcv) >= 50:
-                        return symbol, ohlcv
-                    if attempt < 2:
-                        await asyncio.sleep(0.5 * (attempt + 1))
-                except Exception as exc:
-                    logger.debug(f"[fetch_ohlcv] {symbol}/{timeframe} attempt {attempt + 1} failed: {exc}")
-                    if attempt < 2:
-                        await asyncio.sleep(0.5 * (attempt + 1))
+            ohlcv = await exchange.fetch_ohlcv(ccxt_sym, timeframe, limit=200)
+            return symbol, ohlcv
+        except Exception:
             return symbol, None
         finally:
             await exchange.close()
@@ -626,3 +455,102 @@ def latest_scan_to_dict(row: AILatestScan) -> dict:
     if row.signal_data:
         base.update(row.signal_data)
     return base
+
+
+def record_shadow_for_signal(signal_id: str, result_dict: dict) -> None:
+    """Record live/shadow/candidate predictions after the signal has a real DB id.
+
+    Must be called by the caller AFTER the AISignal has been committed and
+    refreshed, otherwise signal_id will be "None" and shadow resolution will
+    never match.
+    """
+    if not signal_id or signal_id == "None":
+        return
+    probs = result_dict.get("_shadow_probs") or {}
+    live = probs.get("live")
+    shadow = probs.get("shadow")
+    candidate = probs.get("candidate")
+
+    if live is not None and shadow is not None:
+        try:
+            from ai.services.shadow_mode import record_shadow
+            record_shadow(signal_id=signal_id, live_prob=live, shadow_prob=shadow)
+        except Exception:
+            pass
+
+    if live is not None and candidate is not None:
+        try:
+            from ai.services.candidate_shadow_mode import record_candidate_shadow
+            record_candidate_shadow(signal_id=signal_id, live_prob=live, candidate_prob=candidate)
+        except Exception:
+            pass
+
+
+async def persist_signal_async(db: AsyncSession, sig: AISignal) -> AISignal:
+    """Persist a signal, returning an existing row if the same candle already exists.
+
+    The natural key used for deduplication matches the one in ai_scan_task.py:
+    (ticker, timeframe, direction, signal_time).
+    """
+    stmt = (
+        select(AISignal)
+        .where(
+            AISignal.ticker == sig.ticker,
+            AISignal.timeframe == sig.timeframe,
+            AISignal.direction == sig.direction,
+            AISignal.signal_time == sig.signal_time,
+        )
+        .limit(1)
+    )
+    existing = (await db.execute(stmt)).scalar_one_or_none()
+    if existing:
+        logger.info(
+            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
+        )
+        return existing
+
+    db.add(sig)
+    try:
+        await db.commit()
+        await db.refresh(sig)
+        return sig
+    except IntegrityError:
+        await db.rollback()
+        logger.warning(
+            f"[persist_signal_async] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
+        )
+        existing = (await db.execute(stmt)).scalar_one()
+        return existing
+
+
+def persist_signal_sync(db, sig: AISignal) -> AISignal:
+    """Synchronous version of persist_signal_async for Celery/sync tasks."""
+    stmt = (
+        select(AISignal)
+        .where(
+            AISignal.ticker == sig.ticker,
+            AISignal.timeframe == sig.timeframe,
+            AISignal.direction == sig.direction,
+            AISignal.signal_time == sig.signal_time,
+        )
+        .limit(1)
+    )
+    existing = db.execute(stmt).scalar_one_or_none()
+    if existing:
+        logger.info(
+            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: dedup — signal already exists"
+        )
+        return existing
+
+    db.add(sig)
+    try:
+        db.commit()
+        db.refresh(sig)
+        return sig
+    except IntegrityError:
+        db.rollback()
+        logger.warning(
+            f"[persist_signal_sync] {sig.ticker}/{sig.timeframe}: IntegrityError race, fetching existing"
+        )
+        existing = db.execute(stmt).scalar_one()
+        return existing

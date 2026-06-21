@@ -9,7 +9,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.api.dependencies import require_2fa_if_enabled
-from app.api.routes import ai, analytics, auth, bots, charting, chat, exchange_accounts, exchange_trades, manual_trade, montecarlo, optimizer, paper_trading, portfolio, positions, telegram, trading_signals, users, webhook, ws, admin_system
+from app.api.routes import ai, analytics, assistant, auth, bots, charting, chat, exchange_accounts, exchange_trades, manual_trade, montecarlo, optimizer, paper_trading, portfolio, positions, telegram, trading_signals, users, webhook, ws, admin_system
 from app.api.websocket.manager import ws_manager
 from app.services.logger import setup_logging
 from app.workers.balance_monitor import balance_monitor
@@ -142,6 +142,7 @@ app.include_router(telegram.router)
 app.include_router(webhook.router)
 app.include_router(chat.router)
 app.include_router(ai.router)
+app.include_router(assistant.router)
 app.include_router(
     portfolio.router,
     dependencies=[Depends(require_2fa_if_enabled)],

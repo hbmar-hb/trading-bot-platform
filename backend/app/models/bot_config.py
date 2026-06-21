@@ -166,11 +166,11 @@ class BotConfig(TimestampMixin, Base):
     ai_signal_config: Mapped[dict] = mapped_column(
         JSONB, nullable=False,
         default=lambda: {
-            "min_score": 55,
-            "require_clear": False,
-            "max_concurrent": 2,
-            "allowed_tiers": ["STRONG", "MODERATE"],
-            "allowed_statuses": ["CLEAR", "CAUTION"],
+            "min_score": 60,
+            "require_clear": True,
+            "max_concurrent": 1,
+            "allowed_tiers": ["STRONG"],
+            "allowed_statuses": ["CLEAR"],
             "sizing_multipliers": {
                 "STRONG": 1.0,
                 "MODERATE": 1.0,
@@ -193,16 +193,16 @@ class BotConfig(TimestampMixin, Base):
             "timeframe_fallback_enabled": False,
             # V2.1 Confluence Engine — configurable gates per bot
             "confluence": {
-                "require_htf_alignment": False,
+                "require_htf_alignment": True,
                 "require_liquidity_sweep": {
-                    "enabled": False,
+                    "enabled": True,
                     "lookback_candles": 20,
                     "htf_alternative": True,
                     "timeframes": ["15m", "1h"],
                 },
-                "pd_gate_strictness": 0.75,
-                "asia_gate_enabled": False,
-                "killzone_gate_mode": "disabled",
+                "pd_gate_strictness": 0.70,
+                "asia_gate_enabled": True,
+                "killzone_gate_mode": "asia_only",
                 "cdc_map": {
                     "15m": "5m", "30m": "5m",
                     "1h": "15m", "2h": "15m",

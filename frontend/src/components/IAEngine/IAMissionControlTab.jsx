@@ -29,7 +29,7 @@ export default function IAMissionControlTab({
     aiBots?.forEach((bot) => {
       // Normalize CCXT symbol "XRP/USDT:USDT" to compact "XRPUSDT"
       const sym = bot.symbol
-        ?.replace(/\/([^:]+):[^:]+$/, '$1')
+        ?.replace(/\/([^:]+):[^/]+$/, '$1')
         .replace('/', '')
       if (!sym) return
       if (!map[sym]) map[sym] = []

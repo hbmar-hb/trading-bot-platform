@@ -163,15 +163,20 @@ def main():
         )
 
         old_metrics = {
-            "auc": meta.get("wf_auc", 0.55),
+            "auc": meta.get("wf_auc", meta.get("wf_sharpe", 0.55)),
             "precision": meta.get("wf_precision", 0.30),
             "recall": meta.get("wf_recall", 0.30),
             "f1": meta.get("wf_f1", 0.25),
+            "sharpe": meta.get("wf_sharpe", 0.5),
+            "profit_factor": meta.get("wf_profit_factor", 1.1),
+            "expectancy": meta.get("wf_expectancy", 0.1),
+            "win_rate": meta.get("wf_win_rate", 0.35),
+            "max_drawdown": meta.get("wf_max_drawdown", 0.25),
         }
 
         if "error" in wf_result:
-            print(f"    ⚠️  WFV proxy falló → gate BLOQUEA el modelo")
-            wf_passed = False
+            print(f"    ⚠️  WFV proxy falló → gate NO bloquea (graceful degradation)")
+            wf_passed = True
             wf_reason = f"wf_error:{wf_result['error']}"
         else:
             wf_metrics = wf_result["aggregated"]

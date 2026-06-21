@@ -30,7 +30,7 @@ const PILLARS = [
     label: 'Estructura',
     maxPoints: 20,
     checkActive: (components) =>
-      !!(components?.structure),
+      !!(components?.structure_CHoCH || components?.structure_BOS || components?.break_type),
     checkConflict: () => false,
     checkMissing: () => false,
   },
@@ -38,8 +38,9 @@ const PILLARS = [
     key: 'poi',
     label: 'POI / Zona',
     maxPoints: 20,
-    checkActive: (components) =>
-      !!(components?.trigger || components?.fvg_context),
+    checkActive: (components, features) =>
+      !!(components?.trigger_OB || components?.trigger_FVG || components?.ob || components?.fvg ||
+         features?.trigger === 'ob' || features?.trigger === 'fvg'),
     checkConflict: () => false,
     checkMissing: () => false,
   },

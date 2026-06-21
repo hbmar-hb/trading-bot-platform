@@ -15,7 +15,6 @@ from loguru import logger
 from app.engines.bot_activator import _compute_optimal_config_sync
 from app.models.bot_config import BotConfig
 from app.services.database import SessionLocal
-from config.settings import settings
 
 # Throttle: minimum minutes between recalibrations for the same bot
 _MIN_RECHECK_MINUTES = 30
@@ -28,12 +27,6 @@ def refresh_optimal_configs(bot_id: str | None = None) -> dict:
     Args:
         bot_id: If provided, only recalibrate this bot. If None, all AI bots.
     """
-    if not settings.ai_auto_calibration_enabled:
-        logger.info(
-            "[OPTIMAL CONFIG TASK] Skipped: ai_auto_calibration_enabled is false"
-        )
-        return {"updated": 0, "skipped": 0, "throttled": 0, "total": 0, "frozen": True}
-
     with SessionLocal() as db:
         query = (
             db.query(BotConfig)

@@ -1,6 +1,6 @@
 # Guía de Usuario — Motor IA de Trading Bot Platform
-**Fecha:** 2026-05-10
-**Versión:** Scanner IA con XGBoost Anti-Fake, filtros configurables, sizing dinámico, circuit breaker, validación heurística, macro context y portfolio manager.
+**Fecha:** 2026-06-20
+**Versión:** Scanner IA con panel expandido, Scanner Live, Dashboard IA, Monte Carlo, filtros configurables, sizing dinámico, circuit breaker, validación heurística, macro context, portfolio manager, chat y asistente.
 
 ---
 
@@ -440,6 +440,24 @@ No. El sizing afecta la **cantidad de capital** que usa la posición. El apalanc
 ### ¿Por qué veo señales con Outcome "·" (punto) hace horas?
 El Outcome Tracker revisa cada 15 minutos, pero solo procesa señales que tengan al menos **1 vela completa** de antigüedad. Si acabas de lanzar el sistema, las primeras señales pueden tardar en aparecer con outcome. También, si el fetch de velas de Binance falla, la señal permanece PENDING hasta el próximo ciclo.
 
+### ¿Qué es Scanner Live y para qué sirve?
+Es una pestaña dentro de IA Engine que muestra el escaneo del mercado en tiempo real: pares analizados, señales generadas, rechazos y KPIs de las últimas 24h. Úsala para entender por qué no llegan señales o para verificar que el motor está activo.
+
+### ¿Por qué un par aparece como PAUSED en el Deployment Gate?
+Ese par/timeframe tiene métricas muy degradadas (win rate bajo, drawdown alto o feature drift importante). El sistema lo pausa automáticamente para bots reales como protección. Puedes seguir viéndolo en paper trading.
+
+### ¿Qué significa que el AUC del modelo sea 0.5?
+Un AUC de 0.5 indica que el modelo no distingue mejor que el azar entre señales buenas y malas. Normalmente ocurre cuando hay muy pocas muestras o el mercado cambió drásticamente. Espera más señales o revisa el feature drift.
+
+### ¿Puedo usar Monte Carlo sin ser administrador?
+El módulo Monte Carlo requiere el rol `moderator` o `admin`. Si no lo tienes, solicítalo al administrador de la plataforma.
+
+### ¿El asistente de IA puede ver mis posiciones?
+No. El asistente responde preguntas generales sobre el uso de la plataforma, pero no tiene acceso a tus posiciones, balances ni datos de mercado en tiempo real. No proporciona recomendaciones de inversión.
+
+### ¿Por qué mi rol no ve el menú de IA Engine?
+El motor IA y Monte Carlo están restringidos a `moderator` y `admin`. Los usuarios con rol `rol1` tienen acceso a funcionalidades básicas como paper trading, chat y señales de trading. Contacta al administrador si necesitas más permisos.
+
 ---
 
 ## 12. Glosario Rápido
@@ -465,22 +483,264 @@ El Outcome Tracker revisa cada 15 minutos, pero solo procesa señales que tengan
 
 ## 13. Checklist antes de activar IA en un bot
 
-- [ ] El par está en la watchlist de IA
-- [ ] La cuenta (real o paper) está configurada
-- [ ] El bot está pausado mientras configuras
-- [ ] Has revisado el backtest del par en el timeframe elegido
-- [ ] Has revisado el dashboard de Validación (últimos 30 días)
-- [ ] Los tiers activados tienen win rate >50%
-- [ ] El sizing está ajustado para tiers inferiores
-- [ ] Los circuit breakers están configurados
-- [ ] Has revisado el Macro Context (funding rates, eventos)
-- [ ] Has configurado los límites del Portfolio Manager
-- [ ] Has guardado la configuración
-- [ ] Has activado el bot y verificado que aparece en "Bots IA activos"
+- [ ] Tienes el rol adecuado (`moderator` o `admin`) para usar el motor IA.
+- [ ] El par está en la watchlist de IA.
+- [ ] La cuenta (real o paper) está configurada.
+- [ ] El bot está pausado mientras configuras.
+- [ ] Has revisado el backtest del par en el timeframe elegido (panel expandido).
+- [ ] Has revisado el dashboard de Validación (últimos 30 días).
+- [ ] Has consultado el Scanner Live para confirmar que el par se escanea correctamente.
+- [ ] Has revisado el Deployment Gate: el par/timeframe no está en estado PAUSED.
+- [ ] Has revisado las métricas del Dashboard IA (AUC, win rate, divergencia paper/real).
+- [ ] Los tiers activados tienen win rate >50%.
+- [ ] El sizing está ajustado para tiers inferiores.
+- [ ] Los circuit breakers están configurados.
+- [ ] Has revisado el Macro Context (funding rates, eventos).
+- [ ] Has configurado los límites del Portfolio Manager.
+- [ ] Has guardado la configuración.
+- [ ] Has activado el bot y verificado que aparece en "Bots IA activos".
 
 ---
 
-## 14. Página de Documentación
+## 14. Panel Expandido del Scanner
+
+Al pulsar cualquier caja del scanner se abre un **panel anclado debajo del grid** en lugar de un modal. Esto permite seguir navegando por la watchlist sin perder el contexto del par seleccionado.
+
+### 14.1 Pestaña Detalle
+
+Muestra el **gráfico de velas en tiempo real** con el análisis ICT/SMC superpuesto:
+
+- Zona de entrada, stop loss y take profits de la señal actual.
+- Order Blocks, Fair Value Gaps, EQ highs/lows y liquidity sweeps detectados.
+- Confluence Score, tier, anti-fake status y bias del timeframe superior.
+- Contexto textual que resume por qué se generó la señal.
+
+> El gráfico permanece montado al cambiar de pestaña, por lo que no se recarga al volver a Detalle.
+
+### 14.2 Pestaña Backtest
+
+Resumen ejecutivo del par seleccionado:
+
+- Total de señales generadas y cuántas ya tienen resultado.
+- Win rate y PnL promedio.
+- Tabla plegable con el histórico completo filtrado por ese par.
+
+Úsala para decidir si activar tiers inferiores **solo para ese par**.
+
+### 14.3 Pestaña Validación
+
+Matriz Tier × Status filtrada por el par seleccionado:
+
+- Win rate y PnL promedio por combinación (STRONG+CLEAR, MODERATE+CAUTION, etc.).
+- Selector de ventana temporal: 7, 30 o 90 días.
+
+Si ves que una combinación tiene buena estadística en el backtest general pero mala solo para este par, reconsidera operar ese par en concreto.
+
+---
+
+## 15. Scanner Live
+
+La pestaña **Live** del IA Engine muestra el **escaneo del mercado en tiempo real**. Es útil para entender qué está haciendo el motor ahora mismo y por qué no se generan señales.
+
+### 15.1 Eventos en vivo
+
+Cada vez que el scanner analiza un par, publica un evento con:
+
+- Par y timeframe analizados.
+- Resultado: señal generada, rechazada o sin oportunidad.
+- Motivo del rechazo (por ejemplo: gate de riesgo, macro context, deployment gate pausado, score insuficiente).
+- Timestamp del evento.
+
+### 15.2 KPIs de las últimas 24h
+
+- **Pares escaneados:** cuántos pares de tu watchlist ha revisado el sistema.
+- **Señales generadas:** total de señales en las últimas 24 horas.
+- **Rechazos:** cuántas señales no pasaron los filtros de riesgo o calidad.
+- **Tiempo desde último scan:** si pasa mucho tiempo, puede haber un problema de conectividad o el mercado está sin oportunidades.
+
+### 15.3 Consejos del asistente local
+
+Si tienes configurado Ollama, el Scanner Live puede mostrar **tips generados por un modelo local** que resumen el estado del mercado y sugieren ajustes simples (por ejemplo: "el par está en rango, considera reducir sizing"). Son orientativos, no recomendaciones de inversión.
+
+### 15.4 Cómo usarlo
+
+1. Abre **IA → Live**.
+2. Observa si los pares de tu watchlist se escanean cada 5 minutos.
+3. Si esperabas una señal y no aparece, revisa el motivo de rechazo: a veces el sistema está protegiendo tu capital.
+4. Si ves muchos rechazos seguidos por el mismo motivo, revisa la configuración del bot o el dashboard de salud del modelo.
+
+---
+
+## 16. Dashboard IA — Cómo interpretar las métricas
+
+La pestaña **Dashboard** del IA Engine resume la salud del motor. No es necesario entender todas las métricas, pero sí las más importantes.
+
+### 16.1 Métricas del modelo
+
+| Métrica | Qué mide | Valor saludable | Qué hacer si baja |
+|---------|----------|-----------------|-------------------|
+| **AUC-ROC** | Capacidad del modelo para distinguir señales buenas de malas. | > 0.65 | Si cae cerca de 0.50, el modelo no distingue mejor que el azar. Revisa feature drift o espera más datos. |
+| **Accuracy** | Porcentaje de señales clasificadas correctamente por el modelo. | Depende del balance; úsala junto a AUC. | Una accuracy muy alta con pocos datos puede ser sobreajuste. |
+| **Muestras** | Cuántas señales resueltas tiene el modelo para entrenar. | ≥ 200 | Por debajo de 200 el modelo no está activo; se usa solo el heurístico. |
+
+### 16.2 Métricas de rendimiento
+
+| Métrica | Qué mide | Cómo interpretarla |
+|---------|----------|--------------------|
+| **Win Rate señales** | % de señales de backtest que terminaron en TP1. | > 50% es positivo si el R:R es favorable. |
+| **Win Rate trades reales** | % de trades ejecutados por IA que ganaron. | Puede diferir del backtest por slippage, gaps y rechazos de órdenes. |
+| **PnL acumulado IA real** | Beneficio/pérdida de los trades reales ejecutados por IA. | Negativo en corto plazo no invalida el sistema; mira el sample size. |
+| **Sharpe** | Rentabilidad ajustada por volatilidad. | > 1 es aceptable; > 2 es bueno. |
+| **Profit Factor** | Ganancias totales / pérdidas totales. | > 1.5 indica que las ganancias superan las pérdidas. |
+| **Expectancy** | Ganancia/pérdida esperada por trade. | > 0 significa que, en promedio, cada trade aporta. |
+| **Max Drawdown** | Caída máxima desde el pico de equity. | Cuanto más bajo, mejor. Si supera tu límite de riesgo, reduce sizing. |
+
+### 16.3 Métricas de salud y calibración
+
+- **Feature Drift:** indica si las características del mercado actual son diferentes a las del período de entrenamiento. Valores altos sugieren que el modelo puede necesitar recalibración.
+- **Confidence Decay:** compara la confianza del modelo con el win rate real. Si predice 70% de éxito pero solo gana 40%, el modelo está sobreconfiado.
+- **Model Decay:** velocidad a la que el modelo pierde precisión. Ayuda a estimar cuándo será necesario un nuevo entrenamiento.
+- **Divergencia Paper/Real:** diferencia de rendimiento entre simulación y ejecución real. Una divergencia grande indica problemas de ejecución (slippage, lag, gaps).
+
+### 16.4 Shadow Mode y Deployment Gate
+
+- **Shadow Mode:** compara en vivo el modelo actual (live) con un modelo candidato. Si el candidato supera al live en Sharpe durante suficientes señales, puede promocionarse automáticamente.
+- **Deployment Gate:** máquina de estados por par/timeframe. Estados:
+  - **HEALTHY:** el par/timeframe puede operar en real.
+  - **CAUTION:** métricas degradadas; reduce sizing o pásate a paper.
+  - **PAUSED:** el par/timeframe está pausado para bots reales por malas métricas.
+
+> El gate actúa por símbolo. Un par pausado no afecta a otros pares de tu watchlist.
+
+### 16.5 Embudo de señales
+
+Visualiza el recorrido de las señales en 30 días:
+
+```
+Generadas → Evaluadas → Aprobadas → Ejecutadas → Ganadas
+```
+
+Si muchas señales se pierden en "Aprobadas", los filtros de calidad o los gates de riesgo son muy restrictivos. Si se pierden en "Ejecutadas", revisa la configuración de los bots o la salud de las cuentas de exchange.
+
+---
+
+## 17. Monte Carlo
+
+El módulo **Monte Carlo** permite diseñar estrategias propias, backtestearlas y evaluar su robustez mediante simulaciones. Está disponible para usuarios con rol `moderator`.
+
+### 17.1 Crear una estrategia
+
+Una estrategia se define mediante parámetros configurables:
+
+- Par y timeframe.
+- Condiciones de entrada y salida.
+- Stop loss, take profits y apalancamiento.
+- Tamaño de posición.
+
+El editor incluye una plantilla que puedes adaptar a tu idea de trading.
+
+### 17.2 Backtest
+
+El backtest ejecuta la estrategia sobre datos históricos y genera:
+
+- Curva de equity.
+- Lista de trades con entrada, salida, PnL y duración.
+- Métricas agregadas: win rate, profit factor, Sharpe, max drawdown, expectancy.
+
+Revisa la curva de equity: busca una línea relativamente estable, no un pico seguido de una caída grande.
+
+### 17.3 Simulaciones
+
+Las simulaciones de Monte Carlo evalúan qué tan robusta es la estrategia ante distintos escenarios:
+
+- **Return shuffle:** reordena los retornos para ver si el resultado depende de un orden específico.
+- **Bootstrap:** remuestrea trades con reemplazo para estimar intervalos de confianza.
+- **Perturbación de parámetros:** cambia ligeramente los parámetros para ver si la estrategia es sensible.
+- **Equity path:** genera múltiples caminos posibles del capital.
+
+### 17.4 Score de Monte Carlo
+
+El score resume la calidad de la estrategia considerando rentabilidad, riesgo y robustez. No es una garantía, pero ayuda a descartar estrategias frágiles antes de arriesgar capital real.
+
+> Usa Monte Carlo en **paper trading** antes de pasar a real, incluso si el backtest inicial es muy positivo.
+
+---
+
+## 18. Roles y permisos
+
+La plataforma utiliza tres roles diferenciados:
+
+### 18.1 `rol1` (Usuario estándar)
+
+- Acceso a chat, paper trading, optimizador básico y señales de trading.
+- No puede crear bots con motor IA ni usar Monte Carlo.
+- No puede acceder a funciones de administración.
+
+### 18.2 `moderator`
+
+- Todo lo de `rol1`.
+- Puede usar el **motor IA** (scanner, backtest, dashboard, bots IA).
+- Puede acceder al **módulo Monte Carlo**.
+- Puede gestionar bots avanzados y ver métricas de rendimiento.
+
+### 18.3 `admin`
+
+- Todo lo de `moderator`.
+- Gestión de usuarios: crear, editar roles, resetear contraseñas.
+- Acceso al **panel de administración del sistema**.
+- Uso del **kill switch** de emergencia para cerrar todas las posiciones y pausar todos los bots.
+
+> El rol determina qué opciones aparecen en el menú lateral. Si no ves una sección, consulta con el administrador.
+
+---
+
+## 19. Chat
+
+La plataforma incluye un **chat interno** para comunicación en tiempo real.
+
+### 19.1 Salas
+
+- Salas públicas y privadas.
+- Salas por tema (por ejemplo: operativa, alertas, soporte).
+- Mensajes en tiempo real mediante WebSocket.
+
+### 19.2 Mensajes privados
+
+Puedes enviar mensajes directos a otros usuarios. Aparecen en una sala privada separada.
+
+### 19.3 Menciones y reacciones
+
+- Usa `@usuario` para llamar la atención de alguien.
+- Reacciona a mensajes con emojis.
+- Selector de color de fuente y soporte para GIFs.
+
+---
+
+## 20. Asistente de IA
+
+El **Asistente** es un widget flotante que responde preguntas sobre el uso de la plataforma.
+
+### 20.1 Qué puede hacer
+
+- Explicar conceptos como tiers, circuit breaker, R, backtest o deployment gate.
+- Guiarte en la creación de bots y la configuración del motor IA.
+- Responder dudas sobre métricas y paneles.
+
+### 20.2 Requisitos
+
+- El asistente usa un modelo de lenguaje local a través de **Ollama**.
+- Debe estar configurado el puente `ollama-bridge` en `docker-compose.yml` o el modelo debe ser accesible desde los contenedores.
+- Si no hay modelo disponible, el widget no responde o muestra un mensaje de error.
+
+### 20.3 Limitaciones
+
+- El asistente no tiene acceso a tus posiciones ni a datos de mercado en tiempo real.
+- No proporciona recomendaciones de inversión.
+- Sus respuestas son orientativas; siempre verifica la configuración antes de operar.
+
+---
+
+## 21. Página de Documentación
 
 Accede a **Docs** en el menú lateral para ver la guía completa paso a paso.
 

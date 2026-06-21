@@ -22,7 +22,6 @@ from app.services.database import SessionLocal
 from app.models.llm_signal_diagnosis import LLMSignalDiagnosis
 from app.models.bot_config import BotConfig
 from app.models.bot_log import BotLog
-from config.settings import settings
 
 
 _MAX_SP_DELTA = 0.05
@@ -41,12 +40,6 @@ _MAX_PATTERN_WR = 0.60
     max_retries=0,
 )
 def calibrate_thresholds() -> dict:
-    if not settings.ai_auto_calibration_enabled:
-        logger.info(
-            "[ACTIVATOR_CALIBRATION] Skipped: ai_auto_calibration_enabled is false"
-        )
-        return {"status": "frozen", "applied": []}
-
     try:
         applied = _run_calibration()
         logger.info(f"[ACTIVATOR_CALIBRATION] Applied adjustments to {len(applied)} bots")

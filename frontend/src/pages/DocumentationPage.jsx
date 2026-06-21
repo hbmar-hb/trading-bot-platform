@@ -6,7 +6,8 @@ import {
   AlertOctagon, Activity, Gauge, Sparkles, Cpu,
   GitMerge, Scale, BrainCircuit, Target, ShieldCheck,
   BarChart4, TrendingDown, LineChart, Database, Server,
-  Microscope, Workflow, Fingerprint,
+  Microscope, Workflow, Fingerprint, Radio, FlaskConical,
+  Users, MessageSquare,
 } from 'lucide-react'
 import { cn } from '@/utils/cn'
 
@@ -20,7 +21,9 @@ function IAEngineSection() {
   const tabs = [
     { id: 'arquitectura',   label: 'Arquitectura' },
     { id: 'scanner',        label: 'Scanner & Señales' },
+    { id: 'live',           label: 'Scanner Live' },
     { id: 'dashboard',      label: 'Dashboard & Ranking' },
+    { id: 'metricas',       label: 'Métricas' },
     { id: 'configuracion',  label: 'Configuración' },
     { id: 'autonomia',      label: 'Autonomía' },
   ]
@@ -371,6 +374,60 @@ function IAEngineSection() {
         </div>
       )}
 
+      {tab === 'live' && (
+        <div className="space-y-5">
+          <div className="card p-4 border-l-4 border-cyan-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2 flex items-center gap-2">
+              <Radio size={16} className="text-cyan-500" />
+              Scanner Live — Escaneo en tiempo real
+            </h3>
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-2">
+              La pestaña <strong>Live</strong> muestra qué está haciendo el motor IA ahora mismo.
+              Es útil para verificar que el sistema escanea tu watchlist y para entender por qué una señal esperada no llega.
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+              <li><strong>Eventos en vivo:</strong> cada análisis de par publica un evento con el resultado y el motivo de rechazo si aplica.</li>
+              <li><strong>KPIs 24h:</strong> pares escaneados, señales generadas, rechazos y tiempo desde el último scan.</li>
+              <li><strong>Tips del LLM:</strong> si tienes Ollama configurado, verás consejos breves sobre el estado del mercado.</li>
+            </ul>
+          </div>
+
+          <div className="card p-4 border-l-4 border-amber-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Cómo interpretar los rechazos</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead><tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="text-left py-2 pr-4 font-semibold text-slate-700 dark:text-slate-300 w-40">Motivo</th>
+                  <th className="text-left py-2 font-semibold text-slate-700 dark:text-slate-300">Significado</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Score insuficiente','La señal no alcanzó el umbral de Confluence Score configurado.'],
+                    ['Tier/status no permitido','El bot no acepta ese tier o status.'],
+                    ['Circuit breaker abierto','Ese tier está bloqueado temporalmente por pérdidas recientes.'],
+                    ['Deployment gate PAUSED','El par/timeframe está pausado por malas métricas.'],
+                    ['Macro context','Funding extremo o evento económico cercano bloquea la operativa.'],
+                    ['Portfolio guard','La cartera ya está muy expuesta; se reduce o rechaza la posición.'],
+                  ].map(([m, s]) => (
+                    <tr key={m}><td className="py-2 pr-4 font-medium text-slate-700 dark:text-slate-300">{m}</td><td className="py-2 text-slate-600 dark:text-slate-400">{s}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card p-4 border-l-4 border-emerald-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Flujo recomendado</h3>
+            <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+              <li>Abre <strong>IA → Live</strong>.</li>
+              <li>Comprueba que los pares de tu watchlist aparecen escaneados cada ~5 minutos.</li>
+              <li>Si no llega una señal esperada, revisa el motivo de rechazo.</li>
+              <li>Antes de cambiar la configuración del bot, consulta el Dashboard y Validación.</li>
+            </ol>
+          </div>
+        </div>
+      )}
+
       {tab === 'dashboard' && (
         <div className="space-y-5">
           <div className="card p-4 border-l-4 border-rose-500">
@@ -430,6 +487,96 @@ function IAEngineSection() {
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
               Los top 3 reciben 🥇 🥈 🥉 según la columna de ordenación activa.
             </p>
+          </div>
+        </div>
+      )}
+
+      {tab === 'metricas' && (
+        <div className="space-y-5">
+          <div className="card p-4 border-l-4 border-violet-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2 flex items-center gap-2">
+              <BarChart4 size={16} className="text-violet-500" />
+              Métricas del modelo
+            </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead><tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="text-left py-2 pr-4 font-semibold text-slate-700 dark:text-slate-300 w-32">Métrica</th>
+                  <th className="text-left py-2 pr-4 font-semibold text-slate-700 dark:text-slate-300">Qué mide</th>
+                  <th className="text-left py-2 font-semibold text-slate-700 dark:text-slate-300">Qué hacer si baja</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['AUC-ROC','Capacidad de separar señales buenas de malas.','Si cae cerca de 0.50, revisa feature drift o espera más datos.'],
+                    ['Accuracy','% de señales clasificadas correctamente.','Úsala junto a AUC; valores muy altos con pocos datos pueden ser sobreajuste.'],
+                    ['Muestras','Señales resueltas usadas para entrenar.','Por debajo de 200 el modelo no está activo; se usa el heurístico.'],
+                  ].map(([m, d, a]) => (
+                    <tr key={m}><td className="py-2 pr-4 font-medium text-slate-700 dark:text-slate-300">{m}</td><td className="py-2 pr-4 text-slate-600 dark:text-slate-400">{d}</td><td className="py-2 text-slate-600 dark:text-slate-400">{a}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card p-4 border-l-4 border-emerald-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Métricas de rendimiento</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs border-collapse">
+                <thead><tr className="border-b border-slate-200 dark:border-slate-700">
+                  <th className="text-left py-2 pr-4 font-semibold text-slate-700 dark:text-slate-300 w-32">Métrica</th>
+                  <th className="text-left py-2 font-semibold text-slate-700 dark:text-slate-300">Interpretación</th>
+                </tr></thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {[
+                    ['Win Rate señales','% de señales de backtest que tocaron TP1 primero.'],
+                    ['Win Rate trades reales','% de trades ejecutados por IA que ganaron. Puede diferir del backtest por slippage y gaps.'],
+                    ['PnL acumulado IA real','Beneficio/pérdida de trades reales ejecutados por IA.'],
+                    ['Sharpe','Rentabilidad ajustada por volatilidad. >1 aceptable, >2 bueno.'],
+                    ['Profit Factor','Ganancias / pérdidas. >1.5 es saludable.'],
+                    ['Expectancy','Ganancia esperada por trade. >0 indica expectativa positiva.'],
+                    ['Max Drawdown','Caída máxima desde el pico. Si supera tu límite, reduce sizing.'],
+                  ].map(([m, i]) => (
+                    <tr key={m}><td className="py-2 pr-4 font-medium text-slate-700 dark:text-slate-300">{m}</td><td className="py-2 text-slate-600 dark:text-slate-400">{i}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card p-4 border-l-4 border-amber-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Métricas de salud y calibración</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-600 dark:text-slate-300">
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+                <p className="font-semibold mb-1">Feature Drift</p>
+                <p className="text-slate-500 dark:text-slate-400">Indica si el mercado actual se parece poco al de entrenamiento. Valores altos sugieren recalibración.</p>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+                <p className="font-semibold mb-1">Confidence Decay</p>
+                <p className="text-slate-500 dark:text-slate-400">Diferencia entre confianza predicha y win rate real. Alerta de sobreconfianza.</p>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+                <p className="font-semibold mb-1">Shadow Mode</p>
+                <p className="text-slate-500 dark:text-slate-400">Compara modelo live vs candidato. Si el candidato supera en Sharpe, puede promocionarse.</p>
+              </div>
+              <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+                <p className="font-semibold mb-1">Deployment Gate</p>
+                <p className="text-slate-500 dark:text-slate-400">HEALTHY = operable; CAUTION = reducir sizing; PAUSED = bloqueado para real.</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="card p-4 border-l-4 border-rose-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Embudo de señales</h3>
+            <p className="text-sm text-slate-600 dark:text-slate-300 mb-2">
+              Representa el recorrido de las señales en 30 días:
+            </p>
+            <p className="text-sm font-mono text-slate-700 dark:text-slate-300 mb-2">
+              Generadas → Evaluadas → Aprobadas → Ejecutadas → Ganadas
+            </p>
+            <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+              <li>Mucha pérdida en <strong>Aprobadas</strong>: filtros o gates muy restrictivos.</li>
+              <li>Mucha pérdida en <strong>Ejecutadas</strong>: revisa bots, cuentas de exchange o saldo.</li>
+            </ul>
           </div>
         </div>
       )}
@@ -720,7 +867,7 @@ const SECTIONS = [
         <ol className="list-decimal list-inside space-y-2 text-sm text-slate-600 dark:text-slate-300">
           <li>Ve a <strong>Exchanges</strong> en el menú lateral.</li>
           <li>Pulsa <strong>"Añadir cuenta"</strong>.</li>
-          <li>Selecciona el exchange (Binance, BingX, Bitunix…).</li>
+          <li>Selecciona el exchange (BingX o Bitunix).</li>
           <li>Introduce un <strong>label</strong> descriptivo (ej. "Mi cuenta Binance").</li>
           <li>Introduce la <strong>API Key</strong> y <strong>API Secret</strong> de tu exchange.</li>
           <li>Selecciona si la cuenta es de <strong>Futuros (USDⓈ-M)</strong>.</li>
@@ -1347,6 +1494,226 @@ const SECTIONS = [
     ),
   },
   {
+    id: 'monte-carlo',
+    title: 'Monte Carlo',
+    icon: FlaskConical,
+    content: (
+      <>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Monte Carlo</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+          El módulo Monte Carlo te permite diseñar estrategias propias, backtestearlas y evaluar su robustez
+          mediante simulaciones estadísticas. Está disponible para usuarios con rol <strong>moderator</strong> o <strong>admin</strong>.
+        </p>
+
+        <div className="card p-4 border-l-4 border-violet-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Crear una estrategia</h3>
+          <ol className="list-decimal list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Ve a <strong>Monte Carlo</strong> en el menú lateral.</li>
+            <li>Pulsa <strong>Nueva estrategia</strong>.</li>
+            <li>Configura par, timeframe, condiciones de entrada/salida, stop loss, take profits y sizing.</li>
+            <li>Guarda la estrategia.</li>
+          </ol>
+        </div>
+
+        <div className="card p-4 border-l-4 border-emerald-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Backtest</h3>
+          <p className="text-sm text-slate-600 dark:text-slate-300 mb-2">
+            El backtest ejecuta la estrategia sobre datos históricos y genera:
+          </p>
+          <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Curva de equity.</li>
+            <li>Lista de trades con entrada, salida, PnL y duración.</li>
+            <li>Métricas: win rate, profit factor, Sharpe, max drawdown y expectancy.</li>
+          </ul>
+        </div>
+
+        <div className="card p-4 border-l-4 border-blue-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Simulaciones</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-slate-600 dark:text-slate-300">
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+              <p className="font-semibold mb-1">Return shuffle</p>
+              <p className="text-slate-500 dark:text-slate-400">Reordena los retornos para comprobar si el resultado depende de un orden concreto.</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+              <p className="font-semibold mb-1">Bootstrap</p>
+              <p className="text-slate-500 dark:text-slate-400">Remuestrea trades para estimar intervalos de confianza.</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+              <p className="font-semibold mb-1">Perturbación de parámetros</p>
+              <p className="text-slate-500 dark:text-slate-400">Cambia ligeramente los parámetros para detectar fragilidad.</p>
+            </div>
+            <div className="bg-slate-50 dark:bg-slate-800/50 rounded p-3">
+              <p className="font-semibold mb-1">Equity path</p>
+              <p className="text-slate-500 dark:text-slate-400">Genera múltiples caminos posibles del capital.</p>
+            </div>
+          </div>
+        </div>
+
+        <div className="card p-4 border-l-4 border-amber-500">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Score de Monte Carlo</h3>
+          <p className="text-sm text-slate-600 dark:text-slate-300 mb-2">
+            El score resume rentabilidad, riesgo y robustez en un solo valor. No garantiza resultados futuros,
+            pero ayuda a descartar estrategias frágiles antes de arriesgar capital real.
+          </p>
+          <div className="bg-red-500/5 border border-red-500/20 rounded-lg px-4 py-3 text-xs text-red-700 dark:text-red-300">
+            <p className="font-semibold">⚠️ Recomendación</p>
+            <p className="mt-1">Pasa siempre la estrategia a paper trading después de Monte Carlo, incluso si el backtest y las simulaciones son muy positivos.</p>
+          </div>
+        </div>
+      </>
+    ),
+  },
+  {
+    id: 'chat',
+    title: 'Chat',
+    icon: MessageSquare,
+    content: (
+      <>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Chat interno</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+          La plataforma incluye un chat para comunicarte con otros usuarios del sistema en tiempo real.
+        </p>
+
+        <div className="card p-4 border-l-4 border-blue-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Salas</h3>
+          <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Salas públicas por tema (operativa, alertas, soporte).</li>
+            <li>Salas privadas entre dos usuarios.</li>
+            <li>Mensajes en tiempo real mediante WebSocket.</li>
+          </ul>
+        </div>
+
+        <div className="card p-4 border-l-4 border-violet-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Menciones y reacciones</h3>
+          <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Usa <strong>@usuario</strong> para llamar la atención de alguien.</li>
+            <li>Reacciona a mensajes con emojis.</li>
+            <li>Personaliza el color de tu fuente y usa GIFs.</li>
+          </ul>
+        </div>
+
+        <div className="bg-yellow-500/5 border border-yellow-500/20 rounded-lg px-4 py-3 text-xs text-yellow-700 dark:text-yellow-300">
+          <p className="font-semibold">💡 Tip</p>
+          <p className="mt-1">El chat es una herramienta de comunicación, no un canal de señales de trading. Las decisiones de operativa deben basarse en tus bots y análisis.</p>
+        </div>
+      </>
+    ),
+  },
+  {
+    id: 'roles',
+    title: 'Roles y permisos',
+    icon: Users,
+    content: (
+      <>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Roles y permisos</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+          La plataforma distingue tres roles. El rol determina qué opciones aparecen en el menú lateral y qué acciones puedes realizar.
+        </p>
+
+        <div className="space-y-3">
+          <div className="card p-4 border-l-4 border-slate-400">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-1">rol1 — Usuario estándar</h3>
+            <ul className="list-disc list-inside text-xs text-slate-600 dark:text-slate-300">
+              <li>Chat, paper trading, optimizador básico y señales de trading.</li>
+              <li>No puede usar el motor IA ni Monte Carlo.</li>
+            </ul>
+          </div>
+          <div className="card p-4 border-l-4 border-blue-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-1">moderator — Usuario avanzado</h3>
+            <ul className="list-disc list-inside text-xs text-slate-600 dark:text-slate-300">
+              <li>Todo lo de <strong>rol1</strong>.</li>
+              <li>Motor IA completo: scanner, backtest, dashboard, bots IA.</li>
+              <li>Módulo Monte Carlo.</li>
+              <li>Gestión avanzada de bots y métricas.</li>
+            </ul>
+          </div>
+          <div className="card p-4 border-l-4 border-rose-500">
+            <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-1">admin — Administrador</h3>
+            <ul className="list-disc list-inside text-xs text-slate-600 dark:text-slate-300">
+              <li>Todo lo de <strong>moderator</strong>.</li>
+              <li>Gestión de usuarios: crear, editar roles, resetear contraseñas.</li>
+              <li>Panel de administración del sistema.</li>
+              <li>Kill switch de emergencia.</li>
+            </ul>
+          </div>
+        </div>
+      </>
+    ),
+  },
+  {
+    id: 'admin-system',
+    title: 'Administración del Sistema',
+    icon: ShieldCheck,
+    content: (
+      <>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Administración del Sistema</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+          Panel exclusivo para <strong>admin</strong> que permite revisar la salud general de la plataforma y generar diagnósticos.
+        </p>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-slate-600 dark:text-slate-300 mb-4">
+          <div className="card p-3 border-l-4 border-emerald-500">
+            <p className="font-semibold text-xs mb-1">Infraestructura</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Estado de Docker, PostgreSQL, Redis, Nginx y uso de recursos.</p>
+          </div>
+          <div className="card p-3 border-l-4 border-blue-500">
+            <p className="font-semibold text-xs mb-1">Celery</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Workers activos, tareas en cola y latencia del broker.</p>
+          </div>
+          <div className="card p-3 border-l-4 border-violet-500">
+            <p className="font-semibold text-xs mb-1">Modelos ML</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Último entrenamiento, AUC, accuracy, muestras y shadow mode.</p>
+          </div>
+          <div className="card p-3 border-l-4 border-amber-500">
+            <p className="font-semibold text-xs mb-1">Exchange</p>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Conectividad y salud de las cuentas de exchange configuradas.</p>
+          </div>
+        </div>
+
+        <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg px-4 py-3 text-xs text-blue-700 dark:text-blue-300">
+          <p className="font-semibold">💡 Uso</p>
+          <p className="mt-1">Puedes ejecutar checks individuales, descargar logs compartibles y revisar el historial del monitor de shadow mode. Úsalo ante cualquier comportamiento anómalo de la plataforma.</p>
+        </div>
+      </>
+    ),
+  },
+  {
+    id: 'asistente',
+    title: 'Asistente de IA',
+    icon: Sparkles,
+    content: (
+      <>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-white mb-3">Asistente de IA</h2>
+        <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
+          El Asistente es un widget flotante que responde preguntas sobre el uso de la plataforma mediante un modelo de lenguaje local.
+        </p>
+
+        <div className="card p-4 border-l-4 border-violet-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Qué puede hacer</h3>
+          <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Explicar conceptos: tiers, circuit breaker, R, backtest, deployment gate.</li>
+            <li>Guiarte en la creación de bots y configuración del motor IA.</li>
+            <li>Responder dudas sobre métricas y paneles.</li>
+          </ul>
+        </div>
+
+        <div className="card p-4 border-l-4 border-amber-500 mb-4">
+          <h3 className="font-semibold text-sm text-slate-800 dark:text-slate-200 mb-2">Requisitos</h3>
+          <ul className="list-disc list-inside space-y-1 text-sm text-slate-600 dark:text-slate-300">
+            <li>Una instancia de <strong>Ollama</strong> accesible desde los contenedores.</li>
+            <li>El servicio opcional <strong>ollama-bridge</strong> configurado en <code>docker-compose.yml</code>.</li>
+            <li>Si Ollama no está disponible, el widget no responde o muestra error.</li>
+          </ul>
+        </div>
+
+        <div className="bg-red-500/5 border border-red-500/20 rounded-lg px-4 py-3 text-xs text-red-700 dark:text-red-300">
+          <p className="font-semibold">⚠️ Limitaciones</p>
+          <p className="mt-1">El asistente no tiene acceso a tus posiciones, balances ni datos de mercado en tiempo real. No proporciona recomendaciones de inversión. Verifica siempre la configuración antes de operar.</p>
+        </div>
+      </>
+    ),
+  },
+  {
     id: 'faq',
     title: 'FAQ y Solución de Problemas',
     icon: HelpCircle,
@@ -1410,6 +1777,55 @@ const SECTIONS = [
             <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
               BLOCK significa 2 o más red flags graves (spread excesivo, volumen anómalo, etc.).
               Es una protección de seguridad del sistema. Nunca se opera BLOCK, ni siquiera en paper trading.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿Qué es Scanner Live?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Es una pestaña de IA Engine que muestra el escaneo del mercado en tiempo real:
+              pares analizados, señales generadas, rechazos y KPIs de las últimas 24h.
+              Úsala para entender por qué no llegan señales.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿Por qué un par aparece como PAUSED?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              El Deployment Gate pausa un par/timeframe cuando sus métricas son muy malas
+              (win rate bajo, drawdown alto o feature drift). Es una protección automática para bots reales.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿Qué significa un AUC de 0.5?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Que el modelo no distingue mejor que el azar. Suele pasar con pocas muestras o tras un cambio de régimen de mercado.
+              Revisa el feature drift y espera más señales antes de confiar ciegamente.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿Quién puede usar Monte Carlo?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              El módulo Monte Carlo requiere rol <strong>moderator</strong> o <strong>admin</strong>.
+              Los usuarios con rol <strong>rol1</strong> no tienen acceso.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿El asistente de IA puede ver mis posiciones?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              No. Responde preguntas generales sobre el uso de la plataforma, pero no accede a posiciones,
+              balances ni datos de mercado en tiempo real. No da recomendaciones de inversión.
+            </p>
+          </div>
+
+          <div className="card p-4">
+            <h4 className="font-semibold text-sm text-slate-800 dark:text-slate-200">¿Por qué no veo el menú de IA Engine?</h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              El motor IA y Monte Carlo están restringidos a <strong>moderator</strong> y <strong>admin</strong>.
+              Si tienes rol <strong>rol1</strong>, verás opciones más limitadas como paper trading, chat y señales.
             </p>
           </div>
         </div>
