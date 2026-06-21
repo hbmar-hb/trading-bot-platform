@@ -163,6 +163,17 @@ def monitor_feature_drift(self) -> dict:
             f"healthy={healthy} degraded={degraded} paused={paused} high_drift={high_drift_count}"
         )
 
+        # Health-check hook: record last successful run timestamp
+        try:
+            from app.services.cache import sync_redis
+            sync_redis.setex(
+                "drift_monitor:last_run",
+                int(timedelta(days=2).total_seconds()),
+                datetime.now(timezone.utc).isoformat(),
+            )
+        except Exception:
+            pass
+
         return {
             "checked": len(results),
             "healthy": healthy,

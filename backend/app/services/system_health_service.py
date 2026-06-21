@@ -303,7 +303,7 @@ def check_models() -> HealthResult:
                 info["fallback_models"] = [
                     p.name for p in [ensemble_path, retrain_meta_path] if p.exists()
                 ]
-                issues.append("🟡 adaptive_weights.json no encontrado — usando modelos ensemble/retrain")
+                # Modo simplificado: se usan modelos ensemble/retrain globales
             else:
                 issues.append("🔴 adaptive_weights.json no encontrado y tampoco hay modelos ensemble/retrain")
     except Exception as exc:
@@ -326,32 +326,41 @@ def check_models() -> HealthResult:
         if stale_bots:
             issues.append(f"🟡 {stale_bots} modelos per-bot sin actualizar >72h")
     else:
-        issues.append("🟡 No hay directorio /app/ai/models/bots/")
+        info["bot_model_dirs"] = 0
+        # Modo simplificado: no se usan modelos per-bot
 
-    # Último drift check
+    # Último drift check (task monitor_feature_drift escribe drift_monitor:last_run)
     try:
-        import asyncpg
+        last_run_raw = sync_redis.get("drift_monitor:last_run")
+        if last_run_raw:
+            last_run = datetime.fromisoformat(last_run_raw)
+            hours_ago = (datetime.now(timezone.utc) - last_run).total_seconds() / 3600
+            info["last_drift_check_h"] = round(hours_ago, 1)
+            if hours_ago > 8:
+                issues.append(f"🟡 Último drift check hace {hours_ago:.1f}h (esperado <4h)")
+        else:
+            # Fallback legacy: feature_importance_drift se actualiza durante retrain
+            import asyncpg
+            dsn = os.getenv("DATABASE_URL", "").replace("+asyncpg", "")
+            if dsn:
+                async def _drift():
+                    conn = await asyncpg.connect(dsn=dsn)
+                    try:
+                        row = await conn.fetchrow(
+                            "SELECT MAX(created_at) as last FROM feature_importance_drift"
+                        )
+                        return row["last"] if row else None
+                    finally:
+                        await conn.close()
 
-        dsn = os.getenv("DATABASE_URL", "").replace("+asyncpg", "")
-        if dsn:
-            async def _drift():
-                conn = await asyncpg.connect(dsn=dsn)
-                try:
-                    row = await conn.fetchrow(
-                        "SELECT MAX(created_at) as last FROM feature_importance_drift"
-                    )
-                    return row["last"] if row else None
-                finally:
-                    await conn.close()
-
-            last_drift = asyncio.get_event_loop().run_until_complete(_drift())
-            if last_drift:
-                hours_ago = (datetime.now(timezone.utc) - last_drift).total_seconds() / 3600
-                info["last_drift_check_h"] = round(hours_ago, 1)
-                if hours_ago > 8:
-                    issues.append(f"🟡 Último drift check hace {hours_ago:.1f}h (esperado <4h)")
-            else:
-                issues.append("🟡 No hay registros de feature_importance_drift")
+                last_drift = asyncio.get_event_loop().run_until_complete(_drift())
+                if last_drift:
+                    hours_ago = (datetime.now(timezone.utc) - last_drift).total_seconds() / 3600
+                    info["last_drift_check_h"] = round(hours_ago, 1)
+                    if hours_ago > 168:
+                        issues.append(f"🟡 Último drift check hace {hours_ago:.1f}h (esperado <4h)")
+                else:
+                    issues.append("🟡 No hay registros de drift reciente")
     except Exception:
         pass
 
