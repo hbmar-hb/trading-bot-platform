@@ -25,6 +25,11 @@ class LocalLLMTip(BaseModel):
 
 DEFAULT_TIMEOUT = 120.0
 
+# For interactive endpoints we need a fast connection-fail fallback when the
+# local Ollama endpoint is not reachable, while still giving enough time for
+# the model to answer once connected.
+_INTERACTIVE_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+
 
 def _build_tip_prompt(event: dict) -> str:
     status = event.get("status")
@@ -194,7 +199,7 @@ async def generate_tip(event: dict, *, heavy: bool = False) -> LocalLLMTip:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
             resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
             resp.raise_for_status()
             data = resp.json()
@@ -251,7 +256,7 @@ async def generate_summary(
             "stream": False,
         }
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
                 resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
                 resp.raise_for_status()
                 data = resp.json()
@@ -317,7 +322,7 @@ async def answer_question(
             "stream": False,
         }
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
                 resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
                 resp.raise_for_status()
                 data = resp.json()
@@ -352,7 +357,7 @@ async def answer_question(
 
 async def _stream_local_ollama(local_url: str, payload: dict):
     """Yields tokens from a local Ollama streaming completion."""
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
         async with client.stream(
             "POST",
             f"{local_url}/chat/completions",

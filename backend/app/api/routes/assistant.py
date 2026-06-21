@@ -5,7 +5,6 @@ fine-tuning. Developer users bypass the phase-1 knowledge restriction.
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import time
 import uuid
@@ -195,14 +194,7 @@ async def _persist_interaction(
     latency_ms: int | None,
     extra_data: dict | None,
 ) -> None:
-    """Persist an assistant turn in the background (fire-and-forget)."""
-    async def _save() -> None:
-        try:
-            async with managed_async_session(_create_interaction) as _result:
-                pass
-        except Exception as exc:
-            logger.warning(f"[assistant] failed to persist interaction: {exc}")
-
+    """Persist an assistant turn."""
     async def _create_interaction(session: AsyncSession) -> AssistantInteraction:
         interaction = AssistantInteraction(
             id=interaction_id,
@@ -219,8 +211,10 @@ async def _persist_interaction(
         await session.flush()
         return interaction
 
-    # Run without blocking the response to the user.
-    asyncio.create_task(_save())
+    try:
+        await managed_async_session(_create_interaction)
+    except Exception as exc:
+        logger.warning(f"[assistant] failed to persist interaction: {exc}")
 
 
 @router.post("/message", response_model=AssistantResponse)
@@ -245,7 +239,7 @@ async def assistant_message(
         model_used = settings.llm_default_model
 
     latency_ms = int((time.perf_counter() - started_at) * 1000)
-    _persist_interaction(
+    await _persist_interaction(
         interaction_id=interaction_id,
         user_id=user.id,
         question=req.message,
@@ -388,7 +382,7 @@ def _assistant_stream_local(
             yield f"event: error\ndata: {json.dumps({'error': _ERROR_LOCAL})}\n\n"
         finally:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
-            _persist_interaction(
+            await _persist_interaction(
                 interaction_id=interaction_id,
                 user_id=user_id,
                 question=question,
@@ -429,7 +423,7 @@ def _assistant_stream_remote(
             yield f"event: error\ndata: {json.dumps({'error': _ERROR_REMOTE})}\n\n"
         finally:
             latency_ms = int((time.perf_counter() - started_at) * 1000)
-            _persist_interaction(
+            await _persist_interaction(
                 interaction_id=interaction_id,
                 user_id=user_id,
                 question=question,
