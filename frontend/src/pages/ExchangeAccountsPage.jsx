@@ -34,6 +34,7 @@ function AccountForm({ onCreated }) {
           >
             <option value="bingx">BingX</option>
             <option value="bitunix">Bitunix</option>
+            <option value="bitget">Bitget</option>
           </select>
         </div>
         <div>

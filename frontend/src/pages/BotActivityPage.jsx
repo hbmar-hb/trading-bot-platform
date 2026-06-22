@@ -34,7 +34,8 @@ function LogRow({ log }) {
 }
 
 function SignalRow({ sig }) {
-  const ok = sig.processed
+  const hasError = Boolean(sig.error_message)
+  const ok = sig.processed && !hasError
   return (
     <tr className="border-b border-slate-200 dark:border-gray-800/50 hover:bg-slate-100 dark:hover:bg-gray-800/40">
       <td className="py-2 pr-4 text-xs text-slate-500 dark:text-gray-500 font-mono whitespace-nowrap">
@@ -45,8 +46,8 @@ function SignalRow({ sig }) {
         {sig.raw_payload?.price ? parseFloat(sig.raw_payload.price).toFixed(2) : '—'}
       </td>
       <td className="py-2 pr-4">
-        <span className={`text-xs font-medium ${ok ? 'text-green-400' : sig.error_message ? 'text-red-400' : 'text-yellow-400'}`}>
-          {ok ? 'procesada' : sig.error_message ? 'error' : 'pendiente'}
+        <span className={`text-xs font-medium ${ok ? 'text-green-400' : hasError ? 'text-red-400' : 'text-yellow-400'}`}>
+          {ok ? 'procesada' : hasError ? 'error' : 'pendiente'}
         </span>
       </td>
       <td className="py-2 text-xs text-slate-500 dark:text-gray-400 max-w-xs truncate">{sig.error_message || '—'}</td>

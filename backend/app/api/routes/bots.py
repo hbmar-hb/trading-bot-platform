@@ -451,6 +451,7 @@ async def get_bot_candles(
         if exchange_name == "bitunix":
             # Bitunix no tiene soporte CCXT nativo; usamos BingX como proxy de precio
             exchange_name = "bingx"
+        # bingx y bitget usan CCXT directamente
     else:
         # Bots sin cuenta asignada (alerts_only u otros) usan fuente pública
         exchange_name = "binance"

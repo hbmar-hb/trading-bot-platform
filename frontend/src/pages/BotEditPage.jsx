@@ -250,16 +250,16 @@ const toCompactSymbol = (s) =>
 
 
 /* ─── Symbol search ───────────────────────────────────────── */
-function SymbolSearch({ value, onChange, accountId, paperMode, alertsOnly }) {
+function SymbolSearch({ value, onChange, accountId, paperMode, alertsOnly, exchange }) {
   const [markets, setMarkets]   = useState([])
   const [loading, setLoading]   = useState(false)
   const [query,   setQuery]     = useState(value || '')
   const [open,    setOpen]      = useState(false)
   const ref = useRef(null)
 
-  const loadBingxMarkets = () => {
+  const loadExchangeMarkets = (exchangeName = 'bingx') => {
     setLoading(true)
-    exchangeAccountsService.marketsByExchange('bingx')
+    exchangeAccountsService.marketsByExchange(exchangeName)
       .then(r => setMarkets((r.data || []).map(toCompactSymbol)))
       .catch(() => setMarkets([]))
       .finally(() => setLoading(false))
@@ -269,24 +269,24 @@ function SymbolSearch({ value, onChange, accountId, paperMode, alertsOnly }) {
   // Si no hay accountId (bots solo alertas) o paper, usamos BingX como fuente de referencia
   useEffect(() => {
     if (paperMode || alertsOnly || !accountId) {
-      loadBingxMarkets()
+      loadExchangeMarkets('bingx')
       return
     }
-    
+
     setLoading(true)
     exchangeAccountsService.markets(accountId)
       .then(r => {
         const list = (r.data || []).map(toCompactSymbol)
         if (list.length === 0) {
-          // Fallback a BingX si el exchange no devuelve mercados (ej. Bitunix)
-          loadBingxMarkets()
+          // Fallback al exchange correcto si markets() no devuelve nada
+          loadExchangeMarkets(exchange || 'bingx')
         } else {
           setMarkets(list)
           setLoading(false)
         }
       })
-      .catch(() => loadBingxMarkets())
-  }, [accountId, paperMode, alertsOnly])
+      .catch(() => loadExchangeMarkets(exchange || 'bingx'))
+  }, [accountId, paperMode, alertsOnly, exchange])
 
   // Sincronizar query si el valor externo cambia (modo edición)
   useEffect(() => { setQuery(value || '') }, [value])
@@ -938,6 +938,7 @@ export default function BotEditPage() {
                   onChange={v => set('symbol', v)}
                   accountId={form.exchange_account_id}
                   paperMode={form.account_type === 'paper'}
+                  exchange={accounts.find(a => a.id === form.exchange_account_id)?.exchange}
                 />
               )}
             </Field>

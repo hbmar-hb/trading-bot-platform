@@ -214,6 +214,10 @@ class PriceMonitor:
                 self._clients["bingx"] = ccxt.bingx({
                     "options": {"defaultType": "swap"},
                 })
+            elif exchange_name == "bitget":
+                self._clients["bitget"] = ccxt.bitget({
+                    "options": {"defaultType": "swap"},
+                })
             elif exchange_name == "bitunix":
                 # Bitunix: reutilizar bingx como fallback de precio público
                 # TODO: reemplazar con cliente público de Bitunix cuando esté disponible
@@ -236,16 +240,22 @@ def _to_ccxt_symbol(symbol: str, exchange: str) -> str:
     """
     Asegura que el símbolo esté en formato CCXT (BASE/QUOTE:SETTLE).
     Si ya está en formato CCXT (contiene '/') lo devuelve tal cual.
-    Si está en formato compacto (BTCUSDT) lo convierte.
+    Si está en formato compacto (BTCUSDT, ETHUSDC) lo convierte.
     """
+    if not symbol:
+        return symbol
+
+    symbol = symbol.strip().upper()
+
     # Ya en formato CCXT — no tocar
     if "/" in symbol:
         return symbol
 
-    # Conversión genérica: BTCUSDT → BTC/USDT:USDT
-    if symbol.endswith("USDT"):
-        base = symbol[:-4]
-        return f"{base}/USDT:USDT"
+    # Conversión genérica: BTCUSDT → BTC/USDT:USDT, ETHUSDC → ETH/USDC:USDC
+    for quote in ["USDT", "USDC", "BTC", "ETH", "USD"]:
+        if symbol.endswith(quote):
+            base = symbol[: -len(quote)]
+            return f"{base}/{quote}:{quote}"
 
     return symbol
 
