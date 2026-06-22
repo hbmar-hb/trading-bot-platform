@@ -10,6 +10,7 @@ export default defineConfig({
   },
   server: {
     port: 5173,
+    allowedHosts: ['dev.getquantum.app'],
     proxy: {
       '/api': {
         target: 'http://localhost:8000',
