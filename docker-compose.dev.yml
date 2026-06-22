@@ -14,7 +14,7 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8100:8000"
+      - "${BACKEND_HOST_PORT:-8100}:8000"
     environment:
       ENV: development
       DEBUG: "true"
@@ -38,7 +38,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "5274:5173"
+      - "${FRONTEND_DEV_HOST_PORT:-5274}:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -58,7 +58,7 @@ services:
       - redis
       - celery_worker
     ports:
-      - "5556:5555"
+      - "${FLOWER_HOST_PORT:-5556}:5555"
     command: >
       celery -A app.services.celery_app flower
       --port=5555
