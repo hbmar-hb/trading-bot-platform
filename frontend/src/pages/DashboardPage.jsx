@@ -11,7 +11,7 @@ import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { killSwitchService } from '@/services/killSwitch'
 import useUiStore from '@/store/uiStore'
 import { useAuth } from '@/hooks/useAuth'
-import { isAdmin } from '@/constants/roles'
+import { isDeveloper } from '@/constants/roles'
 import BotStatusBadge   from '@/components/Common/BotStatusBadge'
 import LoadingSpinner   from '@/components/Common/LoadingSpinner'
 import PnlChart         from '@/components/Common/PnlChart'
@@ -258,7 +258,7 @@ function KillSwitchButton() {
   const addNotification = useUiStore(s => s.addNotification)
   const { user } = useAuth()
 
-  if (!isAdmin(user)) return null
+  if (!isDeveloper(user)) return null
 
   return (
     <button

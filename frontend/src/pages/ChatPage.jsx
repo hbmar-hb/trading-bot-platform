@@ -3,6 +3,7 @@ import { MessageSquare, Plus, Trash2, X, Send, Image, Smile, Lock, Users } from 
 import { chatService } from '@/services/chat'
 import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
+import { isAtLeastAdmin } from '@/constants/roles'
 
 const BG_SHAPES = {
   none: 'none',
@@ -144,7 +145,7 @@ export default function ChatPage() {
   const messagesEndRef = useRef(null)
   const pollRef        = useRef(null)
 
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = isAtLeastAdmin(user)
   const isMod   = user?.role === 'moderator'
   const canManageChannels = isAdmin || isMod
 

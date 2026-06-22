@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { aiService } from '@/services/aiService'
 import useAuthStore from '@/store/authStore'
+import { isAtLeastAdmin } from '@/constants/roles'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
 import { cn } from '@/utils/cn'
 
@@ -224,7 +225,7 @@ function UserContextView({ data }) {
 
 export default function SignalDiagnosisModal({ signal, onClose }) {
   const user = useAuthStore(s => s.user)
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = isAtLeastAdmin(user)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)

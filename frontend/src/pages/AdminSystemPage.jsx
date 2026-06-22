@@ -3,6 +3,7 @@ import { Activity, AlertTriangle, CheckCircle, ClipboardCopy, History, Loader2, 
 import { cn } from '@/utils/cn'
 import { adminSystemService } from '@/services/adminSystem'
 import useAuthStore from '@/store/authStore'
+import { isDeveloper } from '@/constants/roles'
 import EngineAIHelper from '@/components/IAEngine/EngineAIHelper'
 
 const CHECK_ICONS = {
@@ -223,12 +224,12 @@ export default function AdminSystemPage() {
     }
   }, [shareLog])
 
-  if (!user || user.role !== 'admin') {
+  if (!user || !isDeveloper(user)) {
     return (
       <div className="p-8 text-center text-slate-500 dark:text-gray-400">
         <ShieldAlert size={48} className="mx-auto mb-4 opacity-50" />
         <p className="text-lg font-medium">Acceso restringido</p>
-        <p className="text-sm">Solo administradores pueden ver esta página.</p>
+        <p className="text-sm">Solo el perfil desarrollador puede ver esta página.</p>
       </div>
     )
   }

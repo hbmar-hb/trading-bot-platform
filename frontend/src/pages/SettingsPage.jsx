@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Palette, ShieldCheck, ShieldOff, Send, MessageSquare } from 'lucide-react'
 import { authService } from '@/services/auth'
 import useAuthStore from '@/store/authStore'
+import { isDeveloper } from '@/constants/roles'
 
 function Section({ title, children }) {
   return (
@@ -723,6 +724,7 @@ function TelegramNotificationsSection({ user, onUpdated }) {
 /* ─── Page ────────────────────────────────────────────────── */
 export default function SettingsPage() {
   const { user, setUser } = useAuthStore()
+  const isDev = isDeveloper(user)
 
   const [pwForm, setPwForm]     = useState({ current: '', next: '', confirm: '' })
   const [pwSaving, setPwSaving] = useState(false)
@@ -786,9 +788,11 @@ export default function SettingsPage() {
         <TelegramNotificationsSection user={user} onUpdated={updateUserFromData} />
       </Section>
 
-      <Section title="Personalización del Chat">
-        <ChatPersonalizationSection user={user} onUpdated={updateUserFromData} />
-      </Section>
+      {isDev && (
+        <Section title="Personalización del Chat">
+          <ChatPersonalizationSection user={user} onUpdated={updateUserFromData} />
+        </Section>
+      )}
 
       <Section title="Verificación en dos pasos (2FA)">
         <TwoFactorSection user={user} onUpdated={refreshUser} />

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Edit2, Mail, Plus, Trash2, X, Check, Shield, ShieldCheck, User } from 'lucide-react'
+import { Edit2, Mail, Plus, Trash2, X, Check, Code, Shield, ShieldCheck, User } from 'lucide-react'
 import { usersService } from '@/services/usersService'
 import useAuthStore from '@/store/authStore'
 
@@ -7,6 +7,7 @@ const ROLES = [
   { value: 'rol1',      label: 'ROL 1',      icon: User,        cls: 'bg-slate-500/20 text-slate-400' },
   { value: 'moderator', label: 'Moderador',  icon: Shield,      cls: 'bg-amber-500/20 text-amber-400' },
   { value: 'admin',     label: 'Admin',      icon: ShieldCheck, cls: 'bg-blue-500/20 text-blue-400' },
+  { value: 'developer', label: 'Developer',  icon: Code,        cls: 'bg-violet-500/20 text-violet-400' },
 ]
 
 function roleMeta(role) {
@@ -169,6 +170,7 @@ export default function UsersPage() {
   const currentUser = useAuthStore(s => s.user)
   const [users, setUsers]         = useState([])
   const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState(null)
   const [modal, setModal]         = useState(null)
   const [togglingId, setTogglingId] = useState(null)
   const [sendingReset, setSendingReset] = useState(null)
@@ -180,10 +182,20 @@ export default function UsersPage() {
       usersService.onlineStatus().catch(() => ({ data: { online_user_ids: [] } })),
     ])
       .then(([usersRes, onlineRes]) => {
-        setUsers(usersRes.data)
+        const data = usersRes.data
+        if (!Array.isArray(data)) {
+          console.error('[UsersPage] /users no devolvió un array:', data)
+          setError('La respuesta del servidor no es válida. Revisa la consola.')
+          setUsers([])
+        } else {
+          setUsers(data)
+        }
         setOnlineIds(new Set(onlineRes.data.online_user_ids || []))
       })
-      .catch(() => {})
+      .catch((err) => {
+        console.error('[UsersPage] Error cargando usuarios:', err)
+        setError(err.response?.data?.detail || 'Error al cargar usuarios')
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -236,6 +248,12 @@ export default function UsersPage() {
         </button>
       </div>
 
+      {error && (
+        <div className="bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300 rounded-lg px-4 py-3 text-sm">
+          {error}
+        </div>
+      )}
+
       {loading ? (
         <p className="text-slate-500 dark:text-gray-400 text-sm">Cargando…</p>
       ) : (
@@ -244,7 +262,7 @@ export default function UsersPage() {
             <div key={user.id} className="card flex items-center gap-4">
               <div className="relative shrink-0">
                 <div className={`w-9 h-9 rounded-full flex items-center justify-center font-bold text-white ${
-                  user.role === 'admin' ? 'bg-blue-600' : user.role === 'moderator' ? 'bg-amber-500' : 'bg-emerald-600'
+                  user.role === 'admin' ? 'bg-blue-600' : user.role === 'developer' ? 'bg-violet-600' : user.role === 'moderator' ? 'bg-amber-500' : 'bg-emerald-600'
                 }`}>
                   {user.username[0].toUpperCase()}
                 </div>

@@ -6,6 +6,8 @@ import { exchangeAccountsService } from '@/services/exchangeAccounts'
 import { paperTradingService } from '@/services/paperTrading'
 import { aiService } from '@/services/aiService'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
+import useAuthStore from '@/store/authStore'
+import { isDeveloper } from '@/constants/roles'
 
 /* ─── Auto-config button ────────────────────────────────── */
 function AutoConfigButton({ symbol, onApply }) {
@@ -686,6 +688,20 @@ function buildPayload(f) {
   return payload
 }
 
+/* Restringe campos avanzados para roles no-developer */
+function applyRoleRestrictions(form, dev) {
+  if (dev) return form
+  return {
+    ...form,
+    alerts_only: false,
+    ai_signal_mode: false,
+    ai_optimal_config_enabled: false,
+    auto_timeframe: false,
+    indicator_enabled: false,
+    webhook_enabled: true,
+  }
+}
+
 /* ─── Tabs ────────────────────────────────────────────────── */
 const ALL_TABS = ['Básico', 'Capital / SL', 'Take Profits', 'Trailing Stop', 'Breakeven', 'Stop dinámico', 'Activación']
 const ALERT_TABS = ['Básico', 'Activación']
@@ -697,6 +713,8 @@ export default function BotEditPage() {
   const { botId } = useParams()
   const navigate  = useNavigate()
   const isEdit    = !!botId
+  const user      = useAuthStore(s => s.user)
+  const isDev     = isDeveloper(user)
 
   const [tab, setTab]           = useState(0)
   const [form, setForm]         = useState(DEFAULT)
@@ -719,11 +737,16 @@ export default function BotEditPage() {
     
     if (isEdit) {
       botsService.get(botId)
-        .then(r => { setBotData(r.data); setForm(flattenBot(r.data)) })
+        .then(r => {
+          setBotData(r.data)
+          setForm(applyRoleRestrictions(flattenBot(r.data), isDev))
+        })
         .catch(() => setError('No se pudo cargar el bot'))
         .finally(() => setLoading(false))
+    } else {
+      setForm(f => applyRoleRestrictions(f, isDev))
     }
-  }, [botId, isEdit])
+  }, [botId, isEdit, isDev])
 
   const set = (field, value) => setForm(f => ({ ...f, [field]: value }))
   const setInd = (key, value) => setForm(f => ({ ...f, ind_config: { ...f.ind_config, [key]: value } }))
@@ -813,32 +836,36 @@ export default function BotEditPage() {
               />
             </Field>
 
-            {/* Modo solo alertas */}
-            <Toggle
-              checked={form.alerts_only}
-              onChange={v => {
-                set('alerts_only', v)
-                if (v) {
-                  set('ai_signal_mode', false)
-                  set('ai_optimal_config_enabled', false)
-                  set('auto_timeframe', false)
-                  set('webhook_enabled', true)   // los bots solo alertas reciben señales por webhook
-                  set('indicator_enabled', false)
-                }
-              }}
-              label="Solo alertas (sin ejecución de trades)"
-            />
-            {form.alerts_only && (
-              <p className="text-xs text-slate-500 dark:text-gray-400">
-                Este bot solo recibirá señales de TradingView y las enviará a Telegram. No abrirá posiciones ni requiere cuenta de exchange.
-              </p>
+            {/* Modo solo alertas — solo developer */}
+            {isDev && (
+              <>
+                <Toggle
+                  checked={form.alerts_only}
+                  onChange={v => {
+                    set('alerts_only', v)
+                    if (v) {
+                      set('ai_signal_mode', false)
+                      set('ai_optimal_config_enabled', false)
+                      set('auto_timeframe', false)
+                      set('webhook_enabled', true)   // los bots solo alertas reciben señales por webhook
+                      set('indicator_enabled', false)
+                    }
+                  }}
+                  label="Solo alertas (sin ejecución de trades)"
+                />
+                {form.alerts_only && (
+                  <p className="text-xs text-slate-500 dark:text-gray-400">
+                    Este bot solo recibirá señales de TradingView y las enviará a Telegram. No abrirá posiciones ni requiere cuenta de exchange.
+                  </p>
+                )}
+              </>
             )}
 
             {!form.alerts_only && (
               <>
                 {/* Selector de tipo de cuenta */}
                 <Field label="Modo de trading">
-                  <div className="flex gap-2">
+                  <div className={`flex gap-2 ${!isDev ? 'flex-col' : ''}`}>
                     <button
                       type="button"
                       onClick={() => set('account_type', 'real')}
@@ -851,19 +878,26 @@ export default function BotEditPage() {
                       <span className="text-sm font-medium">🏦 Real</span>
                       <span className="block text-xs opacity-80">Con dinero real</span>
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => set('account_type', 'paper')}
-                      className={`flex-1 py-2 px-4 rounded-lg border transition-colors ${
-                        form.account_type === 'paper'
-                          ? 'bg-purple-600 border-purple-500 text-white'
-                          : 'bg-slate-100 dark:bg-gray-800 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
-                      }`}
-                    >
-                      <span className="text-sm font-medium">📄 Paper</span>
-                      <span className="block text-xs opacity-80">Simulación sin riesgo</span>
-                    </button>
+                    {isDev && (
+                      <button
+                        type="button"
+                        onClick={() => set('account_type', 'paper')}
+                        className={`flex-1 py-2 px-4 rounded-lg border transition-colors ${
+                          form.account_type === 'paper'
+                            ? 'bg-purple-600 border-purple-500 text-white'
+                            : 'bg-slate-100 dark:bg-gray-800 border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-400 hover:bg-slate-200 dark:hover:bg-gray-700'
+                        }`}
+                      >
+                        <span className="text-sm font-medium">📄 Paper</span>
+                        <span className="block text-xs opacity-80">Simulación sin riesgo</span>
+                      </button>
+                    )}
                   </div>
+                  {!isDev && (
+                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+                      El modo paper está disponible solo para el perfil developer.
+                    </p>
+                  )}
                 </Field>
 
                 {/* Selector de cuenta según el tipo */}
@@ -999,9 +1033,9 @@ export default function BotEditPage() {
                 <div className="space-y-3">
                   <p className="text-xs font-medium text-slate-600 dark:text-gray-300">Sentido contrario — acción por fuente:</p>
                   {[
-                    { key: 'cc_opp_ia',        label: 'Scanner IA',        color: 'violet' },
+                    ...(isDev ? [{ key: 'cc_opp_ia', label: 'Scanner IA', color: 'violet' }] : []),
                     { key: 'cc_opp_webhook',   label: 'Webhook',           color: 'blue' },
-                    { key: 'cc_opp_indicator', label: 'Indicador interno', color: 'emerald' },
+                    ...(isDev ? [{ key: 'cc_opp_indicator', label: 'Indicador interno', color: 'emerald' }] : []),
                   ].map(({ key, label, color }) => (
                     <Field key={key} label={label}>
                       <select
@@ -1184,51 +1218,55 @@ export default function BotEditPage() {
                   </div>
                   <Toggle
                     checked={form.webhook_enabled}
-                    onChange={v => { if (!form.alerts_only) set('webhook_enabled', v) }}
-                    disabled={form.alerts_only}
+                    onChange={v => { if (isDev && !form.alerts_only) set('webhook_enabled', v) }}
+                    disabled={!isDev || form.alerts_only}
                   />
                 </div>
 
-                {/* Indicador interno */}
-                <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-gray-700">
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl mt-0.5">📊</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-white">Indicador interno</p>
-                      <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">El sistema escanea el par y la temporalidad configurados usando el indicador seleccionado. Cuando detecta una confluencia A / A+ dispara el bot automáticamente.</p>
+                {/* Indicador interno — solo developer */}
+                {isDev && (
+                  <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-gray-700">
+                    <div className="flex items-start gap-3">
+                      <span className="text-xl mt-0.5">📊</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-white">Indicador interno</p>
+                        <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">El sistema escanea el par y la temporalidad configurados usando el indicador seleccionado. Cuando detecta una confluencia A / A+ dispara el bot automáticamente.</p>
+                      </div>
                     </div>
+                    <Toggle
+                      checked={form.indicator_enabled}
+                      onChange={v => { if (!form.alerts_only) { set('indicator_enabled', v); if (v && !form.trigger_indicator) set('trigger_indicator', 'ict') } }}
+                      disabled={form.alerts_only}
+                    />
                   </div>
-                  <Toggle
-                    checked={form.indicator_enabled}
-                    onChange={v => { if (!form.alerts_only) { set('indicator_enabled', v); if (v && !form.trigger_indicator) set('trigger_indicator', 'ict') } }}
-                    disabled={form.alerts_only}
-                  />
-                </div>
+                )}
 
-                {/* Scanner IA */}
-                <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-gray-700">
-                  <div className="flex items-start gap-3">
-                    <span className="text-xl mt-0.5">🤖</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-semibold text-slate-800 dark:text-white">Scanner IA</p>
-                      <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">El scanner ICT+SMC con modelo XGBoost evalúa confluencias y anti-fake en tiempo real. Por defecto dispara STRONG+CLEAR, pero puedes configurar MODERATE y CAUTION bajo tu responsabilidad.</p>
+                {/* Scanner IA — solo developer */}
+                {isDev && (
+                  <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 dark:border-gray-700">
+                    <div className="flex items-start gap-3">
+                      <span className="text-xl mt-0.5">🤖</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-semibold text-slate-800 dark:text-white">Scanner IA</p>
+                        <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">El scanner ICT+SMC con modelo XGBoost evalúa confluencias y anti-fake en tiempo real. Por defecto dispara STRONG+CLEAR, pero puedes configurar MODERATE y CAUTION bajo tu responsabilidad.</p>
+                      </div>
                     </div>
+                    <Toggle
+                      checked={form.ai_signal_mode}
+                      onChange={v => {
+                        if (!form.alerts_only) {
+                          setForm(f => ({
+                            ...f,
+                            ai_signal_mode: v,
+                            ai_optimal_config_enabled: v,
+                            auto_timeframe: v,
+                          }))
+                        }
+                      }}
+                      disabled={form.alerts_only}
+                    />
                   </div>
-                  <Toggle
-                    checked={form.ai_signal_mode}
-                    onChange={v => {
-                      if (!form.alerts_only) {
-                        setForm(f => ({
-                          ...f,
-                          ai_signal_mode: v,
-                          ai_optimal_config_enabled: v,
-                          auto_timeframe: v,
-                        }))
-                      }
-                    }}
-                    disabled={form.alerts_only}
-                  />
-                </div>
+                )}
 
                 {/* Estrategia Monte Carlo activa */}
                 {isEdit && botData?.montecarlo_config?.strategy_id && (
