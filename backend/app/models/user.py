@@ -18,7 +18,7 @@ class User(TimestampMixin, Base):
     hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    # Rol: rol1 | moderator | admin
+    # Rol: rol1 | moderator | admin | developer
     role: Mapped[str] = mapped_column(String(20), default="rol1", nullable=False)
 
     # Email verificado

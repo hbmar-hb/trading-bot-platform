@@ -12,7 +12,7 @@ from passlib.context import CryptContext
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_admin_user
+from app.api.dependencies import require_developer_role, is_developer
 from app.models.user import User
 from app.schemas.auth import UserCreate, UserResponse, UserUpdate
 from app.services.cache import set_password_reset_token
@@ -26,7 +26,7 @@ from app.api.websocket.manager import ws_manager
 router = APIRouter(prefix="/users", tags=["users"])
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-VALID_ROLES = ("rol1", "moderator", "admin")
+VALID_ROLES = ("rol1", "moderator", "admin", "developer")
 
 
 async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> User:
@@ -39,7 +39,7 @@ async def _get_user_or_404(user_id: uuid.UUID, db: AsyncSession) -> User:
 
 @router.get("", response_model=list[UserResponse])
 async def list_users(
-    _: User = Depends(get_current_admin_user),
+    _: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(User).order_by(User.created_at))
@@ -49,9 +49,15 @@ async def list_users(
 @router.post("", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 async def create_user(
     data: UserCreate,
-    _: User = Depends(get_current_admin_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
+    if data.role == "developer" and not is_developer(current_user.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un desarrollador puede crear usuarios con rol developer",
+        )
+
     existing = await db.execute(
         select(User).where(
             (User.username == data.username) | (User.email == data.email)
@@ -87,10 +93,16 @@ async def create_user(
 async def update_user(
     user_id: uuid.UUID,
     data: UserUpdate,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     user = await _get_user_or_404(user_id, db)
+
+    if user.role == "developer" and not is_developer(current_admin.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un desarrollador puede modificar a otro desarrollador",
+        )
 
     if data.username is not None:
         dup = await db.execute(
@@ -114,6 +126,11 @@ async def update_user(
         user.is_active = data.is_active
 
     if data.role is not None:
+        if data.role == "developer" and not is_developer(current_admin.role):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Solo un desarrollador puede asignar el rol developer",
+            )
         if data.role in VALID_ROLES:
             user.role = data.role
 
@@ -128,7 +145,7 @@ async def update_user(
 @router.post("/{user_id}/send-reset-email", status_code=status.HTTP_204_NO_CONTENT)
 async def send_reset_email(
     user_id: uuid.UUID,
-    _: User = Depends(get_current_admin_user),
+    _: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """El admin dispara un email de restablecimiento de contraseña al usuario.
@@ -143,20 +160,25 @@ async def send_reset_email(
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_user(
     user_id: uuid.UUID,
-    current_admin: User = Depends(get_current_admin_user),
+    current_admin: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     if user_id == current_admin.id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "No puedes eliminar tu propia cuenta")
 
     user = await _get_user_or_404(user_id, db)
+    if user.role == "developer" and not is_developer(current_admin.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Solo un desarrollador puede eliminar a otro desarrollador",
+        )
     await db.delete(user)
     await db.commit()
 
 
 @router.get("/online-status")
 async def online_status(
-    _: User = Depends(get_current_admin_user),
+    _: User = Depends(require_developer_role),
 ):
     """Devuelve el número de usuarios actualmente conectados vía WebSocket."""
     online_ids = ws_manager.get_online_user_ids()

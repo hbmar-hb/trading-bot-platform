@@ -128,8 +128,8 @@ def _greeting_reply() -> str:
 
 
 def _is_developer(user: User) -> bool:
-    """Return True for super-developers configured in settings."""
-    return user.username in settings.developer_username_set
+    """Return True for users with the developer role or configured super-developers."""
+    return user.role == "developer" or user.username in settings.developer_username_set
 
 
 async def get_current_developer_user(

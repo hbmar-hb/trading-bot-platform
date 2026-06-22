@@ -16,6 +16,21 @@ from loguru import logger
 
 security = HTTPBearer()
 
+ROLE_LEVEL = {"rol1": 1, "moderator": 2, "admin": 3, "developer": 4}
+AUTHORIZED_ROLES = {"rol1", "moderator", "admin", "developer"}
+
+
+def is_at_least_moderator(role: str) -> bool:
+    return ROLE_LEVEL.get(role, 0) >= ROLE_LEVEL["moderator"]
+
+
+def is_at_least_admin(role: str) -> bool:
+    return ROLE_LEVEL.get(role, 0) >= ROLE_LEVEL["admin"]
+
+
+def is_developer(role: str) -> bool:
+    return role == "developer"
+
 
 def _verify_token(token: str) -> dict:
     """Decode and validate the access token, logging the exact failure reason."""
@@ -162,10 +177,10 @@ async def get_current_moderator_user(
             detail="Token invalido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if user.role not in ("admin", "moderator"):
+    if not is_at_least_moderator(user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requiere rol de administrador o moderador",
+            detail="Se requiere rol de moderador o superior",
         )
     return user
 
@@ -210,10 +225,10 @@ async def get_current_admin_user(
             detail="Token invalido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if user.role != "admin":
+    if not is_at_least_admin(user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requiere rol de administrador",
+            detail="Se requiere rol de administrador o superior",
         )
     return user
 
@@ -224,7 +239,7 @@ async def get_current_authorized_user(
 ) -> User:
     """
     Valida el JWT y verifica que el usuario tenga un rol autorizado
-    para operar en producción: rol1, moderator o admin.
+    para operar en producción: rol1, moderator, admin o developer.
     """
     from sqlalchemy import select
 
@@ -258,7 +273,7 @@ async def get_current_authorized_user(
             detail="Token invalido o expirado",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    if user.role not in ("rol1", "moderator", "admin"):
+    if user.role not in AUTHORIZED_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Rol no autorizado",
@@ -272,13 +287,13 @@ async def require_authorized_role(
 ) -> User:
     """
     Complemento para endpoints que usan get_current_user_id.
-    Carga el usuario y verifica que tenga rol rol1, moderator o admin.
+    Carga el usuario y verifica que tenga rol rol1, moderator, admin o developer.
     """
     from sqlalchemy import select
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or user.role not in ("rol1", "moderator", "admin"):
+    if not user or user.role not in AUTHORIZED_ROLES:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Rol no autorizado",
@@ -292,16 +307,35 @@ async def require_non_rol1_role(
 ) -> User:
     """
     Complemento para endpoints que usan get_current_user_id y no deben
-    ser accesibles por rol1 (pero sí por moderator o admin).
+    ser accesibles por rol1 (pero sí por moderator, admin o developer).
     """
     from sqlalchemy import select
 
     result = await db.execute(select(User).where(User.id == user_id))
     user = result.scalar_one_or_none()
-    if not user or user.role not in ("moderator", "admin"):
+    if not user or not is_at_least_moderator(user.role):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Se requiere rol de moderador o administrador",
+            detail="Se requiere rol de moderador o superior",
+        )
+    return user
+
+
+async def require_developer_role(
+    user_id: uuid.UUID = Depends(get_current_user_id),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Complemento para endpoints exclusivos del rol developer.
+    """
+    from sqlalchemy import select
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user or not is_developer(user.role):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Se requiere rol de developer",
         )
     return user
 
