@@ -1,0 +1,29 @@
+# ═══════════════════════════════════════════════════════════
+# AMBIENTE DE DESARROLLO — Identidad del proyecto Docker
+# ═══════════════════════════════════════════════════════════
+#
+# Este archivo NO debe usarse solo. Se combina con:
+#   docker-compose.yml        (servicios base)
+#   docker-compose.dev.yml    (hot reload, Vite dev server, Flower)
+#   .env.dev                  (variables de entorno de desarrollo)
+#
+# Comando:
+#   docker compose \
+#     -f docker-compose.yml \
+#     -f docker-compose.dev.yml \
+#     -f docker-compose.dev-env.yml \
+#     --env-file .env.dev \
+#     up -d --build
+#
+# Diferencias clave respecto a producción:
+#   - Nombre de proyecto Docker distinto → contenedores y volúmenes aislados.
+#   - Puertos host distintos (definidos en .env.dev) para evitar colisionar con producción.
+#   - Base de datos PostgreSQL independiente (tradingbot_dev).
+
+name: trading-bot-platform-dev
+
+services:
+  frontend:
+    # El compose base publica Nginx en el puerto 80; en dev usamos Vite (5173).
+    # !reset elimina los ports heredados para evitar colisión de puertos host.
+    ports: !reset
