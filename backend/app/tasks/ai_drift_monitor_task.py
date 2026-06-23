@@ -8,7 +8,7 @@ Autonomous behaviour:
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from loguru import logger

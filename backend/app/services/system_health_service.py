@@ -14,6 +14,7 @@ from typing import Any
 
 from loguru import logger
 
+from app.services.cache import sync_redis
 from app.services.database import AsyncSessionLocal_task as AsyncSessionLocal
 from sqlalchemy import select, text
 
