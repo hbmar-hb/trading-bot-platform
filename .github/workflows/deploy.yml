@@ -16,6 +16,11 @@ jobs:
       - name: Copy .env file
         run: cp /home/deploy/apps/trading-bot-platform/.env .env
 
+      - name: Backup before deploy
+        run: |
+          chmod +x scripts/backup-before-deploy.sh
+          ./scripts/backup-before-deploy.sh
+
       - name: Stop containers
         run: docker compose -f docker-compose.yml down --remove-orphans || true
 

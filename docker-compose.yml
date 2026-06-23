@@ -76,7 +76,7 @@ services:
     command: >
       celery -A app.services.celery_app worker
       --loglevel=info
-      --concurrency=4
+      --concurrency=2
       --queues=orders,sl_updates,notifications,default
 
   # ─────────────────────────────────────────
