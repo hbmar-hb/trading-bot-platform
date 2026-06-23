@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_user_id, require_developer_role
+from app.api.dependencies import get_current_user_id
 from app.models.paper_balance import PaperBalance
 from app.schemas.paper_trading import (
     PaperBalanceCreate,
@@ -20,7 +20,7 @@ from app.schemas.paper_trading import (
 )
 from app.services.database import get_db
 
-router = APIRouter(prefix="/paper-trading", tags=["paper-trading"], dependencies=[Depends(require_developer_role)])
+router = APIRouter(prefix="/paper-trading", tags=["paper-trading"])
 
 
 async def _get_balance_or_404(
