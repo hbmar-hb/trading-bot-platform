@@ -2,7 +2,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { MessageCircle, X, Send, Bot, Square, ThumbsUp, ThumbsDown } from 'lucide-react'
 import api, { BASE_URL } from '@/services/api'
 import useAuthStore from '@/store/authStore'
-import { isDeveloper } from '@/constants/roles'
+import { hasAnyRole, AUTHORIZED_ROLES } from '@/constants/roles'
 
 const WELCOME = '¡Hola! Soy el asistente de la plataforma. Puedo ayudarte con dudas sobre bots, el scanner de IA, el chart, paper trading y más. ¿En qué puedo ayudarte?'
 
@@ -12,7 +12,7 @@ function getAccessToken() {
 
 export default function AssistantWidget() {
   const user = useAuthStore(s => s.user)
-  if (!isDeveloper(user)) return null
+  if (!hasAnyRole(user, AUTHORIZED_ROLES)) return null
 
   const [open, setOpen] = useState(false)
   const [history, setHistory] = useState([])
