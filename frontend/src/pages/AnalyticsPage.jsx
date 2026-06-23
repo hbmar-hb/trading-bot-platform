@@ -5,6 +5,8 @@ import { analyticsService } from '@/services/analytics'
 import { botsService } from '@/services/bots'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
 import useBalanceStore from '@/store/balanceStore'
+import useAuthStore from '@/store/authStore'
+import { isDeveloper } from '@/constants/roles'
 import { Sparkles, TrendingUp, TrendingDown, Minus, Download, RefreshCw, Filter, Clock, Calendar, Bot, User, ChevronDown, ChevronUp, Eye } from 'lucide-react'
 import { getDateRange } from '@/utils/dateRanges'
 import TradeDetailModal from '@/components/Analytics/TradeDetailModal'
@@ -849,6 +851,7 @@ export default function AnalyticsPage() {
   const [range, setRange]         = useState(RANGES[1])
   const [selectedBot, setSelectedBot] = useState('')
   const [selectedSource, setSelectedSource] = useState('')
+  const user = useAuthStore(s => s.user)
   const [isDark, setIsDark]       = useState(false)
   const [displayMode, setDisplayMode] = useState('usdt') // 'usdt' | 'percent'
   
@@ -1231,10 +1234,12 @@ export default function AnalyticsPage() {
                       title="Ver trades">
                       <Eye size={14} />
                     </button>
-                    <Link to={`/bots/${bot.bot_id}/optimizer`}
-                      className="p-1.5 text-slate-400 hover:text-blue-400 rounded" title="Optimizador">
-                      <Sparkles size={14} />
-                    </Link>
+                    {isDeveloper(user) && (
+                      <Link to={`/bots/${bot.bot_id}/optimizer`}
+                        className="p-1.5 text-slate-400 hover:text-blue-400 rounded" title="Optimizador">
+                        <Sparkles size={14} />
+                      </Link>
+                    )}
                   </div>
                 </div>
 

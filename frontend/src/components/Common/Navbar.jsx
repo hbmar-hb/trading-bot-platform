@@ -11,24 +11,24 @@ import useBalanceStore from '@/store/balanceStore'
 import { optimizerService } from '@/services/optimizer'
 import { chatService } from '@/services/chat'
 import { killSwitchService } from '@/services/killSwitch'
-import { AUTHORIZED_ROLES, PRIVILEGED_ROLES, ROLES, hasAnyRole, isAdmin } from '@/constants/roles'
+import { AUTHORIZED_ROLES, ROLES, hasAnyRole, isDeveloper } from '@/constants/roles'
 
 const links = [
   { to: '/dashboard',          icon: Gauge,        label: 'Dashboard',  roles: AUTHORIZED_ROLES },
   { to: '/bots',               icon: Bot,          label: 'Bots',       roles: AUTHORIZED_ROLES },
   { to: '/positions',          icon: TrendingUp,   label: 'Posiciones', roles: AUTHORIZED_ROLES },
-  { to: '/chart',              icon: CandlestickChart, label: 'Chart',  roles: PRIVILEGED_ROLES },
-  { to: '/ai',                 icon: Brain,        label: 'IA Engine',  roles: [ROLES.ADMIN] },
-  { to: '/montecarlo',         icon: Dices,        label: 'Monte Carlo', roles: PRIVILEGED_ROLES },
+  { to: '/chart',              icon: CandlestickChart, label: 'Chart',  roles: [ROLES.DEVELOPER] },
+  { to: '/ai',                 icon: Brain,        label: 'IA Engine',  roles: [ROLES.DEVELOPER] },
+  { to: '/montecarlo',         icon: Dices,        label: 'Monte Carlo', roles: [ROLES.DEVELOPER] },
   { to: '/analytics',          icon: BarChart3,    label: 'Analytics',  roles: AUTHORIZED_ROLES },
   { to: '/exchange-accounts',  icon: KeyRound,     label: 'Exchanges',  roles: AUTHORIZED_ROLES },
   { to: '/exchange-trades',    icon: History,      label: 'Historial',  roles: AUTHORIZED_ROLES },
   { to: '/manual-trading',     icon: MousePointerClick, label: 'Manual', roles: AUTHORIZED_ROLES },
-  { to: '/paper-trading',      icon: FileText,     label: 'Paper',      roles: PRIVILEGED_ROLES },
-  { to: '/optimizer-db',       icon: Zap,          label: 'Optimizer DB', roles: PRIVILEGED_ROLES, badge: 'alerts' },
-  { to: '/chat',               icon: MessageSquare, label: 'Chat',      roles: PRIVILEGED_ROLES, badge: 'mentions' },
-  { to: '/users',              icon: Users,        label: 'Usuarios',   roles: [ROLES.ADMIN] },
-  { to: '/admin/system',       icon: ShieldAlert,  label: 'Sistema',    roles: [ROLES.ADMIN] },
+  { to: '/paper-trading',      icon: FileText,     label: 'Paper',      roles: [ROLES.DEVELOPER] },
+  { to: '/optimizer-db',       icon: Zap,          label: 'Optimizer DB', roles: [ROLES.DEVELOPER], badge: 'alerts' },
+  { to: '/chat',               icon: MessageSquare, label: 'Chat',      roles: [ROLES.DEVELOPER], badge: 'mentions' },
+  { to: '/users',              icon: Users,        label: 'Usuarios',   roles: [ROLES.DEVELOPER] },
+  { to: '/admin/system',       icon: ShieldAlert,  label: 'Sistema',    roles: [ROLES.DEVELOPER] },
   { to: '/docs',               icon: BookOpen,     label: 'Docs',       roles: AUTHORIZED_ROLES },
   { to: '/settings',           icon: Settings,     label: 'Ajustes',    roles: AUTHORIZED_ROLES },
 ]
@@ -41,7 +41,7 @@ export default function Navbar() {
   const [mentionCount, setMentionCount] = useState(0)
 
   useEffect(() => {
-    if (!hasAnyRole(user, PRIVILEGED_ROLES)) return
+    if (!isDeveloper(user)) return
     const loadAlerts = async () => {
       try {
         const res = await optimizerService.getGlobalDB()
@@ -56,7 +56,7 @@ export default function Navbar() {
   }, [user])
 
   useEffect(() => {
-    if (!hasAnyRole(user, PRIVILEGED_ROLES)) return
+    if (!isDeveloper(user)) return
     const loadMentions = async () => {
       try {
         const res = await chatService.listMentions()
@@ -136,8 +136,8 @@ export default function Navbar() {
 
       {/* Footer */}
       <div className="p-3 border-t border-slate-200 dark:border-gray-800 space-y-1">
-        {/* Kill Switch: solo admin */}
-        {isAdmin(user) && (
+        {/* Kill Switch: admin o superior */}
+        {isDeveloper(user) && (
           <button
             onClick={async () => {
               if (!confirm('🚨 KILL SWITCH\n\n¿Estás seguro de que quieres cerrar TODAS las posiciones abiertas y pausar todos los bots?\n\nEsta acción no se puede deshacer.')) return

@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     local_llm_model_assistant: str = "mistral:7b"    # model for assistant/RAG responses
     local_llm_model_heavy: str = "mixtral:8x7b"      # slow model for background tasks
     local_llm_enabled: bool = False
+    local_llm_allow_remote_fallback: bool = False      # if false, local LLM failures return unavailable instead of using remote paid LLM
     assistant_use_local_llm: bool = True               # if false, assistant uses OpenRouter/Moonshot
 
     model_config = {
@@ -128,6 +129,14 @@ class Settings(BaseSettings):
 
     # Security
     require_email_verification: bool = False
+
+    # Comma-separated list of usernames that have developer/super-admin access.
+    # Developers bypass assistant knowledge restrictions and can query all docs.
+    developer_usernames: str = "Marci526"
+
+    @property
+    def developer_username_set(self) -> set[str]:
+        return {u.strip() for u in self.developer_usernames.split(",") if u.strip()}
 
     # GIFs (Giphy)
     giphy_api_key: str = ""

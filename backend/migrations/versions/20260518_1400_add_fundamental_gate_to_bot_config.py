@@ -15,8 +15,14 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column('bot_configs', sa.Column('fundamental_gate_enabled', sa.Boolean(), nullable=False, server_default='true'))
-    op.add_column('bot_configs', sa.Column('fundamental_sensitivity', sa.String(20), nullable=False, server_default='normal'))
+    # La migración 20260518_1300 ya podría haber creado estas columnas;
+    # la duplicación causaba errores en nuevas bases de datos. Se hace idempotente.
+    from sqlalchemy import inspect
+    columns = {c['name'] for c in inspect(op.get_bind()).get_columns('bot_configs')}
+    if 'fundamental_gate_enabled' not in columns:
+        op.add_column('bot_configs', sa.Column('fundamental_gate_enabled', sa.Boolean(), nullable=False, server_default='true'))
+    if 'fundamental_sensitivity' not in columns:
+        op.add_column('bot_configs', sa.Column('fundamental_sensitivity', sa.String(20), nullable=False, server_default='normal'))
 
 
 def downgrade() -> None:

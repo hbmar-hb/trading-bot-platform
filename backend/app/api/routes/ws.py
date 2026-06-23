@@ -8,6 +8,7 @@ from jose import JWTError, jwt
 from loguru import logger
 
 from app.api.websocket.manager import ws_manager
+from app.api.dependencies import is_developer
 from app.models.user import User
 from config.settings import settings
 
@@ -230,7 +231,7 @@ async def websocket_endpoint(
             return
 
     # Rechazar roles no autorizados en producción
-    if user.role not in ("rol1", "moderator", "admin"):
+    if user.role not in ("rol1", "moderator", "admin", "developer"):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
 
@@ -273,8 +274,8 @@ async def websocket_endpoint(
             try:
                 msg = json.loads(data)
                 if msg.get("type") == "chat_message":
-                    if user.role == "rol1":
-                        logger.warning(f"WS user={user_id_str} con rol rol1 intentó enviar mensaje de chat")
+                    if not is_developer(user.role):
+                        logger.warning(f"WS user={user_id_str} con rol {user.role} intentó enviar mensaje de chat")
                     else:
                         await _handle_chat_message(user_id_str, msg)
                 error_count = max(0, error_count - 1)  # reducir contador en mensajes válidos

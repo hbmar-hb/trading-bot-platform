@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom'
 import { Activity, Brain, Edit, Plus, Sparkles, Trash2, TrendingUp, TrendingDown } from 'lucide-react'
 import { useBots } from '@/hooks/useBotConfig'
 import usePositionStore from '@/store/positionStore'
+import useAuthStore from '@/store/authStore'
+import { isDeveloper } from '@/constants/roles'
 import BotStatusBadge from '@/components/Common/BotStatusBadge'
 import LoadingSpinner from '@/components/Common/LoadingSpinner'
 
@@ -60,6 +62,7 @@ function PriceDisplay({ symbol, prices, priceChanges }) {
 export default function BotsListPage() {
   const { bots, loading, toggleStatus, deleteBot } = useBots()
   const { prices, priceChanges } = usePositionStore()
+  const user = useAuthStore(s => s.user)
   const [deleting, setDeleting] = useState(null)
   const [toggling, setToggling] = useState(null)
 
@@ -216,9 +219,11 @@ export default function BotsListPage() {
                   <Link to={`/bots/${bot.id}/activity`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded" title="Actividad">
                     <Activity size={16} />
                   </Link>
-                  <Link to={`/bots/${bot.id}/optimizer`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-blue-400 rounded" title="Optimizador">
-                    <Sparkles size={16} />
-                  </Link>
+                  {isDeveloper(user) && (
+                    <Link to={`/bots/${bot.id}/optimizer`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-blue-400 rounded" title="Optimizador">
+                      <Sparkles size={16} />
+                    </Link>
+                  )}
                   <Link to={`/bots/${bot.id}/edit`} className="p-1.5 text-slate-400 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white rounded" title="Editar">
                     <Edit size={16} />
                   </Link>

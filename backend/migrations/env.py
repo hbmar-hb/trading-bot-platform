@@ -3,7 +3,7 @@ import sys
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, pool, inspect, MetaData, Table, Column, String
 
 # Añadir el directorio backend/ al path para que los imports funcionen
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -44,6 +44,26 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def ensure_alembic_version_table(connection) -> None:
+    """
+    Alembic crea alembic_version.version_num como VARCHAR(32) por defecto.
+    Algunas revisiones del proyecto usan UUIDs de 36 caracteres, por lo que
+    necesitamos VARCHAR(64). Si la tabla no existe, la creamos nosotros con
+    el tipo correcto antes de que Alembic la genere.
+    """
+    if 'alembic_version' not in inspect(connection).get_table_names():
+        metadata = MetaData()
+        Table(
+            'alembic_version',
+            metadata,
+            Column('version_num', String(64), nullable=False, primary_key=True),
+        )
+        metadata.create_all(connection)
+        # Alembic envuelve todo en una transacción; forzamos el commit de la
+        # tabla de versiones para que no se revierta junto con el resto.
+        connection.commit()
+
+
 def run_migrations_online() -> None:
     """
     Modo online: se conecta a la DB y ejecuta las migraciones.
@@ -55,6 +75,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        ensure_alembic_version_table(connection)
         context.configure(
             connection=connection,
             target_metadata=target_metadata,

@@ -1,9 +1,8 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import ProtectedRoute from '@/components/Common/ProtectedRoute'
-import AdminRoute from '@/components/Common/AdminRoute'
 import RoleRoute from '@/components/Common/RoleRoute'
 import Layout from '@/components/Common/Layout'
-import { AUTHORIZED_ROLES, PRIVILEGED_ROLES, ROLES } from '@/constants/roles'
+import { AUTHORIZED_ROLES, ROLES } from '@/constants/roles'
 
 import LoginPage                from '@/pages/LoginPage'
 import ChangePasswordForcedPage from '@/pages/ChangePasswordForcedPage'
@@ -42,8 +41,7 @@ const guard = (Page, allowedRoles = AUTHORIZED_ROLES) => (
   </ProtectedRoute>
 )
 
-const guardPriv = (Page) => guard(Page, PRIVILEGED_ROLES)
-const guardAdmin = (Page) => guard(Page, [ROLES.ADMIN])
+const guardDeveloper = (Page) => guard(Page, [ROLES.DEVELOPER])
 
 export default function AppRoutes() {
   return (
@@ -64,7 +62,7 @@ export default function AppRoutes() {
         <Route path="/bots/new"                     element={guard(BotEditPage)} />
         <Route path="/bots/:botId/edit"             element={guard(BotEditPage)} />
         <Route path="/bots/:botId/activity"         element={guard(BotActivityPage)} />
-        <Route path="/bots/:botId/optimizer"        element={guard(BotOptimizerPage)} />
+        <Route path="/bots/:botId/optimizer"        element={guardDeveloper(BotOptimizerPage)} />
         <Route path="/bots/:botId/effectiveness"   element={guard(EffectivenessDashboardPage)} />
         <Route path="/positions"                    element={guard(PositionsPage)} />
         <Route path="/analytics"                    element={guard(AnalyticsPage)} />
@@ -74,20 +72,21 @@ export default function AppRoutes() {
         <Route path="/settings"                     element={guard(SettingsPage)} />
         <Route path="/docs"                         element={guard(DocumentationPage)} />
 
-        {/* Moderator + admin únicamente */}
-        <Route path="/chart"                        element={guardPriv(ChartPage)} />
-        <Route path="/ai"                           element={guardAdmin(AIPage)} />
-        <Route path="/montecarlo"                   element={guardPriv(MonteCarloPage)} />
-        <Route path="/paper-trading"                element={guardPriv(PaperTradingPage)} />
-        <Route path="/optimizer-db"                 element={guardPriv(OptimizerDBPage)} />
-        <Route path="/chat"                         element={guardPriv(ChatPage)} />
+        {/* Developer únicamente */}
+        <Route path="/chart"                        element={guardDeveloper(ChartPage)} />
+        <Route path="/ai"                           element={guardDeveloper(AIPage)} />
+        <Route path="/montecarlo"                   element={guardDeveloper(MonteCarloPage)} />
+        <Route path="/paper-trading"                element={guardDeveloper(PaperTradingPage)} />
+        <Route path="/optimizer-db"                 element={guardDeveloper(OptimizerDBPage)} />
+        <Route path="/chat"                         element={guardDeveloper(ChatPage)} />
 
-        {/* Admin únicamente */}
+        {/* Developer únicamente */}
         <Route path="/users"                        element={
-          <ProtectedRoute><AdminRoute><Layout><UsersPage /></Layout></AdminRoute></ProtectedRoute>
+          <ProtectedRoute><RoleRoute allowedRoles={[ROLES.DEVELOPER]}><Layout><UsersPage /></Layout></RoleRoute></ProtectedRoute>
         } />
+        {/* Developer únicamente */}
         <Route path="/admin/system"                  element={
-          <ProtectedRoute><AdminRoute><Layout><AdminSystemPage /></Layout></AdminRoute></ProtectedRoute>
+          <ProtectedRoute><RoleRoute allowedRoles={[ROLES.DEVELOPER]}><Layout><AdminSystemPage /></Layout></RoleRoute></ProtectedRoute>
         } />
 
         <Route path="*"                             element={<Navigate to="/dashboard" replace />} />

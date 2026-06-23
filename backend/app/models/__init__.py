@@ -34,3 +34,4 @@ from app.models.feature_importance_drift import FeatureImportanceDrift
 from app.models.scanner_regime_config import ScannerRegimeConfig
 from app.models.fundamental_snapshot import FundamentalSnapshot
 from app.models.montecarlo import MonteCarloStrategy, MonteCarloBacktest, MonteCarloSimulation
+from app.models.assistant_interaction import AssistantInteraction

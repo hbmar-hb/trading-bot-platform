@@ -7,7 +7,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.api.dependencies import get_current_admin_user
+from app.api.dependencies import require_developer_role
 from app.services.system_health_service import (
     check_infra,
     check_logs,
@@ -36,13 +36,13 @@ class ShareLogRequest(BaseModel):
 
 
 @router.get("/health", summary="Quick health status")
-async def admin_health(current_user=Depends(get_current_admin_user)):
+async def admin_health(current_user=Depends(require_developer_role)):
     """Returns a quick OK if the admin is authenticated."""
     return {"status": "ok", "admin": str(current_user.id)}
 
 
 @router.post("/run-check", summary="Run a specific health check")
-async def run_check(req: RunCheckRequest, _=Depends(get_current_admin_user)):
+async def run_check(req: RunCheckRequest, _=Depends(require_developer_role)):
     """Run a single health check or full report."""
     check_name = req.check
 
@@ -79,7 +79,7 @@ async def run_check(req: RunCheckRequest, _=Depends(get_current_admin_user)):
 
 
 @router.get("/checks", summary="List available checks")
-async def list_checks(_=Depends(get_current_admin_user)):
+async def list_checks(_=Depends(require_developer_role)):
     """List all available health check names."""
     return {
         "checks": [
@@ -96,7 +96,7 @@ async def list_checks(_=Depends(get_current_admin_user)):
 
 
 @router.post("/share-log", summary="Generate a shareable text log")
-async def share_log(req: ShareLogRequest, _=Depends(get_current_admin_user)):
+async def share_log(req: ShareLogRequest, _=Depends(require_developer_role)):
     """Generate a plain-text log from a report for sharing."""
     try:
         text = generate_shareable_log(req.report)
@@ -106,13 +106,13 @@ async def share_log(req: ShareLogRequest, _=Depends(get_current_admin_user)):
 
 
 @router.get("/shadow-history", summary="Shadow mode monitor history")
-async def shadow_history(limit: int = 20, _=Depends(get_current_admin_user)):
+async def shadow_history(limit: int = 20, _=Depends(require_developer_role)):
     """Return recent shadow-mode check reports."""
     return {"history": get_shadow_monitor_history(limit=limit)}
 
 
 @router.post("/run-shadow-check", summary="Run shadow mode check on demand")
-async def run_shadow_check(_=Depends(get_current_admin_user)):
+async def run_shadow_check(_=Depends(require_developer_role)):
     """Run the shadow-mode monitor immediately and store the report."""
     try:
         report = run_shadow_monitor_check(save_history=True)

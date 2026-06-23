@@ -6,13 +6,14 @@ from decimal import Decimal
 
 from app.exchanges.base import BaseExchange
 from app.exchanges.bingx import BingXExchange
+from app.exchanges.bitget import BitgetExchange
 from app.exchanges.bitunix import BitunixExchange
 from app.exchanges.paper import PaperExchange
 from app.models.exchange_account import ExchangeAccount
 from app.models.paper_balance import PaperBalance
 from app.utils.crypto import decrypt
 
-SUPPORTED_EXCHANGES = ("bingx", "bitunix", "paper")
+SUPPORTED_EXCHANGES = ("bingx", "bitunix", "bitget", "paper")
 
 
 def create_exchange(account: ExchangeAccount, testnet: bool = False) -> BaseExchange:
@@ -33,6 +34,8 @@ def create_exchange(account: ExchangeAccount, testnet: bool = False) -> BaseExch
             return BingXExchange(api_key, secret, testnet=testnet)
         case "bitunix":
             return BitunixExchange(api_key, secret, testnet=testnet)
+        case "bitget":
+            return BitgetExchange(api_key, secret, testnet=testnet)
         case _:
             raise ValueError(
                 f"Exchange '{account.exchange}' no soportado. "

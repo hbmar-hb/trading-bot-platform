@@ -365,7 +365,7 @@ def evaluate_portfolio_risk(
     # FASE 2E: Correlation matrix proxy — evitar duplicar misma posición reciente
     # Si ya hay una posición abierta en el mismo par+dirección en las últimas 24h,
     # reducir sizing 50% (es correlación 1.0, no diversificación).
-    from datetime import timedelta
+    from datetime import datetime, timedelta, timezone
     recent_same_trade = [
         p for p in all_positions
         if p.symbol == bot.symbol

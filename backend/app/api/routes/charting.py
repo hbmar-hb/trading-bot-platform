@@ -9,7 +9,7 @@ import time
 import json
 from typing import Optional
 
-from app.api.dependencies import get_current_authorized_user, get_current_user_id
+from app.api.dependencies import get_current_user_id, require_developer_role
 from app.exchanges.factory import create_exchange
 from app.services.database import get_db
 from app.services.cache import async_redis
@@ -28,7 +28,7 @@ from app.services.ict_engine import (
 )
 from app.services.ict_strategy import generate_ict_signal, StrategyConfig, scan_historical_signals
 
-router = APIRouter(prefix="/charting", tags=["charting"], dependencies=[Depends(get_current_authorized_user)])
+router = APIRouter(prefix="/charting", tags=["charting"], dependencies=[Depends(require_developer_role)])
 
 # In-memory cache for symbol lists (TTL 5 min)
 _symbols_cache = {}

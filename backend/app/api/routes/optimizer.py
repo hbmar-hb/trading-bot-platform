@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from loguru import logger
 
-from app.api.dependencies import get_current_user_id, require_non_rol1_role
+from app.api.dependencies import get_current_user_id, require_developer_role
 from app.core.conflict_validator import has_active_bot_conflict
 from app.models.bot_config import BotConfig
 from app.models.exchange_trade import ExchangeTrade
@@ -29,7 +29,7 @@ from app.models.position import Position
 from app.models.signal_log import SignalLog
 from app.services.database import get_db
 
-router = APIRouter(prefix="/optimizer", tags=["optimizer"], dependencies=[Depends(require_non_rol1_role)])
+router = APIRouter(prefix="/optimizer", tags=["optimizer"], dependencies=[Depends(require_developer_role)])
 
 MIN_TRADES = 3  # Mínimo de trades para sugerencias fiables (reducido de 5 a 3)
 

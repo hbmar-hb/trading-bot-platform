@@ -14,7 +14,7 @@ services:
       - ./backend:/app
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
-      - "8100:8000"
+      - "${BACKEND_HOST_PORT:-8100}:8000"
     environment:
       ENV: development
       DEBUG: "true"
@@ -38,14 +38,16 @@ services:
       context: ./frontend
       dockerfile: Dockerfile.dev
     ports:
-      - "5274:5173"
+      - "${FRONTEND_DEV_HOST_PORT:-5274}:5173"
     volumes:
       - ./frontend:/app
       - /app/node_modules
     command: npm run dev -- --host 0.0.0.0
+    env_file: .env
     environment:
-      VITE_API_URL: http://localhost:8100
-      VITE_WS_URL: ws://localhost:8100
+      # Vacío = peticiones relativas al dominio actual (funciona con dev.getquantum.app y localhost)
+      VITE_API_URL: "${VITE_API_URL:-}"
+      VITE_WS_URL: "${VITE_WS_URL:-}"
 
   # Flower: UI para monitorear tareas Celery
   # Acceder en: http://localhost:5555
@@ -58,7 +60,7 @@ services:
       - redis
       - celery_worker
     ports:
-      - "5556:5555"
+      - "${FLOWER_HOST_PORT:-5556}:5555"
     command: >
       celery -A app.services.celery_app flower
       --port=5555

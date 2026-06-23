@@ -5,13 +5,13 @@ from typing import Literal
 from pydantic import BaseModel, computed_field, field_validator
 
 
-SUPPORTED_EXCHANGES = ("bingx", "bitunix")
+SUPPORTED_EXCHANGES = ("bingx", "bitunix", "bitget")
 
 
 # ─── Requests ────────────────────────────────────────────────
 
 class ExchangeAccountCreate(BaseModel):
-    exchange: Literal["bingx", "bitunix"]
+    exchange: Literal["bingx", "bitunix", "bitget"]
     label: str
     api_key: str
     secret: str

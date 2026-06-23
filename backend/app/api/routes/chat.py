@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_moderator_user
+from app.api.dependencies import require_developer_role, is_at_least_admin, is_at_least_moderator
 from app.models.chat import ChatMention, ChatMessage, ChatRoom, ChatRoomMember
 from app.models.user import User
 from app.schemas.chat import (
@@ -35,7 +35,9 @@ router = APIRouter(prefix="/chat", tags=["chat"])
 
 
 def _display_name(username: str, role: str) -> str:
-    if role == "admin":
+    if role == "developer":
+        return f"[{username}_dev]"
+    if is_at_least_admin(role):
         return f"[{username}_admin]"
     if role == "moderator":
         return f"[{username}_moderador]"
@@ -44,7 +46,7 @@ def _display_name(username: str, role: str) -> str:
 
 async def _assert_room_access(room: ChatRoom, user: User, db: AsyncSession) -> None:
     """Lanza 403 si el usuario no puede ver una sala privada."""
-    if not room.is_private or user.role == "admin":
+    if not room.is_private or is_at_least_admin(user.role):
         return
     member = await db.get(ChatRoomMember, (room.id, user.id))
     if not member:
@@ -53,13 +55,13 @@ async def _assert_room_access(room: ChatRoom, user: User, db: AsyncSession) -> N
 
 @router.get("/rooms", response_model=list[ChatRoomResponse])
 async def list_rooms(
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(ChatRoom).order_by(ChatRoom.created_at.desc()))
     rooms = result.scalars().all()
 
-    if current_user.role == "admin":
+    if is_at_least_admin(current_user.role):
         return rooms
 
     # Obtener IDs de salas privadas donde el usuario es miembro
@@ -74,14 +76,14 @@ async def list_rooms(
 @router.post("/rooms", response_model=ChatRoomResponse, status_code=status.HTTP_201_CREATED)
 async def create_room(
     data: ChatRoomCreate,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
-    if current_user.role not in ("admin", "moderator"):
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo admin y moderadores pueden crear canales")
+    if not is_at_least_moderator(current_user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo moderadores o superiores pueden crear canales")
 
-    if data.is_private and current_user.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo los admin pueden crear canales privados")
+    if data.is_private and not is_at_least_admin(current_user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo administradores o superiores pueden crear canales privados")
 
     existing = await db.execute(select(ChatRoom).where(ChatRoom.name == data.name))
     if existing.scalar_one_or_none():
@@ -114,15 +116,15 @@ async def create_room(
 @router.delete("/rooms/{room_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_room(
     room_id: uuid.UUID,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, room_id)
     if not room:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Sala no encontrada")
 
-    # Admin puede eliminar cualquier sala; moderador puede eliminar las públicas
-    if current_user.role == "admin":
+    # Admin/developer puede eliminar cualquier sala; moderador puede eliminar las públicas
+    if is_at_least_admin(current_user.role):
         pass
     elif current_user.role == "moderator" and not room.is_private:
         pass
@@ -141,11 +143,11 @@ async def delete_room(
 async def add_member(
     room_id: uuid.UUID,
     data: ChatRoomMemberAdd,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo los admin pueden gestionar miembros")
+    if not is_at_least_admin(current_user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo administradores o superiores pueden gestionar miembros")
 
     room = await db.get(ChatRoom, room_id)
     if not room:
@@ -169,11 +171,11 @@ async def add_member(
 async def remove_member(
     room_id: uuid.UUID,
     user_id: uuid.UUID,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
-    if current_user.role != "admin":
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo los admin pueden gestionar miembros")
+    if not is_at_least_admin(current_user.role):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Solo administradores o superiores pueden gestionar miembros")
 
     room = await db.get(ChatRoom, room_id)
     if not room or not room.is_private:
@@ -191,7 +193,7 @@ async def remove_member(
 async def list_messages(
     room_id: uuid.UUID,
     limit: int = 50,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, room_id)
@@ -228,7 +230,7 @@ async def list_messages(
 @router.post("/messages", response_model=ChatMessageResponse, status_code=status.HTTP_201_CREATED)
 async def send_message(
     data: ChatMessageCreate,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     room = await db.get(ChatRoom, data.room_id)
@@ -284,7 +286,7 @@ async def _create_mentions(db: AsyncSession, room_id: uuid.UUID, message_id: uui
 
 @router.get("/mentions", response_model=list[ChatMentionResponse])
 async def list_mentions(
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -312,7 +314,7 @@ async def list_mentions(
 @router.post("/mentions/{mention_id}/read", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_mention_read(
     mention_id: uuid.UUID,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     mention = await db.get(ChatMention, mention_id)
@@ -325,7 +327,7 @@ async def mark_mention_read(
 @router.post("/rooms/{room_id}/mentions/read", status_code=status.HTTP_204_NO_CONTENT)
 async def mark_room_mentions_read(
     room_id: uuid.UUID,
-    current_user: User = Depends(get_current_moderator_user),
+    current_user: User = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     await db.execute(

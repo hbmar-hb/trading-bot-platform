@@ -15,16 +15,16 @@ const toCompactSymbol = (s) =>
     : s
 
 // ── Symbol Search Component (from BotEditPage) ───────────────
-function SymbolSearch({ value, onChange, accountId, accountType }) {
+function SymbolSearch({ value, onChange, accountId, accountType, exchange }) {
   const [markets, setMarkets]   = useState([])
   const [loading, setLoading]   = useState(false)
   const [query,   setQuery]     = useState(value || '')
   const [open,    setOpen]      = useState(false)
   const ref = useRef(null)
 
-  const loadBingxMarkets = () => {
+  const loadExchangeMarkets = (exchangeName = 'bingx') => {
     setLoading(true)
-    exchangeAccountsService.marketsByExchange('bingx')
+    exchangeAccountsService.marketsByExchange(exchangeName)
       .then(r => setMarkets((r.data || []).map(toCompactSymbol)))
       .catch(() => setMarkets([]))
       .finally(() => setLoading(false))
@@ -33,24 +33,24 @@ function SymbolSearch({ value, onChange, accountId, accountType }) {
   // Cargar mercados cuando cambia la cuenta
   useEffect(() => {
     if (accountType === 'paper') {
-      loadBingxMarkets()
+      loadExchangeMarkets('bingx')
       return
     }
-    
+
     if (!accountId) { setMarkets([]); return }
     setLoading(true)
     exchangeAccountsService.markets(accountId)
       .then(r => {
         const list = (r.data || []).map(toCompactSymbol)
         if (list.length === 0) {
-          loadBingxMarkets()
+          loadExchangeMarkets(exchange || 'bingx')
         } else {
           setMarkets(list)
           setLoading(false)
         }
       })
-      .catch(() => loadBingxMarkets())
-  }, [accountId, accountType])
+      .catch(() => loadExchangeMarkets(exchange || 'bingx'))
+  }, [accountId, accountType, exchange])
 
   // Sincronizar query si el valor externo cambia
   useEffect(() => { setQuery(value || '') }, [value])
@@ -1068,6 +1068,7 @@ export default function ManualTradePage() {
                     onChange={setSymbol}
                     accountId={selectedAccountId}
                     accountType={selectedAccountType}
+                    exchange={selectedAccount?.exchange}
                   />
                 </div>
                 {price && (

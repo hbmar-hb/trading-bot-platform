@@ -18,6 +18,7 @@ const AIEngineControlTab = lazy(() => import('./AIEngineControlTab'))
 const IALiveScannerTab = lazy(() => import('@/components/IAEngine/IALiveScannerTab'))
 import SignalDiagnosisModal from '@/components/Analytics/SignalDiagnosisModal'
 import useAuthStore from '@/store/authStore'
+import { isAtLeastAdmin } from '@/constants/roles'
 import IAMissionControlTab from '@/components/IAEngine/IAMissionControlTab'
 import EngineAIHelper from '@/components/IAEngine/EngineAIHelper'
 
@@ -146,7 +147,7 @@ function SignalDayRow({ sig, onViewDiagnosis }) {
   const confs  = sig.components ? Object.values(sig.components) : []
   const showDiagnosis = sig.anti_fake_status === 'BLOCK' || sig.anti_fake_status === 'CAUTION'
   const user = useAuthStore(s => s.user)
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = isAtLeastAdmin(user)
 
   return (
     <div className="flex items-start gap-3 bg-white dark:bg-slate-900/60 border border-slate-100 dark:border-slate-800 rounded-lg px-3 py-2 text-xs">
@@ -2385,7 +2386,7 @@ function BacktestTab() {
   const [diagnosisSignal, setDiagnosisSignal] = useState(null)
   const [comparisonData, setComparisonData] = useState(null)
   const user = useAuthStore(s => s.user)
-  const isAdmin = user?.role === 'admin'
+  const isAdmin = isAtLeastAdmin(user)
 
   useEffect(() => {
     setLoading(true)

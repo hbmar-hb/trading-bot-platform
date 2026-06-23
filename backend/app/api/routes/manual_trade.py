@@ -24,6 +24,7 @@ from app.services.cache import publish_position_update
 from app.services.database import get_db
 from app.tasks.order_tasks import execute_signal
 from app.utils.signal_hasher import generate_signal_hash
+from app.workers.price_monitor import _to_ccxt_symbol
 from datetime import datetime, timezone
 
 router = APIRouter(prefix="/manual-trade", tags=["manual-trade"], dependencies=[Depends(get_current_authorized_user)])
@@ -58,6 +59,47 @@ class ManualTradeResponse(BaseModel):
 
 
 # ─── Helpers ─────────────────────────────────────────────────
+
+def _to_bitunix_symbol(symbol: str) -> str:
+    """Convierte un símbolo CCXT (BTC/USDT:USDT) al formato compacto de Bitunix (BTCUSDT)."""
+    if not symbol:
+        return symbol
+    s = symbol.strip().upper().replace("/", "")
+    # Quitar el settlement (:USDT, :USDC, etc.) si existe
+    if ":" in s:
+        s = s.split(":")[0]
+    return s
+
+
+async def _get_exchange_name_for_manual(
+    db: AsyncSession,
+    exchange_account_id: uuid.UUID | None,
+    paper_balance_id: uuid.UUID | None,
+) -> str:
+    """Devuelve el nombre del exchange para una cuenta manual. Paper usa formato BingX (CCXT)."""
+    if exchange_account_id:
+        result = await db.execute(
+            select(ExchangeAccount.exchange).where(ExchangeAccount.id == exchange_account_id)
+        )
+        exchange = result.scalar_one_or_none()
+        return exchange or "bingx"
+    return "bingx"
+
+
+def _normalize_manual_symbol(symbol: str, exchange_name: str = "bingx") -> str:
+    """Normaliza el símbolo introducido por el usuario al formato nativo del exchange."""
+    if not symbol:
+        return symbol
+
+    normalized_exchange = (exchange_name or "bingx").lower()
+
+    # Bitunix usa formato compacto: BTCUSDT
+    if normalized_exchange == "bitunix":
+        return _to_bitunix_symbol(symbol)
+
+    # BingX / paper usan formato CCXT para futuros perpetuos: BTC/USDT:USDT
+    return _to_ccxt_symbol(symbol, normalized_exchange)
+
 
 async def _get_or_create_manual_bot(
     db: AsyncSession,
@@ -147,7 +189,7 @@ async def execute_manual_trade(
 ):
     """Ejecuta una operación manual (long/short/close)."""
 
-    # Validar cuenta
+    # Validar que se ha seleccionado una cuenta antes de normalizar el símbolo
     if not data.exchange_account_id and not data.paper_balance_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Debes seleccionar una cuenta")
 
@@ -170,6 +212,10 @@ async def execute_manual_trade(
         )
         if not pb.scalar_one_or_none():
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Cuenta paper no encontrada")
+
+    # Normalizar símbolo al formato nativo del exchange seleccionado
+    exchange_name = await _get_exchange_name_for_manual(db, data.exchange_account_id, data.paper_balance_id)
+    data = data.model_copy(update={"symbol": _normalize_manual_symbol(data.symbol, exchange_name)})
 
     # Obtener o crear bot manual
     bot = await _get_or_create_manual_bot(db, user_id, data)
@@ -232,6 +278,10 @@ async def check_manual_trade_conflicts(
     Devuelve si hay posiciones abiertas en el símbolo/cuenta.
     Usado por el frontend para mostrar modal de confirmación antes de abrir manual.
     """
+    # Normalizar símbolo al formato nativo del exchange seleccionado
+    exchange_name = await _get_exchange_name_for_manual(db, exchange_account_id, paper_balance_id)
+    symbol = _normalize_manual_symbol(symbol, exchange_name)
+
     # Buscar bot manual para esta cuenta+símbolo
     query = (
         select(BotConfig)
@@ -289,6 +339,10 @@ async def get_manual_position(
     db: AsyncSession = Depends(get_db),
 ):
     """Devuelve la posición abierta del bot manual para esta cuenta+símbolo (si existe)."""
+    # Normalizar símbolo al formato nativo del exchange seleccionado
+    exchange_name = await _get_exchange_name_for_manual(db, exchange_account_id, paper_balance_id)
+    symbol = _normalize_manual_symbol(symbol, exchange_name)
+
     query = (
         select(BotConfig)
         .where(
@@ -472,6 +526,9 @@ async def adopt_position(
     account = acc_result.scalar_one_or_none()
     if not account:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Cuenta no encontrada")
+
+    # Normalizar símbolo al formato nativo del exchange seleccionado
+    data = data.model_copy(update={"symbol": _normalize_manual_symbol(data.symbol, account.exchange)})
 
     # Verificar que la posición no está ya gestionada
     existing = await db.execute(

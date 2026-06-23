@@ -17,6 +17,8 @@ from loguru import logger
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
 
+from app.models.ai_signal import AISignal
+
 # ── Constants ────────────────────────────────────────────────────────────────
 _WEIGHT_PATH = Path("/app/ai/models/adaptive_weights.json")
 _MIN_SAMPLES_PER_COMPONENT = 30  # minimum resolved signals to trust a delta

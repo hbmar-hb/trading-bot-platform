@@ -15,7 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_current_moderator_user
+from app.api.dependencies import require_developer_role
 from app.models.montecarlo import MonteCarloStrategy, MonteCarloBacktest, MonteCarloSimulation
 from app.models.bot_config import BotConfig
 from app.schemas.montecarlo import (
@@ -89,7 +89,7 @@ def _clean_json_values(obj):
 
 @router.get("/strategies", response_model=List[MonteCarloStrategyResponse])
 async def list_strategies(
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -103,7 +103,7 @@ async def list_strategies(
 @router.post("/strategies", response_model=MonteCarloStrategyResponse)
 async def create_strategy(
     data: MonteCarloStrategyCreate,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     strategy = MonteCarloStrategy(
@@ -123,7 +123,7 @@ async def create_strategy(
 @router.get("/strategies/{strategy_id}", response_model=MonteCarloStrategyResponse)
 async def get_strategy(
     strategy_id: uuid.UUID,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -140,7 +140,7 @@ async def get_strategy(
 async def update_strategy(
     strategy_id: uuid.UUID,
     data: MonteCarloStrategyUpdate,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -163,7 +163,7 @@ async def update_strategy(
 @router.delete("/strategies/{strategy_id}")
 async def delete_strategy(
     strategy_id: uuid.UUID,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -187,7 +187,7 @@ async def delete_strategy(
 async def run_strategy_backtest(
     strategy_id: uuid.UUID,
     req: BacktestRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -310,7 +310,7 @@ async def run_strategy_backtest(
 @router.get("/backtests", response_model=List[BacktestResponse])
 async def list_backtests(
     strategy_id: Optional[uuid.UUID] = Query(None),
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(MonteCarloBacktest).where(MonteCarloBacktest.user_id == user.id)
@@ -329,7 +329,7 @@ async def list_backtests(
 async def run_simulation(
     backtest_id: uuid.UUID,
     req: SimulationRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(
@@ -388,7 +388,7 @@ async def run_simulation(
 @router.get("/simulations", response_model=List[SimulationResponse])
 async def list_simulations(
     backtest_id: Optional[uuid.UUID] = Query(None),
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     q = select(MonteCarloSimulation).where(MonteCarloSimulation.user_id == user.id)
@@ -406,7 +406,7 @@ async def list_simulations(
 @router.post("/validate-live", response_model=LiveValidationResponse)
 async def validate_live(
     req: LiveValidationRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
 ):
     validator = TradingValidator(initial_capital=req.initial_capital)
 
@@ -444,7 +444,7 @@ async def validate_live(
 @router.post("/ai-engine/eval", response_model=AIEvaluationResponse)
 async def ai_engine_eval(
     req: AIEvaluationRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -485,7 +485,7 @@ async def ai_engine_eval(
 @router.post("/ai-engine/scan", response_model=AIScanResponse)
 async def ai_engine_scan(
     req: AIScanRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -508,7 +508,7 @@ async def ai_engine_scan(
 @router.post("/ai-engine/recalibrate", response_model=RecalibrationResult)
 async def ai_engine_recalibrate(
     req: RecalibrationRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -554,7 +554,7 @@ async def ai_engine_recalibrate(
 @router.post("/ai-engine/eval-batch", response_model=AIEvalBatchResponse)
 async def ai_engine_eval_batch(
     req: AIEvalBatchRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """
@@ -624,14 +624,14 @@ async def ai_engine_eval_batch(
 
 @router.get("/indicators", response_model=List[IndicatorInfo])
 async def get_indicators(
-    _user = Depends(get_current_moderator_user),
+    _user = Depends(require_developer_role),
 ):
     return [IndicatorInfo(**i) for i in list_indicators()]
 
 
 @router.get("/strategy-template", response_model=StrategyTemplateResponse)
 async def get_strategy_template(
-    _user = Depends(get_current_moderator_user),
+    _user = Depends(require_developer_role),
 ):
     tpl = get_default_strategy()
     return StrategyTemplateResponse(**tpl)
@@ -698,7 +698,7 @@ def _denormalize_symbol(symbol: str) -> str:
 async def get_symbols(
     query: str = Query(default=""),
     source: str = Query(default="watchlist", description="'watchlist' for AI watchlist symbols, 'binance' for all Binance perpetuals"),
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """Lista de símbolos para Monte Carlo. Defaults to user's AI watchlist."""
@@ -736,7 +736,7 @@ async def get_symbols(
 @router.post("/bots/apply-eval", response_model=ApplyEvalToBotResponse)
 async def apply_eval_to_bot(
     req: ApplyEvalToBotRequest,
-    user = Depends(get_current_moderator_user),
+    user = Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """

@@ -25,6 +25,21 @@ class LocalLLMTip(BaseModel):
 
 DEFAULT_TIMEOUT = 120.0
 
+# For interactive endpoints we need a fast connection-fail fallback when the
+# local Ollama endpoint is not reachable, while still giving enough time for
+# the model to answer once connected.
+_INTERACTIVE_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+
+_UNAVAILABLE_MESSAGE = (
+    "El asistente de IA local no está disponible en este momento. "
+    "Inténtalo más tarde o contacta al administrador."
+)
+
+
+def _remote_fallback_allowed() -> bool:
+    """Return True when the backend may fall back to a remote (paid) LLM."""
+    return bool(getattr(settings, "local_llm_allow_remote_fallback", False))
+
 
 def _build_tip_prompt(event: dict) -> str:
     status = event.get("status")
@@ -194,7 +209,7 @@ async def generate_tip(event: dict, *, heavy: bool = False) -> LocalLLMTip:
     }
 
     try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
             resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
             resp.raise_for_status()
             data = resp.json()
@@ -251,31 +266,40 @@ async def generate_summary(
             "stream": False,
         }
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
                 resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
                 resp.raise_for_status()
                 data = resp.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 return _parse_summary_flexible(content)
         except Exception as exc:
-            logger.warning(f"[local_llm] Summary generation failed locally: {exc}. Trying remote fallback.")
+            logger.warning(f"[local_llm] Summary generation failed locally: {exc}.")
+            if not _remote_fallback_allowed():
+                logger.info("[local_llm] Remote fallback disabled by configuration.")
+                return LocalLLMSummary(
+                    summary=_UNAVAILABLE_MESSAGE,
+                    key_issues=["Modelo local no disponible"],
+                    recommendation="Revisa LOCAL_LLM_URL / LOCAL_LLM_ENABLED o habilita LOCAL_LLM_ALLOW_REMOTE_FALLBACK.",
+                )
+            logger.info("[local_llm] Trying remote fallback.")
 
     # Fallback to remote LLM (text completion, then flexible parse)
-    try:
-        from app.services.llm_client import generate_chat_async, LLMError
-        response = await generate_chat_async(
-            [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        return _parse_summary_flexible(response.content)
-    except LLMError as exc:
-        logger.warning(f"[local_llm] Remote LLM fallback also failed: {exc}")
-    except Exception as exc:
-        logger.warning(f"[local_llm] Unexpected remote fallback error: {exc}")
+    if _remote_fallback_allowed():
+        try:
+            from app.services.llm_client import generate_chat_async, LLMError
+            response = await generate_chat_async(
+                [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return _parse_summary_flexible(response.content)
+        except LLMError as exc:
+            logger.warning(f"[local_llm] Remote LLM fallback also failed: {exc}")
+        except Exception as exc:
+            logger.warning(f"[local_llm] Unexpected remote fallback error: {exc}")
 
     return LocalLLMSummary(
         summary="No se pudo generar el resumen. Verifica que Ollama esté corriendo o que el LLM remoto esté configurado.",
@@ -317,31 +341,36 @@ async def answer_question(
             "stream": False,
         }
         try:
-            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
                 resp = await client.post(f"{local_url}/chat/completions", json=payload, headers={"Host": "localhost"})
                 resp.raise_for_status()
                 data = resp.json()
                 content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
                 return content.strip(), selected_model
         except Exception as exc:
-            logger.warning(f"[local_llm] Question answering failed locally: {exc}. Trying remote fallback.")
+            logger.warning(f"[local_llm] Question answering failed locally: {exc}.")
+            if not _remote_fallback_allowed():
+                logger.info("[local_llm] Remote fallback disabled by configuration.")
+                return _UNAVAILABLE_MESSAGE, "local_unavailable"
+            logger.info("[local_llm] Trying remote fallback.")
 
     # Fallback to remote LLM
-    try:
-        from app.services.llm_client import generate_chat_async, LLMError
-        response = await generate_chat_async(
-            [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        return response.content.strip(), response.model_used
-    except LLMError as exc:
-        logger.warning(f"[local_llm] Remote LLM fallback also failed: {exc}")
-    except Exception as exc:
-        logger.warning(f"[local_llm] Unexpected remote fallback error: {exc}")
+    if _remote_fallback_allowed():
+        try:
+            from app.services.llm_client import generate_chat_async, LLMError
+            response = await generate_chat_async(
+                [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            return response.content.strip(), response.model_used
+        except LLMError as exc:
+            logger.warning(f"[local_llm] Remote LLM fallback also failed: {exc}")
+        except Exception as exc:
+            logger.warning(f"[local_llm] Unexpected remote fallback error: {exc}")
 
     return (
         "No se pudo contactar con ningún modelo de lenguaje. "
@@ -352,7 +381,7 @@ async def answer_question(
 
 async def _stream_local_ollama(local_url: str, payload: dict):
     """Yields tokens from a local Ollama streaming completion."""
-    async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+    async with httpx.AsyncClient(timeout=_INTERACTIVE_TIMEOUT) as client:
         async with client.stream(
             "POST",
             f"{local_url}/chat/completions",
@@ -433,29 +462,35 @@ async def generate_summary_stream(
                 yield {"event": "error", "message": f"No se pudo parsear el resumen: {exc}"}
             return
         except Exception as exc:
-            logger.warning(f"[local_llm] Summary stream failed locally: {exc}. Trying remote fallback.")
+            logger.warning(f"[local_llm] Summary stream failed locally: {exc}.")
+            if not _remote_fallback_allowed():
+                logger.info("[local_llm] Remote fallback disabled by configuration.")
+                yield {"event": "error", "message": _UNAVAILABLE_MESSAGE}
+                return
+            logger.info("[local_llm] Trying remote stream fallback.")
 
     # Fallback to remote LLM stream
-    try:
-        from app.services.llm_client import generate_chat_stream, LLMError
-        async for token in generate_chat_stream(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            accumulated += token
-            yield {"event": "token", "content": token}
+    if _remote_fallback_allowed():
         try:
-            parsed = _parse_summary_flexible(accumulated)
-            yield {"event": "done", "data": parsed.model_dump()}
+            from app.services.llm_client import generate_chat_stream, LLMError
+            async for token in generate_chat_stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                accumulated += token
+                yield {"event": "token", "content": token}
+            try:
+                parsed = _parse_summary_flexible(accumulated)
+                yield {"event": "done", "data": parsed.model_dump()}
+            except Exception as exc:
+                logger.warning(f"[local_llm] Failed to parse remote streamed summary: {exc}")
+                yield {"event": "error", "message": f"No se pudo parsear el resumen remoto: {exc}"}
+            return
+        except LLMError as exc:
+            logger.warning(f"[local_llm] Remote LLM stream fallback also failed: {exc}")
         except Exception as exc:
-            logger.warning(f"[local_llm] Failed to parse remote streamed summary: {exc}")
-            yield {"event": "error", "message": f"No se pudo parsear el resumen remoto: {exc}"}
-        return
-    except LLMError as exc:
-        logger.warning(f"[local_llm] Remote LLM stream fallback also failed: {exc}")
-    except Exception as exc:
-        logger.warning(f"[local_llm] Unexpected remote stream fallback error: {exc}")
+            logger.warning(f"[local_llm] Unexpected remote stream fallback error: {exc}")
 
     yield {
         "event": "error",
@@ -505,23 +540,29 @@ async def answer_question_stream(
             yield {"event": "done", "model_used": selected_model}
             return
         except Exception as exc:
-            logger.warning(f"[local_llm] Question stream failed locally: {exc}. Trying remote fallback.")
+            logger.warning(f"[local_llm] Question stream failed locally: {exc}.")
+            if not _remote_fallback_allowed():
+                logger.info("[local_llm] Remote fallback disabled by configuration.")
+                yield {"event": "error", "message": _UNAVAILABLE_MESSAGE}
+                return
+            logger.info("[local_llm] Trying remote stream fallback.")
 
     # Fallback to remote LLM stream
-    try:
-        from app.services.llm_client import generate_chat_stream, LLMError
-        async for token in generate_chat_stream(
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        ):
-            yield {"event": "token", "content": token}
-        yield {"event": "done", "model_used": getattr(settings, "llm_default_model", "remote")}
-        return
-    except LLMError as exc:
-        logger.warning(f"[local_llm] Remote LLM stream fallback also failed: {exc}")
-    except Exception as exc:
-        logger.warning(f"[local_llm] Unexpected remote stream fallback error: {exc}")
+    if _remote_fallback_allowed():
+        try:
+            from app.services.llm_client import generate_chat_stream, LLMError
+            async for token in generate_chat_stream(
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                yield {"event": "token", "content": token}
+            yield {"event": "done", "model_used": getattr(settings, "llm_default_model", "remote")}
+            return
+        except LLMError as exc:
+            logger.warning(f"[local_llm] Remote LLM stream fallback also failed: {exc}")
+        except Exception as exc:
+            logger.warning(f"[local_llm] Unexpected remote stream fallback error: {exc}")
 
     yield {
         "event": "error",

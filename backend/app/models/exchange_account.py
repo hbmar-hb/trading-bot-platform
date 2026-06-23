@@ -8,7 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.services.database import Base
 from app.models.base import TimestampMixin
 
-ExchangeName = Literal["bingx", "bitunix"]
+ExchangeName = Literal["bingx", "bitunix", "bitget"]
 
 
 class ExchangeAccount(TimestampMixin, Base):
@@ -20,7 +20,7 @@ class ExchangeAccount(TimestampMixin, Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False
     )
-    exchange: Mapped[str] = mapped_column(String(20), nullable=False)   # 'bingx' | 'bitunix'
+    exchange: Mapped[str] = mapped_column(String(20), nullable=False)   # 'bingx' | 'bitunix' | 'bitget'
     label: Mapped[str] = mapped_column(String(100), nullable=False)     # 'Mi cuenta principal'
     api_key_encrypted: Mapped[str] = mapped_column(String(500), nullable=False)
     secret_encrypted: Mapped[str] = mapped_column(String(500), nullable=False)

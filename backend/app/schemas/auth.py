@@ -65,6 +65,14 @@ class UserCreate(BaseModel):
     role: str = "rol1"
     telegram_chat_id: str | None = None
 
+    @field_validator("role")
+    @classmethod
+    def role_valid(cls, v: str) -> str:
+        allowed = ("rol1", "moderator", "admin", "developer")
+        if v not in allowed:
+            raise ValueError(f"Rol no válido. Permitidos: {', '.join(allowed)}")
+        return v
+
 
 class UserUpdate(BaseModel):
     username: str | None = None
@@ -72,6 +80,16 @@ class UserUpdate(BaseModel):
     is_active: bool | None = None
     role: str | None = None
     telegram_chat_id: str | None = None
+
+    @field_validator("role")
+    @classmethod
+    def role_valid(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        allowed = ("rol1", "moderator", "admin", "developer")
+        if v not in allowed:
+            raise ValueError(f"Rol no válido. Permitidos: {', '.join(allowed)}")
+        return v
 
 
 # ─── 2FA Requests ────────────────────────────────────────────

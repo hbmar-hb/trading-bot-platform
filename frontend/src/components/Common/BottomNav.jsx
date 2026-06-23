@@ -2,7 +2,7 @@ import { NavLink } from 'react-router-dom'
 import { BarChart3, BookOpen, Bot, Dices, Gauge, KeyRound, MousePointerClick, Settings, TrendingUp } from 'lucide-react'
 import { cn } from '@/utils/cn'
 import { useAuth } from '@/hooks/useAuth'
-import { AUTHORIZED_ROLES, PRIVILEGED_ROLES, hasAnyRole } from '@/constants/roles'
+import { AUTHORIZED_ROLES, ROLES, hasAnyRole } from '@/constants/roles'
 
 const links = [
   { to: '/dashboard',         icon: Gauge,      label: 'Inicio',     roles: AUTHORIZED_ROLES },
@@ -10,7 +10,7 @@ const links = [
   { to: '/positions',         icon: TrendingUp, label: 'Posiciones', roles: AUTHORIZED_ROLES },
   { to: '/manual-trading',    icon: MousePointerClick, label: 'Manual', roles: AUTHORIZED_ROLES },
   { to: '/exchange-accounts', icon: KeyRound,   label: 'Exchanges',  roles: AUTHORIZED_ROLES },
-  { to: '/montecarlo',        icon: Dices,      label: 'Monte',      roles: PRIVILEGED_ROLES },
+  { to: '/montecarlo',        icon: Dices,      label: 'Monte',      roles: [ROLES.DEVELOPER] },
   { to: '/analytics',         icon: BarChart3,  label: 'Analytics',  roles: AUTHORIZED_ROLES },
   { to: '/docs',              icon: BookOpen,   label: 'Docs',       roles: AUTHORIZED_ROLES },
   { to: '/settings',          icon: Settings,   label: 'Ajustes',    roles: AUTHORIZED_ROLES },

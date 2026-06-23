@@ -30,6 +30,7 @@ from app.models.bot_log import BotLog
 from app.models.position import Position
 from app.services.database import SessionLocal
 from app.services.context_thresholds import ContextThresholdRegistry
+from app.exchanges.factory import create_exchange_from_bot as get_exchange_for_bot
 from ai import registry as anti_fake_registry
 from ai import ensemble_registry
 from ai import bot_registry
@@ -3504,7 +3505,7 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
 
     # ── Build gates snapshot for replay ──
     _gates = {
-        "deployment_gate": gate_status if 'gate_status' in locals() else {},
+        "deployment_gate": sym_gate if 'sym_gate' in locals() else {},
         "macro": macro if 'macro' in locals() else {},
         "session_funding": session_funding if 'session_funding' in locals() else {},
         "oi_cvd": oi_cvd if 'oi_cvd' in locals() else {},

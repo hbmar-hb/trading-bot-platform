@@ -1229,7 +1229,7 @@ async def get_position_candles(
         
         exchange_name = account.exchange
         if exchange_name == "bitunix":
-            exchange_name = "bingx"  # Proxy
+            exchange_name = "bingx"  # Proxy: Bitunix no tiene CCXT nativo
     
     # Obtener velas
     client = getattr(ccxt, exchange_name)({"options": {"defaultType": "swap"}})

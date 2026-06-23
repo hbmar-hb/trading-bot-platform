@@ -2,15 +2,16 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select, delete, desc, func, and_, or_, case, Float
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 
-from app.api.dependencies import get_current_admin_user, get_current_authorized_user
+from app.api.dependencies import get_current_authorized_user, require_developer_role
 from app.models.ai_signal import AISignal
 from app.models.ai_scan import AIWatchlistItem, AILatestScan
 from app.models.exchange_trade import ExchangeTrade
@@ -78,7 +79,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 @router.get("/watchlist")
 async def get_watchlist(
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     rows = (
         await db.execute(
@@ -101,7 +102,7 @@ async def get_watchlist(
 async def sync_watchlist(
     items: list[dict],
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """Replace the user's entire watchlist (called on every add/remove/TF change)."""
     from app.core.constants import validate_timeframe
@@ -126,7 +127,7 @@ async def sync_watchlist(
 async def latest_scans(
     symbols: str = Query("", description="Comma-separated tickers; empty = all"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return last known scan result per symbol (persisted in ai_latest_scans)."""
     q = select(AILatestScan)
@@ -144,7 +145,7 @@ async def analyze(
     symbol:    str = Query(..., description="Ticker, ej: BTCUSDT"),
     timeframe: str = Query("1h"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     from app.core.constants import validate_timeframe
     try:
@@ -202,7 +203,7 @@ async def scan(
     symbols:   str = Query(..., description="Comma-separated tickers"),
     timeframe: str = Query("1h"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     from app.core.constants import validate_timeframe
     try:
@@ -285,7 +286,7 @@ async def list_signals(
     limit:  int = Query(50, le=200),
     ticker: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     q = select(AISignal).order_by(desc(AISignal.created_at)).limit(limit)
     if ticker:
@@ -299,7 +300,7 @@ async def list_signals(
 @router.get("/signals/stats")
 async def stats(
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     from sqlalchemy import func
     from app.models.ai_scan import AILatestScan
@@ -346,7 +347,7 @@ async def stats(
 @router.get("/signals/stats/by-ticker")
 async def stats_by_ticker(
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     rows = (await db.execute(select(AISignal))).scalars().all()
     by_ticker: dict = {}
@@ -434,7 +435,7 @@ async def optimal_config(
     ticker: str = Query(..., description="Ej: BTCUSDT"),
     timeframe: str = Query("1h", description="Timeframe actual del usuario"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return the best ai_signal_config for a given ticker based on historical signals,
     plus leverage/timeframe recommendations."""
@@ -752,7 +753,7 @@ async def optimal_config(
 async def ict_analysis(
     symbol:    str = Query(...),
     timeframe: str = Query("1h"),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return last 100 candles + live ICT context. No DB writes."""
     from app.core.constants import validate_timeframe
@@ -796,7 +797,7 @@ async def ict_analysis(
 @router.get("/model/status")
 async def model_status(
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     from ai.registry import model_info as af_info, model_ready as af_ready
     from ai import ensemble_registry
@@ -837,7 +838,7 @@ async def model_status(
 
 
 @router.post("/model/train")
-async def trigger_train(_user = Depends(get_current_admin_user)):
+async def trigger_train(_user = Depends(require_developer_role)):
     from app.tasks.ai_retrain_task import retrain_anti_fake
     import asyncio
     # Ejecutar síncronamente en thread para no bloquear el event loop
@@ -847,7 +848,7 @@ async def trigger_train(_user = Depends(get_current_admin_user)):
 
 @router.post("/model/recalibrate-weights")
 async def recalibrate_weights_endpoint(
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Force recalibration of adaptive confluence weights from historical outcomes."""
     from app.services.database import SessionLocal
@@ -870,7 +871,7 @@ async def heuristic_validation(
     timeframe: str | None = Query(None, description="Optional timeframe filter"),
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return outcome statistics grouped by quality_tier and anti_fake_status.
 
@@ -977,7 +978,7 @@ async def heuristic_validation(
 @router.get("/macro-context")
 async def macro_context(
     ticker: str = Query(..., description="Ej: BTCUSDT"),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     from app.services.macro_context import get_macro_context
     return get_macro_context(ticker)
@@ -988,7 +989,7 @@ async def macro_context(
 @router.get("/bots")
 async def list_ai_bots(
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     from app.models.bot_config import BotConfig
     rows = (
@@ -1026,7 +1027,7 @@ async def list_ai_bots(
 async def get_real_performance(
     mode: str = Query("total", regex="^(real|paper|total)$"),
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """
     Rendimiento global real de trades ejecutados por IA:
@@ -1220,7 +1221,7 @@ async def get_symbol_real_stats(
     symbol: str,
     mode: str = Query("real", regex="^(real|paper|total)$"),
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """
     Métricas reales de trades ejecutados por IA para un símbolo,
@@ -1390,7 +1391,7 @@ async def get_symbol_rejections(
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """
     Devuelve lista detallada y paginada de señales rechazadas para un símbolo.
@@ -1423,7 +1424,7 @@ async def get_symbol_backtest_comparison(
     symbol: str,
     days: int = Query(60, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """
     Devuelve dos equity curves para comparar backtest teórico vs ejecución real+paper.
@@ -1561,7 +1562,7 @@ async def get_symbol_backtest_comparison(
 async def get_backtest_comparison(
     days: int = Query(60, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """
     Devuelve dos equity curves globales para comparar backtest teórico vs ejecución real+paper.
@@ -1690,7 +1691,7 @@ async def get_backtest_comparison(
 @router.get("/dashboard")
 async def get_ai_dashboard(
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
 ):
     """
     Endpoint único que agrega todas las métricas del motor IA para el dashboard:
@@ -1761,8 +1762,9 @@ async def get_ai_dashboard(
     # Feature importance desde el modelo si está disponible
     feature_importance = []
     try:
-        from ai.registry import get_feature_importance
-        fi = get_feature_importance()
+        from ai.registry import model_info
+        info = model_info()
+        fi = info.get("feature_importance") or {}
         if fi:
             total_imp = sum(fi.values()) or 1
             feature_importance = [
@@ -2187,7 +2189,7 @@ def _compute_institutional_health_sync(trades: list, equity_curve: list[dict]) -
 # ── Engine Narrator ───────────────────────────────────────────────────────────
 
 @router.post("/engine-summary")
-async def engine_summary(_user=Depends(get_current_admin_user)) -> dict:
+async def engine_summary(_user=Depends(require_developer_role)) -> dict:
     """Return a narrative summary of the current AI engine/system state.
 
     Uses live metrics from the dashboard, health checks, deployment gate and model status,
@@ -2197,7 +2199,7 @@ async def engine_summary(_user=Depends(get_current_admin_user)) -> dict:
 
 
 @router.get("/engine-summary/stream")
-async def engine_summary_stream(_user=Depends(get_current_admin_user)):
+async def engine_summary_stream(_user=Depends(require_developer_role)):
     """Stream a narrative summary of the current AI engine/system state via SSE.
 
     Events:
@@ -2221,7 +2223,7 @@ async def engine_summary_stream(_user=Depends(get_current_admin_user)):
 async def pnl_attribution(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
 ):
     """Return P&L attribution breakdown by system component."""
     from datetime import datetime, timezone, timedelta
@@ -2259,7 +2261,7 @@ async def pnl_attribution(
 async def validation_history(
     limit: int = Query(20, le=100),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return walk-forward validation history from model_validation_logs."""
     from app.models.model_validation_log import ModelValidationLog
@@ -2309,7 +2311,7 @@ async def expectancy_analysis(
     timeframe: str | None = Query(None, description="Optional timeframe filter"),
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return expectancy breakdown by tier, status, regime, and timeframe.
     Optimizes for E (expectancy) instead of WR (win rate).
@@ -2375,7 +2377,7 @@ async def divergence_summary(
     direction: str | None = Query(None, description="Optional direction filter"),
     limit: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return paper-vs-real divergence summary."""
     from sqlalchemy import select
@@ -2419,7 +2421,7 @@ async def confidence_decay(
     model_version: str | None = Query(None, description="Optional model version filter"),
     history: int = Query(0, ge=0, le=50, description="Include last N historical records"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return confidence decay (predicted vs realized win rate) for current or specified model."""
     from app.services.confidence_decay_tracker import get_latest_decay, get_decay_history
@@ -2464,7 +2466,7 @@ async def confidence_decay(
 async def model_decay(
     model_version: str | None = Query(None, description="Optional model version filter"),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return model decay rate: velocity of confidence decay and projection."""
     from app.services.model_decay_tracker import compute_decay_rate, get_latest_decay_rate
@@ -2532,7 +2534,7 @@ async def model_decay(
 async def institutional_health(
     days: int = Query(60, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
 ):
     """Return institutional-level health metrics: Sharpe, Sortino, Calmar, Ulcer, RoR, TtR."""
     from datetime import datetime, timezone, timedelta
@@ -2600,7 +2602,7 @@ async def institutional_health(
 async def get_replay_snapshot(
     position_id: str,
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return replay snapshot for a given position (full trade reconstruction)."""
     from sqlalchemy import select
@@ -2649,7 +2651,7 @@ async def get_replay_snapshot(
 @router.get("/deployment-gate")
 async def deployment_gate_status(
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return current unified deployment gate status."""
     from app.services.deployment_gate import get_latest_gate_status
@@ -2664,7 +2666,7 @@ async def deployment_gate_status(
 
 
 @router.get("/circuit-breaker")
-async def circuit_breaker_status(_user = Depends(get_current_admin_user)):
+async def circuit_breaker_status(_user = Depends(require_developer_role)):
     """Return current circuit breaker status."""
     from risk.circuit_breaker import CircuitBreaker
     cb = CircuitBreaker()
@@ -2678,7 +2680,7 @@ async def circuit_breaker_status(_user = Depends(get_current_admin_user)):
 
 
 @router.get("/shadow-mode")
-async def shadow_mode_status(_user = Depends(get_current_admin_user)):
+async def shadow_mode_status(_user = Depends(require_developer_role)):
     """Return shadow mode evaluation status."""
     from ai.services.shadow_mode import evaluate_shadow
     return evaluate_shadow()
@@ -2688,7 +2690,7 @@ async def shadow_mode_status(_user = Depends(get_current_admin_user)):
 async def feature_importance_drift(
     model_version: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return latest feature importance drift analysis."""
     from app.services.feature_importance_drift import get_latest_drift, get_drift_history
@@ -2710,7 +2712,7 @@ async def feature_importance_drift(
 async def threshold_optimization(
     days: int = Query(60, ge=7, le=365),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return threshold calibration suggestions based on historical trades."""
     from app.services.threshold_optimizer import calibrate_gate_thresholds
@@ -2726,7 +2728,7 @@ async def threshold_optimization(
 
 @router.get("/trainers")
 async def list_trainers(
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """List available model trainers (for future ensemble)."""
     from ai.trainers.registry import list_trainers
@@ -2737,7 +2739,7 @@ async def list_trainers(
 async def get_signal_diagnosis(
     signal_id: str,
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return LLM diagnosis for a given AI signal.
 
@@ -2802,7 +2804,7 @@ async def get_signal_diagnosis(
 @router.get("/diagnoses/threshold-recommendations")
 async def get_threshold_recommendations(
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return LLM-based threshold adjustment recommendations."""
     from datetime import datetime, timezone
@@ -2821,7 +2823,7 @@ async def export_diagnoses(
     from_date: str | None = Query(None),
     to_date: str | None = Query(None),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Export LLM signal diagnoses enriched with outcomes."""
     from app.models.llm_signal_diagnosis import LLMSignalDiagnosis
@@ -2878,7 +2880,7 @@ async def export_diagnoses(
 async def diagnoses_analytics(
     days: int = Query(30, ge=1, le=365),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Aggregated analytics over LLM signal diagnoses."""
     from app.models.llm_signal_diagnosis import LLMSignalDiagnosis
@@ -2968,7 +2970,7 @@ async def diagnoses_analytics(
 async def get_signal_context(
     signal_id: str,
     db: AsyncSession = Depends(get_db),
-    user = Depends(get_current_admin_user),
+    user = Depends(require_developer_role),
 ):
     """Return free contextual information about the signal's pair.
     Available to all authenticated users. No LLM calls.
@@ -3076,7 +3078,7 @@ async def get_scanner_regime_config(
     symbol: str,
     timeframe: str,
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return the current adaptive scanner config for a symbol+timeframe+regime.
     If no cached config exists, returns an empty dict.
@@ -3133,7 +3135,7 @@ async def refresh_scanner_regime_config(
     symbol: str,
     timeframe: str,
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Force regeneration of adaptive scanner config via LLM (admin only)."""
     from app.services.market_regime import detect_regime
@@ -3177,7 +3179,7 @@ async def refresh_scanner_regime_config(
 @router.get("/fundamentals/{ticker}")
 async def get_fundamentals(
     ticker: str,
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Return aggregated fundamental context for a ticker (CFTC CoT, unlocks, macro)."""
     from app.services.fundamental_context import get_fundamental_context
@@ -3192,7 +3194,7 @@ async def upload_manual_fundamental(
     confidence: float = Query(0.8, ge=0.0, le=1.0),
     valid_hours: int = Query(48, ge=1, le=720),
     data: dict | None = None,
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Allow admins to manually upload fundamental events that affect the gate."""
     from app.services.fundamental_context import upload_manual_event
@@ -3216,7 +3218,7 @@ async def engine_control(
     days: int = Query(7, ge=1, le=30),
     limit: int = Query(200, ge=1, le=500),
     db: AsyncSession = Depends(get_db),
-    _user = Depends(get_current_admin_user),
+    _user = Depends(require_developer_role),
 ):
     """Diagnostic dashboard: positions, rejections, system health, gate status."""
     from datetime import datetime, timezone, timedelta
@@ -3412,7 +3414,7 @@ async def engine_control(
 
 @router.get("/regime-heatmap")
 async def get_regime_heatmap(
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
 ):
     """FASE 3C: Devuelve el régimen de mercado actual para todos los pares
@@ -3471,7 +3473,7 @@ async def get_regime_heatmap(
 
 @router.get("/execution-quality")
 async def get_execution_quality(
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
     days: int = Query(7, ge=1, le=30),
 ):
@@ -3548,7 +3550,7 @@ async def get_execution_quality(
 
 @router.get("/correlation-matrix")
 async def get_correlation_matrix(
-    user=Depends(get_current_admin_user),
+    user=Depends(require_developer_role),
     db: AsyncSession = Depends(get_db),
     lookback_bars: int = Query(100, ge=20, le=500),
 ):

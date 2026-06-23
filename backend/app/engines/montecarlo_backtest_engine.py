@@ -10,6 +10,7 @@ import ccxt.async_support as ccxt
 import numpy as np
 import pandas as pd
 from datetime import datetime, timezone
+from loguru import logger
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 
