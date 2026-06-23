@@ -40,6 +40,26 @@ services:
       retries: 5
 
   # ─────────────────────────────────────────
+  # PgBouncer (connection pooler for PostgreSQL)
+  # ─────────────────────────────────────────
+  pgbouncer:
+    image: edoburu/pgbouncer:latest
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./docker/pgbouncer/pgbouncer.ini:/etc/pgbouncer/pgbouncer.ini:ro
+      - ./docker/pgbouncer/userlist.txt:/etc/pgbouncer/userlist.txt:ro
+    expose:
+      - "6432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -p 6432 -U ${POSTGRES_USER} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────────────
   # Backend (FastAPI)
   # ─────────────────────────────────────────
   backend:
@@ -50,6 +70,8 @@ services:
     env_file: .env
     depends_on:
       postgres:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -70,6 +92,8 @@ services:
     env_file: .env
     depends_on:
       postgres:
+        condition: service_healthy
+      pgbouncer:
         condition: service_healthy
       redis:
         condition: service_healthy
@@ -92,6 +116,10 @@ services:
     restart: unless-stopped
     env_file: .env
     depends_on:
+      postgres:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_healthy
       redis:
         condition: service_healthy
     volumes:
