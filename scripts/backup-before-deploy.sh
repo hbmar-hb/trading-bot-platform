@@ -32,7 +32,7 @@ if [ -f "${ENV_FILE}" ]; then
 fi
 
 # Backup de base de datos si PostgreSQL está corriendo
-if docker compose -f docker-compose.yml ps postgres 2>/dev/null | grep -q "running"; then
+if docker compose -f docker-compose.yml ps postgres 2>/dev/null | grep -q "Up"; then
     echo "Haciendo dump de PostgreSQL..."
     POSTGRES_USER=$(grep '^POSTGRES_USER=' "${ENV_FILE}" | head -1 | cut -d= -f2)
     POSTGRES_DB=$(grep '^POSTGRES_DB=' "${ENV_FILE}" | head -1 | cut -d= -f2)
