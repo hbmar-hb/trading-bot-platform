@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import Column, String, Float, DateTime, Integer, Index
 
-from app.db.base import Base
+from app.services.database import Base
 
 
 class ModelDecayRate(Base):

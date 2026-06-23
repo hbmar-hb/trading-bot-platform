@@ -1761,8 +1761,9 @@ async def get_ai_dashboard(
     # Feature importance desde el modelo si está disponible
     feature_importance = []
     try:
-        from ai.registry import get_feature_importance
-        fi = get_feature_importance()
+        from ai.registry import model_info
+        info = model_info()
+        fi = info.get("feature_importance") or {}
         if fi:
             total_imp = sum(fi.values()) or 1
             feature_importance = [
