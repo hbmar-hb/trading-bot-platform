@@ -42,6 +42,7 @@ celery_app = Celery(
         "app.tasks.slippage_recalibration_task",
         "app.tasks.confirmation_scan_task",
         "app.tasks.shadow_monitor_task",
+        "app.tasks.monitor_ai_paper_task",
     ],
 )
 
@@ -177,6 +178,11 @@ celery_app.conf.update(
         "drawdown-guard": {
             "task": "app.tasks.drawdown_guard.check_daily_drawdown",
             "schedule": 1800.0,  # cada 30 minutos
+        },
+        # Monitor de bot IA en paper: resumen a Telegram cada 4 horas
+        "monitor-ai-paper": {
+            "task": "app.tasks.monitor_ai_paper_task.run_monitor",
+            "schedule": 14400.0,  # 4 horas
         },
         # Reconciliación periódica: sincroniza posiciones DB vs exchange
         "periodic-reconcile": {

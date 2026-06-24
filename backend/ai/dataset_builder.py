@@ -230,9 +230,8 @@ def build_dataset_with_metadata_sync(max_samples: int = 5000, target_timeframe: 
     for s in rows:
         if not s.features:
             continue
-        ret = s.realistic_pnl_pct
-        if ret is None:
-            ret = _theoretical_pnl(s)
+        # HACK 2026-06-23: usar PnL ideal para walk-forward (mismo motivo que arriba).
+        ret = s.pnl_pct or _theoretical_pnl(s)
         id_to_return[str(s.id)] = ret
 
     returns = [id_to_return.get(sid, -1.0) for sid in signal_ids]
@@ -268,7 +267,12 @@ def _build_from_rows(rows, signal_quality_map: dict[str, float] | None = None) -
         # FVG/OB/CHoCH behave differently across temporalities
         rec["timeframe_encoded"] = TF_ORDINAL.get(s.timeframe, 6)
 
-        effective_outcome = s.realistic_outcome or s.outcome
+        # HACK 2026-06-23: realistic_outcome engine tiene bug de etiquetado
+        # (FAILURE_BEHAVIORAL con PnL positivo, resultados no deterministas,
+        # perfiles por defecto excesivamente pesimistas). Se entrena con outcome
+        # ideal hasta que se arregle. El realismo de ejecución se aplica en
+        # runtime via slippage_predictor + execution_analytics.
+        effective_outcome = s.outcome
 
         # Data quality weight: real_same_tf > paper_same_tf > real_diff_tf > paper_diff_tf
         base_weight = quality_map.get(str(s.id), 0.3)

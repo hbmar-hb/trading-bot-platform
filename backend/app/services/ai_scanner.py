@@ -68,7 +68,28 @@ def _reason_no_signal(ict) -> str:
     )
 
 
-def build_context(ict, last_close: float) -> dict:
+def _regime_snapshot(regime_info) -> dict:
+    """Return a flat dict with regime metrics suitable for contexts/features."""
+    if regime_info is None:
+        return {
+            "market_regime": "unknown",
+            "regime_adx": 0.0,
+            "regime_atr_p": 50.0,
+            "regime_rel_volume": 1.0,
+            "regime_realized_vol": 0.0,
+            "regime_confidence": 0.0,
+        }
+    return {
+        "market_regime": regime_info.regime.lower(),
+        "regime_adx": round(float(regime_info.adx), 2),
+        "regime_atr_p": round(float(regime_info.atr_percentile), 2),
+        "regime_rel_volume": round(float(regime_info.rel_volume), 3),
+        "regime_realized_vol": round(float(regime_info.realized_vol), 4),
+        "regime_confidence": round(float(getattr(regime_info, "confidence", 0.5)), 2),
+    }
+
+
+def build_context(ict, last_close: float, regime_info=None) -> dict:
     ob_zone = None
     if ict.active_ob:
         ob_zone = {
@@ -80,7 +101,7 @@ def build_context(ict, last_close: float) -> dict:
         {"kind": f.kind, "top": round(f.top, 8), "bottom": round(f.bottom, 8)}
         for f in ict.active_fvgs[:4]
     ]
-    return {
+    ctx = {
         "bias":        ict.bias,
         "last_break":  ict.last_break.kind if ict.last_break else None,
         "break_level": round(ict.last_break.level, 8) if ict.last_break else None,
@@ -93,6 +114,8 @@ def build_context(ict, last_close: float) -> dict:
         "last_close":  last_close,
         "reason":      _reason_no_signal(ict),
     }
+    ctx.update(_regime_snapshot(regime_info))
+    return ctx
 
 
 # ── Core analysis ─────────────────────────────────────────────────────────────
@@ -127,19 +150,6 @@ def build_signal(
     except Exception:
         pass  # Never block because circuit breaker failed
 
-    # Market quality filter — first gate after data fetch
-    try:
-        from ai.services.market_quality_filter import MarketQualityFilter
-        mq = MarketQualityFilter.allow_scan(symbol, ohlcv)
-        if not mq.allows_scan:
-            return {
-                "symbol": symbol,
-                "status": "NO_SIGNAL",
-                "context": {"market_quality": mq.reason, "market_quality_detail": mq.detail},
-            }, None
-    except Exception:
-        pass  # Never block because market quality filter failed
-
     closed = [
         {"open": c[1], "high": c[2], "low": c[3], "close": c[4], "volume": c[5]}
         for c in ohlcv[:-1]
@@ -147,16 +157,31 @@ def build_signal(
     last_close  = float(ohlcv[-1][4])
     signal_time = datetime.fromtimestamp(ohlcv[-2][0] / 1000, tz=timezone.utc)
 
-    ict     = ict_analyze(closed)
-    context = build_context(ict, last_close)
-
-    # ── Detect regime and resolve adaptive parameters ──
+    # ── Detect regime early so every diagnostic context carries it ──
     regime_info = None
     try:
         from app.services.market_regime import detect_regime
         regime_info = detect_regime(symbol, timeframe, ohlcv)
     except Exception:
         pass
+
+    # Market quality filter — first gate after data fetch
+    try:
+        from ai.services.market_quality_filter import MarketQualityFilter
+        mq = MarketQualityFilter.allow_scan(symbol, ohlcv)
+        if not mq.allows_scan:
+            ctx = {"market_quality": mq.reason, "market_quality_detail": mq.detail}
+            ctx.update(_regime_snapshot(regime_info))
+            return {
+                "symbol": symbol,
+                "status": "NO_SIGNAL",
+                "context": ctx,
+            }, None
+    except Exception:
+        pass  # Never block because market quality filter failed
+
+    ict     = ict_analyze(closed)
+    context = build_context(ict, last_close, regime_info)
 
     if adaptive_params is None and regime_info:
         try:
@@ -181,7 +206,10 @@ def build_signal(
 
     # Evaluación 1: Regime is NOT a model feature — save for post-processing only
     regime = regime_info.regime if regime_info else "unknown"
-    # Do NOT add regime_* to result.features — model sees only structural features
+    # Inject detailed regime metrics into features for activator / monitor / logs.
+    # The simplified ranging/trending flag from confluence_engine remains overwritten
+    # with the full regime label from market_regime.py.
+    result.features.update(_regime_snapshot(regime_info))
 
     # HTF confirmation gate
     htf_bias: str | None = _get_htf_bias(htf_ohlcv) if htf_ohlcv is not None else None

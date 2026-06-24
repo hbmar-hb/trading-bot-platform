@@ -78,6 +78,7 @@ services:
     ports:
       - "${BACKEND_HOST_PORT:-8100}:8000"
     volumes:
+      - ./backend/ai/models:/app/ai/models
       - ./backend/ai/knowledge:/app/ai/knowledge:ro
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
@@ -97,6 +98,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+    volumes:
+      - ./backend/ai/models:/app/ai/models
     command: >
       celery -A app.services.celery_app worker
       --loglevel=info
@@ -123,6 +126,7 @@ services:
       redis:
         condition: service_healthy
     volumes:
+      - ./backend/ai/models:/app/ai/models
       - celery_beat_data:/app/celerybeat-data
     command: >
       celery -A app.services.celery_app beat
