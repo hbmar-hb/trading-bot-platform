@@ -302,15 +302,22 @@ def notify_error(bot_name: str, error: str, chat_id: str | None = None) -> None:
         send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 
 
-def notify_circuit_breaker(bot_name: str, symbol: str, reason: str) -> None:
-    msg = (
-        f"🚨 <b>CIRCUIT BREAKER ACTIVADO</b>\n\n"
-        f"Bot: <b>{bot_name}</b>\n"
-        f"Par: {symbol}\n"
-        f"Motivo: {reason}\n\n"
-        f"⚠️ El tier de calidad está bloqueado. El bot sigue activo, pero ignorará señales de este tier hasta que el win rate se recupere (≥50%) o pasen 24h.\n"
-        f"Revisa las condiciones del mercado antes de reactivar manualmente."
-    )
+def notify_circuit_breaker(
+    bot_name: str,
+    symbol: str,
+    reason: str,
+    title: str = "CIRCUIT BREAKER ACTIVADO",
+    footer: str | None = None,
+) -> None:
+    msg = f"🚨 <b>{title}</b>\n\nBot: <b>{bot_name}</b>\nPar: {symbol}\nMotivo: {reason}\n\n"
+    if footer:
+        msg += footer
+    else:
+        msg += (
+            "⚠️ El tier de calidad está bloqueado. El bot sigue activo, pero ignorará señales "
+            "de este tier hasta que el win rate se recupere (≥50%) o pasen 24h.\n"
+            "Revisa las condiciones del mercado antes de reactivar manualmente."
+        )
     send_telegram_sync(msg, level="essential")
     send_discord_sync(msg.replace("<b>", "**").replace("</b>", "**"))
 

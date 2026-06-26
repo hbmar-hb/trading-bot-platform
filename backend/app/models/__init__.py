@@ -9,6 +9,7 @@ from app.models.bot_log import BotLog
 from app.models.paper_balance import PaperBalance
 from app.models.exchange_trade import ExchangeTrade
 from app.models.ai_signal_rejected import AISignalRejected
+from app.models.ai_signal_shadow_evaluation import AISignalShadowEvaluation
 from app.models.chat import ChatRoom, ChatMessage
 
 __all__ = [

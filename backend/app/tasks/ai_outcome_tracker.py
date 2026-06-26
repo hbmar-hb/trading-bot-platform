@@ -471,3 +471,16 @@ async def _update_outcome(
             await db.commit()
         except Exception:
             pass
+
+        # Resolve shadow evaluations for this signal
+        try:
+            from sqlalchemy import update
+            from app.models.ai_signal_shadow_evaluation import AISignalShadowEvaluation
+            await db.execute(
+                update(AISignalShadowEvaluation)
+                .where(AISignalShadowEvaluation.ai_signal_id == signal_id)
+                .values(outcome=outcome, pnl_pct=pnl, resolved_at=now)
+            )
+            await db.commit()
+        except Exception:
+            pass

@@ -43,6 +43,8 @@ celery_app = Celery(
         "app.tasks.confirmation_scan_task",
         "app.tasks.shadow_monitor_task",
         "app.tasks.monitor_ai_paper_task",
+        "app.tasks.monitor_ai_shadow_task",
+        "app.tasks.analyze_shadow_confluences_task",
     ],
 )
 
@@ -172,7 +174,7 @@ celery_app.conf.update(
         # Circuit breaker: pausa bots AI con 3 pérdidas consecutivas
         "ai-circuit-breakers": {
             "task": "app.tasks.circuit_breaker_task.check_circuit_breakers",
-            "schedule": 1800.0,  # cada 30 minutos
+            "schedule": 14400.0,  # cada 4 horas
         },
         # Drawdown guard: pausa bots si drawdown diario excede límite
         "drawdown-guard": {
@@ -182,6 +184,11 @@ celery_app.conf.update(
         # Monitor de bot IA en paper: resumen a Telegram cada 4 horas
         "monitor-ai-paper": {
             "task": "app.tasks.monitor_ai_paper_task.run_monitor",
+            "schedule": 14400.0,  # 4 horas
+        },
+        # Monitor de modo shadow: resumen a Telegram cada 4 horas
+        "monitor-ai-shadow": {
+            "task": "app.tasks.monitor_ai_shadow_task.run_monitor",
             "schedule": 14400.0,  # 4 horas
         },
         # Reconciliación periódica: sincroniza posiciones DB vs exchange
@@ -244,6 +251,11 @@ celery_app.conf.update(
         "shadow-mode-monitor": {
             "task": "app.tasks.shadow_monitor_task.run_shadow_monitor",
             "schedule": 300.0,
+        },
+        # Daily confluence analysis from shadow evaluations
+        "analyze-shadow-confluences": {
+            "task": "app.tasks.analyze_shadow_confluences_task.run_analysis",
+            "schedule": 86400.0,  # cada 24 horas
         },
     },
 )

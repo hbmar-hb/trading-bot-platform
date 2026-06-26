@@ -191,6 +191,11 @@ class BotConfig(TimestampMixin, Base):
                 "alt_correlation_threshold": 3,
             },
             "timeframe_fallback_enabled": False,
+            # Multi-timeframe IA control: null/empty means accept any timeframe.
+            "ai_timeframes": None,
+            "ai_timeframe_preference": "auto",
+            "min_confluence_score": 60,
+            "htf_alignment_required": True,
             # V2.1 Confluence Engine — configurable gates per bot
             "confluence": {
                 "require_htf_alignment": True,

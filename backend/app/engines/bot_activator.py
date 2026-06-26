@@ -23,8 +23,10 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, ROUND_DOWN
 
 from loguru import logger
+from config.settings import settings
 
 from app.models.ai_signal import AISignal
+from app.models.ai_signal_shadow_evaluation import AISignalShadowEvaluation
 from app.models.bot_config import BotConfig
 from app.models.bot_log import BotLog
 from app.models.position import Position
@@ -36,6 +38,7 @@ from ai import ensemble_registry
 from ai import bot_registry
 from app.core.ict_engine import _POI_STRENGTH as _ICT_POI_STRENGTH
 from app.engines.confluence_engine import _compute_confluence_score, _load_adaptive_weights
+from app.services.ai_scanner import to_ccxt
 
 # Max age in candle-multiples before a signal is considered stale
 _STALE_CANDLES = 5
@@ -44,13 +47,39 @@ _STALE_CANDLES = 5
 _MIN_NOTIONAL_BASE = 10.0  # raised from 2.0 to make trades economically viable after fees
 
 
-def _to_ccxt_symbol(symbol: str) -> str:
+def _to_compact_symbol(symbol: str) -> str:
     """Normalize any symbol format to compact form (e.g. BTCUSDT)."""
     if not symbol:
         return symbol
     # Handle BTC/USDT:USDT → BTCUSDT
     normalized = re.sub(r'/([^:]+):[^:]+$', r'\1', symbol)
     return normalized.replace('/', '').replace(':', '').upper()
+
+
+def _symbol_matches(bot_symbol: str, signal_ccxt_symbol: str) -> bool:
+    """Return True when a bot symbol matches a signal's CCXT symbol.
+
+    Accepts bot symbols already in CCXT format (BTC/USDT:USDT) or compact
+    format (BTCUSDT). Uses to_ccxt() only when the direct comparison fails.
+    """
+    if not bot_symbol or not signal_ccxt_symbol:
+        return False
+    if bot_symbol == signal_ccxt_symbol:
+        return True
+    return to_ccxt(bot_symbol) == signal_ccxt_symbol
+
+
+def _bot_accepts_timeframe(bot: BotConfig, signal_timeframe: str) -> bool:
+    """Return True if the bot accepts the signal's timeframe.
+
+    ai_timeframes in ai_signal_config is an optional whitelist.
+    If unset/empty, the bot accepts any timeframe (IA has full control).
+    """
+    cfg = bot.ai_signal_config or {}
+    allowed = cfg.get("ai_timeframes")
+    if allowed:
+        return signal_timeframe in allowed
+    return True
 
 
 def _get_min_viable_notional(symbol: str, entry_price: float) -> float:
@@ -882,24 +911,25 @@ def activate(ai_signal_id: str) -> dict:
                 pass
             return {"activated": 0, "reason": "stale_signal"}
 
-        bots = (
+        # All AI bots (active + paused) for shadow evaluation.
+        # We keep them separate from active bots so paused bots still contribute
+        # counterfactual data with their specific ai_signal_config.
+        all_ai_bots = (
             db.query(BotConfig)
             .filter(
                 BotConfig.ai_signal_mode == True,
-                BotConfig.status == "active",
                 BotConfig.alerts_only == False,
             )
             .all()
         )
 
-        # Normalize symbol comparison: bot.symbol may be compact (BTCUSDT)
-        # while sig.ccxt_symbol is always CCXT format (BTC/USDT:USDT)
-        from app.services.ai_scanner import to_ccxt
-        bots = [b for b in bots if to_ccxt(b.symbol) == sig.ccxt_symbol and b.timeframe == sig.timeframe]
+        # Match bots by symbol. Timeframe filtering is done per-bot inside the loop
+        # using ai_timeframes config (defaults to accepting any timeframe).
+        all_ai_bots = [b for b in all_ai_bots if _symbol_matches(b.symbol, sig.ccxt_symbol)]
 
         # Filtrar bots sin cuenta válida (real o paper)
         valid_bots = []
-        for bot in bots:
+        for bot in all_ai_bots:
             if bot.is_paper_trading:
                 if bot.paper_balance_id:
                     valid_bots.append(bot)
@@ -910,11 +940,22 @@ def activate(ai_signal_id: str) -> dict:
                     valid_bots.append(bot)
                 else:
                     logger.warning(f"[ACTIVATOR] {bot.bot_name}: sin exchange_account, saltando")
-        bots = valid_bots
+
+        # ── Shadow mode: evaluate what would happen under different filter profiles ──
+        # Run BEFORE early returns so we capture data even when no active bot matches.
+        shadow_evaluations = 0
+        if settings.ai_shadow_mode_enabled and sig:
+            try:
+                shadow_evaluations = _run_shadow_evaluations(db, sig, valid_bots)
+            except Exception as shadow_exc:
+                logger.warning(f"[ACTIVATOR] Shadow evaluation failed: {shadow_exc}")
+
+        # Only active bots are allowed to execute real/paper trades.
+        bots = [b for b in valid_bots if b.status == "active"]
 
         if not bots:
-            logger.debug(f"[ACTIVATOR] No AI bots configured for {sig.ccxt_symbol}")
-            return {"activated": 0, "reason": "no_matching_bots"}
+            logger.debug(f"[ACTIVATOR] No active AI bots configured for {sig.ccxt_symbol}")
+            return {"activated": 0, "reason": "no_active_bots", "shadow_evaluations": shadow_evaluations}
 
         activated, results = 0, []
         alert_fired = False
@@ -1015,8 +1056,8 @@ def activate(ai_signal_id: str) -> dict:
                         f"no data for {sig.ticker}, accepting signal timeframe {sig.timeframe}"
                     )
 
-            # ── Timeframe fallback: accept signals from higher TFs ──
-            tf_match = (sig.timeframe == bot.timeframe)
+            # ── Timeframe acceptance: bot config whitelist + optional higher-TF fallback ──
+            tf_match = _bot_accepts_timeframe(bot, sig.timeframe)
             if not tf_match and (bot.ai_signal_config or {}).get("timeframe_fallback_enabled", False):
                 from app.core.constants import VALID_TIMEFRAMES
                 try:
@@ -1049,9 +1090,9 @@ def activate(ai_signal_id: str) -> dict:
                 continue
 
             # Cooldown guard: prevent immediate re-entry after a closed trade
-            if _is_in_cooldown(bot, db):
+            if _is_in_cooldown(bot, db, sig.timeframe):
                 logger.info(
-                    f"[ACTIVATOR] {bot.bot_name}: in cooldown ({_cooldown_minutes_for_tf(bot.timeframe)}min) — skipping"
+                    f"[ACTIVATOR] {bot.bot_name}: in cooldown ({_cooldown_minutes_for_tf(sig.timeframe)}min) — skipping"
                 )
                 continue
 
@@ -1306,7 +1347,7 @@ def activate(ai_signal_id: str) -> dict:
                             context = MCSetupEngine.run(
                                 strategy_id=strategy_id,
                                 symbol=bot.symbol,
-                                timeframe=bot.timeframe,
+                                timeframe=sig.timeframe,
                                 params=mc_cfg.get("optimized_params"),
                                 lookback_days=90,
                             )
@@ -1659,7 +1700,191 @@ def activate(ai_signal_id: str) -> dict:
                 except Exception:
                     pass
 
-        return {"activated": activated, "results": results}
+        return {"activated": activated, "results": results, "shadow_evaluations": shadow_evaluations}
+
+
+# Shadow filter profiles used for ML/gate validation without executing trades.
+_SHADOW_PROFILES = {
+    "strict": {
+        "min_score": 75,
+        "allowed_tiers": ["STRONG"],
+        "allowed_statuses": ["CLEAR"],
+    },
+    "moderate": {
+        "min_score": 60,
+        "allowed_tiers": ["STRONG", "MODERATE"],
+        "allowed_statuses": ["CLEAR", "CAUTION"],
+    },
+    "relaxed": {
+        "min_score": 50,
+        "allowed_tiers": ["STRONG", "MODERATE", "WEAK"],
+        "allowed_statuses": ["CLEAR", "CAUTION"],
+    },
+    "bot_match": {
+        "min_score": 45,
+        "allowed_tiers": ["STRONG", "MODERATE"],
+        "allowed_statuses": ["CLEAR", "CAUTION"],
+        "max_concurrent": 2,
+        "cooldown_minutes": 240,
+    },
+}
+
+
+def _extract_confluence_snapshot(features: dict) -> dict:
+    """Extract a small, queryable snapshot of confluence features.
+
+    These fields are used for post-hoc correlation analysis between
+    confluences and shadow outcomes.
+    """
+    trigger = features.get("trigger")
+    killzone = features.get("killzone")
+    break_type = features.get("break_type")
+    return {
+        "has_ob": bool(trigger == "ob"),
+        "has_killzone": bool(killzone and killzone not in {"", "Late/Early", "Post_NY", "Pre_NY"}),
+        "htf_aligned": bool(features.get("htf_aligned")),
+        "fvg_count": int(features.get("fvg_aligned_count", 0) or 0),
+        "structure_type": break_type if break_type in {"BOS", "CHoCH"} else "none",
+        "adaptive_trend_score": float(features.get("adaptive_score", 0) or 0.0),
+    }
+
+
+def _run_shadow_evaluations(db, sig: AISignal, bots: list[BotConfig]) -> int:
+    """Evaluate signal against filter profiles without trading.
+
+    If one or more active bots match the signal's symbol/timeframe, evaluate
+    each profile for each matching bot. Otherwise, record one row per profile
+    with bot_id=NULL so we still capture what would have happened under the
+    profile. Returns the number of shadow rows created.
+    """
+    from app.services.market_regime import RegimeResult, regime_gate_for_signal
+
+    now = datetime.now(timezone.utc)
+    rows: list[AISignalShadowEvaluation] = []
+
+    # Find bots that could trade this signal (same checks as live path)
+    matched_bots: list[BotConfig] = []
+    for bot in bots:
+        if not _symbol_matches(bot.symbol, sig.ccxt_symbol):
+            continue
+        if bot.is_paper_trading:
+            if not bot.paper_balance_id:
+                continue
+        elif not bot.exchange_account_id:
+            continue
+
+        tf_match = _bot_accepts_timeframe(bot, sig.timeframe)
+        cfg = bot.ai_signal_config or {}
+        if not tf_match and cfg.get("timeframe_fallback_enabled", False):
+            from app.core.constants import VALID_TIMEFRAMES
+            try:
+                sig_idx = VALID_TIMEFRAMES.index(sig.timeframe)
+                bot_idx = VALID_TIMEFRAMES.index(bot.timeframe)
+                if sig_idx > bot_idx:
+                    tf_match = True
+            except ValueError:
+                pass
+        if not tf_match:
+            continue
+
+        matched_bots.append(bot)
+
+    # Regime object from signal features
+    features = sig.features or {}
+    regime = RegimeResult(
+        regime=features.get("market_regime", "RANGING"),
+        adx=features.get("regime_adx", 0),
+        atr_percentile=features.get("regime_atr_p", 50),
+        rel_volume=features.get("regime_rel_volume", 1.0),
+        realized_vol=features.get("regime_realized_vol", 0.0),
+        btc_corr=None,
+        funding_accel=None,
+        confidence=features.get("regime_confidence", 0.5),
+    )
+
+    def _evaluate_profile(
+        profile_name: str,
+        profile_cfg: dict,
+        bot: BotConfig | None,
+    ) -> AISignalShadowEvaluation:
+        bot_cfg = bot.ai_signal_config or {} if bot else {}
+        merged_cfg = {**bot_cfg, **profile_cfg}
+        passed = True
+        blocked_at = None
+        block_reason = None
+
+        symbol_for_gate = bot.symbol if bot else sig.ticker
+
+        # Regime gate
+        try:
+            rg = regime_gate_for_signal(symbol_for_gate, sig.direction, regime)
+            if rg["blocked"]:
+                passed = False
+                blocked_at = "regime"
+                block_reason = rg.get("reason", "")
+            elif rg["min_score_adjust"]:
+                merged_cfg["min_score"] = merged_cfg.get("min_score", 60) + rg["min_score_adjust"]
+        except Exception:
+            pass
+
+        # Tier filter
+        if passed and sig.quality_tier not in merged_cfg["allowed_tiers"]:
+            passed = False
+            blocked_at = "tier"
+            block_reason = f"{sig.quality_tier} not in {merged_cfg['allowed_tiers']}"
+
+        # Status filter (ML + heuristic blended)
+        if passed:
+            bot_id = str(bot.id) if bot else None
+            effective_status = _effective_status(sig, merged_cfg, bot_id)
+            if effective_status not in merged_cfg["allowed_statuses"]:
+                passed = False
+                blocked_at = "status"
+                block_reason = (
+                    f"{effective_status} not in {merged_cfg['allowed_statuses']}"
+                    f" (heuristic={sig.anti_fake_status}, sp={sig.success_probability})"
+                )
+
+        # Score filter
+        if passed and sig.score < merged_cfg["min_score"]:
+            passed = False
+            blocked_at = "score"
+            block_reason = f"score {sig.score} < min {merged_cfg['min_score']}"
+
+        return AISignalShadowEvaluation(
+            ai_signal_id=sig.id,
+            bot_id=bot.id if bot else None,
+            ticker=sig.ticker,
+            timeframe=sig.timeframe,
+            direction=sig.direction,
+            score=sig.score,
+            quality_tier=sig.quality_tier,
+            anti_fake_status=sig.anti_fake_status,
+            success_probability=sig.success_probability,
+            profile=profile_name,
+            profile_config=profile_cfg,
+            passed=passed,
+            blocked_at=blocked_at,
+            block_reason=block_reason,
+            would_execute=passed and bot is not None and getattr(bot, "status", None) == "active",
+            features_snapshot=_extract_confluence_snapshot(features),
+            evaluated_at=now,
+        )
+
+    if matched_bots:
+        for bot in matched_bots:
+            for profile_name, profile_cfg in _SHADOW_PROFILES.items():
+                rows.append(_evaluate_profile(profile_name, profile_cfg, bot))
+    else:
+        # No bot trades this signal — still record generic profile outcomes
+        for profile_name, profile_cfg in _SHADOW_PROFILES.items():
+            rows.append(_evaluate_profile(profile_name, profile_cfg, None))
+
+    if rows:
+        db.bulk_save_objects(rows)
+        db.commit()
+
+    return len(rows)
 
 
 # ── Per-bot execution ─────────────────────────────────────────────────────────
@@ -1703,7 +1928,7 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
         from app.services.deployment_gate import get_symbol_gate_status
 
         if not is_paper:
-            sym_gate = get_symbol_gate_status(db, bot.symbol, bot.timeframe)
+            sym_gate = get_symbol_gate_status(db, bot.symbol, sig.timeframe)
             if sym_gate.get("state") == "PAUSED":
                 from app.services.rejected_tracker import record_rejection
                 record_rejection(
@@ -1912,10 +2137,10 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
     # aún más si la volatilidad es extrema, pero NUNCA supera el cap.
     # Mínimo 3x para que fees+slippage no coman toda la ganancia.
     confluence_score = float(sig.score) if sig.score else 0.0
-    score_tf_cap = _get_leverage_cap(confluence_score, bot.timeframe)
+    score_tf_cap = _get_leverage_cap(confluence_score, sig.timeframe)
     if score_tf_cap == 0:
         logger.info(
-            f"[ACTIVATOR] {bot.bot_name}: score={confluence_score:.1f} tf={bot.timeframe} "
+            f"[ACTIVATOR] {bot.bot_name}: score={confluence_score:.1f} tf={sig.timeframe} "
             f"— por debajo del mínimo (55), no opera"
         )
         return {"status": "rejected", "reason": "score_below_minimum", "detail": f"score={confluence_score:.1f} < 55"}
@@ -2027,7 +2252,7 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
     gate_mult = 1.0
     try:
         from app.services.deployment_gate import get_symbol_gate_status
-        gst = get_symbol_gate_status(db, bot.symbol, bot.timeframe)
+        gst = get_symbol_gate_status(db, bot.symbol, sig.timeframe)
         if gst.get("state") == "HEALTHY":
             sharpe = gst.get("sharpe_20")
             pf = gst.get("profit_factor")
@@ -2564,11 +2789,11 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
     try:
         live_positions = _arun(exchange.get_open_positions())
         for live_pos in live_positions:
-            if _to_ccxt_symbol(live_pos.symbol) != _to_ccxt_symbol(bot.symbol):
+            if _to_compact_symbol(live_pos.symbol) != _to_compact_symbol(bot.symbol):
                 continue
             # ¿Está esta posición viva trackeada en DB?
             live_in_db = db.query(Position).filter(
-                Position.symbol == _to_ccxt_symbol(live_pos.symbol),
+                Position.symbol == _to_compact_symbol(live_pos.symbol),
                 Position.status == "open",
                 Position.side == live_pos.side,
             ).first()
@@ -3470,7 +3695,7 @@ def _execute_for_bot(db, bot: BotConfig, sig: AISignal) -> dict:
     # ── Score + Timeframe based risk config adjustment ──
     # Breakeven activates by R-multiple (not only after TP1).
     # Trailing activates at score+TF specific R level.
-    tf = bot.timeframe or "15m"
+    tf = sig.timeframe or bot.timeframe or "15m"
     score = float(sig.score) if sig.score else 0.0
 
     # Use score+TF based configs directly for AI bots.
@@ -3675,8 +3900,12 @@ def _cooldown_minutes_for_tf(timeframe: str) -> int:
     }.get(tf, 60)
 
 
-def _is_in_cooldown(bot: BotConfig, db) -> bool:
-    """Check if bot had a closed trade too recently."""
+def _is_in_cooldown(bot: BotConfig, db, timeframe: str | None = None) -> bool:
+    """Check if bot had a closed trade too recently.
+
+    Uses the signal timeframe when the bot accepts multi-timeframe signals,
+    falling back to the bot's configured timeframe otherwise.
+    """
     from sqlalchemy import desc
     last_pos = (
         db.query(Position)
@@ -3686,7 +3915,8 @@ def _is_in_cooldown(bot: BotConfig, db) -> bool:
     )
     if not last_pos or not last_pos.closed_at:
         return False
-    cooldown = timedelta(minutes=_cooldown_minutes_for_tf(bot.timeframe))
+    effective_tf = timeframe or bot.timeframe
+    cooldown = timedelta(minutes=_cooldown_minutes_for_tf(effective_tf))
     return datetime.now(timezone.utc) - last_pos.closed_at < cooldown
 
 

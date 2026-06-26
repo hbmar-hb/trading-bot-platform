@@ -105,6 +105,12 @@ class Settings(BaseSettings):
     llm_max_tokens: int = 500
     llm_enabled: bool = True
 
+    # ─── Shadow mode ─────────────────────────────────────────
+    # When enabled, bot_activator records what would have happened under
+    # several filter profiles without executing trades. Used for ML/gate
+    # validation during paper-trading tests.
+    ai_shadow_mode_enabled: bool = False
+
     # ─── Local LLM (Ollama / vLLM / etc.) ────────────────────
     # Used for optional live scanner tips and assistant. The model runs on the
     # user's local machine; the backend calls the exposed OpenAI-compatible endpoint.

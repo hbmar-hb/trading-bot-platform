@@ -66,6 +66,12 @@ async def _check_async() -> dict:
     from app.models.position import Position
     from app.services.notifier import notify_circuit_breaker
 
+    notifications_by_bot: dict[str, dict] = {}
+
+    def _queue_notification(bot_name: str, symbol: str, message: str) -> None:
+        entry = notifications_by_bot.setdefault(bot_name, {"symbol": symbol, "messages": []})
+        entry["messages"].append(message)
+
     async with AsyncSessionLocal() as db:
         bots = (
             await db.execute(
@@ -94,6 +100,10 @@ async def _check_async() -> dict:
                             logger.info(
                                 f"[CIRCUIT BREAKER] {bot.bot_name} tier {tier} auto-reset "
                                 f"after {_RESET_HOURS}h"
+                            )
+                            _queue_notification(
+                                bot.bot_name, bot.symbol,
+                                f"Tier {tier} DESBLOQUEADO tras {_RESET_HOURS}h de bloqueo"
                             )
                     except Exception:
                         pass
@@ -177,15 +187,11 @@ async def _check_async() -> dict:
                             f"tier {tier} BLOCKED after {count} consecutive SL "
                             f"(limit={limit}, regime={current_regime})"
                         )
-                        try:
-                            notify_circuit_breaker(
-                                bot.bot_name, bot.symbol,
-                                f"{count} consecutive SL on tier {tier} — tier {tier} BLOCKED"
-                            )
-                        except Exception as notify_exc:
-                            logger.warning(
-                                f"[CIRCUIT BREAKER] Notification failed: {notify_exc}"
-                            )
+                        _queue_notification(
+                            bot.bot_name, bot.symbol,
+                            f"Tier {tier} BLOQUEADO tras {count} SL consecutivos "
+                            f"(límite {limit}, régimen {current_regime})"
+                        )
                 else:
                     # Under limit — reset if previously tripped
                     if current.get("tripped_at"):
@@ -194,6 +200,10 @@ async def _check_async() -> dict:
                         logger.info(
                             f"[CIRCUIT BREAKER] {bot.bot_name} ({bot.symbol}) "
                             f"tier {tier} reset (count={count} < limit={limit})"
+                        )
+                        _queue_notification(
+                            bot.bot_name, bot.symbol,
+                            f"Tier {tier} DESBLOQUEADO — racha {count} < límite {limit}"
                         )
 
             cfg["circuit_breaker_state"] = cb_state
@@ -311,14 +321,11 @@ async def _check_async() -> dict:
             cfg["circuit_breaker_state"] = cb_state
             bot.ai_signal_config = cfg
             reactivated += len(regime_reset_tiers)
-            try:
-                notify_circuit_breaker(
+            for tier in regime_reset_tiers:
+                _queue_notification(
                     bot.bot_name, bot.symbol,
-                    f"Tiers {','.join(regime_reset_tiers)} desbloqueados — "
-                    f"cambio de régimen ({blocked_regime} → {current_regime})"
+                    f"Tier {tier} DESBLOQUEADO — régimen cambió de {blocked_regime} a {current_regime}"
                 )
-            except Exception as notify_exc:
-                logger.warning(f"[CIRCUIT BREAKER] Regime reset notify failed: {notify_exc}")
 
         # Remove already-reset tiers from ready list
         tiers_ready = [t for t in tiers_ready if t not in regime_reset_tiers]
@@ -365,14 +372,12 @@ async def _check_async() -> dict:
             cfg["circuit_breaker_state"] = cb_state
             bot.ai_signal_config = cfg
             reactivated += len(reset_tiers)
-            try:
-                notify_circuit_breaker(
+            for tier in reset_tiers:
+                _queue_notification(
                     bot.bot_name, bot.symbol,
-                    f"Tiers {','.join(reset_tiers)} desbloqueados — bot-wide WR {bot_wide_wr:.0f}% "
-                    f"({wins}/{len(recent_positions)}) last {REACTIVATE_LOOKBACK_HOURS}h ≥ {REACTIVATE_WR_THRESHOLD}%"
+                    f"Tier {tier} DESBLOQUEADO — WR bot {bot_wide_wr:.0f}% "
+                    f"({wins}/{len(recent_positions)}) últimas {REACTIVATE_LOOKBACK_HOURS}h"
                 )
-            except Exception as notify_exc:
-                logger.warning(f"[CIRCUIT BREAKER] Reactivation notify failed: {notify_exc}")
         else:
             logger.info(
                 f"[CIRCUIT BREAKER] {bot.bot_name}: bot-wide WR {bot_wide_wr:.0f}% "
@@ -382,5 +387,16 @@ async def _check_async() -> dict:
 
     if tripped or reset or reactivated:
         await db.commit()
+
+    # Send one notification per bot only when a state change actually occurred.
+    for bot_name, info in notifications_by_bot.items():
+        try:
+            notify_circuit_breaker(
+                bot_name, info["symbol"],
+                "\n".join(info["messages"]),
+                title="CIRCUIT BREAKER — CAMBIO DE ESTADO",
+            )
+        except Exception as notify_exc:
+            logger.warning(f"[CIRCUIT BREAKER] Notification failed: {notify_exc}")
 
     return {"checked": len(bots), "tripped": tripped, "reset": reset, "reactivated": reactivated}

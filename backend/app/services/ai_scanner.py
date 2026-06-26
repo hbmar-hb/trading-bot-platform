@@ -42,13 +42,28 @@ def _get_htf_bias(htf_ohlcv: list) -> str | None:
 # ── Symbol helpers ────────────────────────────────────────────────────────────
 
 def to_ccxt(symbol: str) -> str:
-    if "/" in symbol:
+    """Normalize a symbol to CCXT perpetual futures format (BASE/QUOTE:QUOTE).
+
+    Handles:
+      - BTCUSDT          -> BTC/USDT:USDT
+      - BTC/USDT         -> BTC/USDT:USDT
+      - BTC/USDT:USDT    -> BTC/USDT:USDT
+      - BTCUSDT.P        -> BTC/USDT:USDT
+    """
+    if not symbol:
         return symbol
-    s = symbol.replace(".P", "").replace(".p", "")
+    upper = symbol.upper()
+    if "/" in upper:
+        base, rest = upper.split("/", 1)
+        if ":" in rest:
+            return upper
+        quote = rest
+        return f"{base}/{quote}:{quote}"
+    s = upper.replace(".P", "").replace(".p", "")
     for q in ["USDT", "USDC", "BTC", "ETH", "USD"]:
         if s.endswith(q):
             return f"{s[:-len(q)]}/{q}:{q}"
-    return symbol
+    return upper
 
 
 # ── ICT context builder ───────────────────────────────────────────────────────
