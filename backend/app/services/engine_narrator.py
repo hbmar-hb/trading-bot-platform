@@ -27,6 +27,7 @@ from app.services.local_llm_client import (
 )
 from app.services.faq_service import answer_faq
 from app.models.bot_config import BotConfig
+from app.models.position import Position
 
 
 def _format_number(value: Any, decimals: int = 2) -> str:
@@ -150,6 +151,162 @@ def _gather_model_metrics() -> dict:
         return {"ready": False, "error": str(exc)}
 
 
+def _gather_shadow_metrics() -> dict:
+    """Recopila métricas del shadow mode últimas 24h."""
+    try:
+        with SessionLocal() as db:
+            since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+
+            # Evaluaciones por perfil
+            shadow_agg = db.execute(
+                text("""
+                    SELECT
+                        profile,
+                        COUNT(*) as total,
+                        COUNT(*) FILTER (WHERE passed) as passed,
+                        COUNT(*) FILTER (WHERE passed AND outcome = 'SUCCESS') as success,
+                        COUNT(*) FILTER (WHERE passed AND outcome = 'FAILURE') as failure,
+                        ROUND(AVG(score)::numeric, 1) as avg_score
+                    FROM ai_signal_shadow_evaluations
+                    WHERE evaluated_at > :since
+                    GROUP BY profile
+                """),
+                {"since": since_24h},
+            ).mappings().all()
+
+            profiles = {}
+            for row in shadow_agg:
+                profiles[row["profile"]] = {
+                    "total": row["total"],
+                    "passed": row["passed"],
+                    "success": row["success"],
+                    "failure": row["failure"],
+                    "avg_score": float(row["avg_score"]) if row["avg_score"] else None,
+                    "win_rate": round(row["success"] / max(row["passed"], 1) * 100, 1) if row["passed"] else 0,
+                }
+
+            # Top confluencias ganadoras
+            confluences = db.execute(
+                text("""
+                    SELECT
+                        features_snapshot->>'has_ob' as ob,
+                        features_snapshot->>'has_killzone' as killzone,
+                        features_snapshot->>'htf_aligned' as htf,
+                        features_snapshot->>'structure_type' as structure,
+                        COUNT(*) as total,
+                        COUNT(*) FILTER (WHERE outcome = 'SUCCESS') as success
+                    FROM ai_signal_shadow_evaluations
+                    WHERE evaluated_at > :since
+                        AND profile = 'bot_match'
+                        AND passed = true
+                    GROUP BY 1, 2, 3, 4
+                    ORDER BY success DESC, total DESC
+                    LIMIT 5
+                """),
+                {"since": since_24h},
+            ).mappings().all()
+
+            return {
+                "profiles": profiles,
+                "total_evaluations": sum(p["total"] for p in profiles.values()),
+                "top_confluences": [
+                    {
+                        "ob": row["ob"],
+                        "killzone": row["killzone"],
+                        "htf": row["htf"],
+                        "structure": row["structure"],
+                        "total": row["total"],
+                        "success": row["success"],
+                    }
+                    for row in confluences
+                ],
+            }
+    except Exception as exc:
+        logger.warning(f"[engine_narrator] Shadow metrics failed: {exc}")
+        return {"error": str(exc)}
+
+
+def _gather_circuit_breaker_metrics() -> dict:
+    """Recopila estado del circuit breaker por bot."""
+    try:
+        with SessionLocal() as db:
+            bots = db.execute(
+                select(BotConfig.bot_name, BotConfig.ai_signal_config)
+                .where(BotConfig.ai_signal_mode == True)
+                .where(BotConfig.status == "active")
+            ).all()
+
+            cb_status = {}
+            for bot_name, cfg in bots:
+                if not cfg:
+                    continue
+                cb_state = cfg.get("circuit_breaker_state", {})
+                blocked_tiers = [
+                    tier for tier, state in cb_state.items()
+                    if isinstance(state, dict) and state.get("tripped_at")
+                ]
+                if blocked_tiers:
+                    cb_status[bot_name] = {
+                        "blocked_tiers": blocked_tiers,
+                        "state": "blocked",
+                    }
+                else:
+                    cb_status[bot_name] = {"state": "clear"}
+
+            return {
+                "bots_affected": len([b for b in cb_status.values() if b["state"] == "blocked"]),
+                "total_active": len(cb_status),
+                "by_bot": cb_status,
+            }
+    except Exception as exc:
+        logger.warning(f"[engine_narrator] Circuit breaker metrics failed: {exc}")
+        return {"error": str(exc)}
+
+
+def _gather_position_metrics() -> dict:
+    """Recopila métricas de posiciones."""
+    try:
+        with SessionLocal() as db:
+            since_24h = datetime.now(timezone.utc) - timedelta(hours=24)
+
+            # Posiciones abiertas
+            open_pos = db.execute(
+                select(func.count(Position.id), func.sum(Position.realized_pnl))
+                .where(Position.status == "open")
+                .where(Position.source == "ai_bot")
+            ).one()
+
+            # Posiciones cerradas 24h
+            closed = db.execute(
+                select(
+                    func.count(Position.id),
+                    func.sum(Position.realized_pnl),
+                    func.avg(
+                        func.extract('epoch', Position.closed_at) -
+                        func.extract('epoch', Position.opened_at)
+                    ) / 60
+                )
+                .where(Position.status == "closed")
+                .where(Position.closed_at > since_24h)
+                .where(Position.source == "ai_bot")
+            ).one()
+
+            return {
+                "open": {
+                    "count": open_pos[0] or 0,
+                    "unrealized_pnl": float(open_pos[1] or 0),
+                },
+                "closed_24h": {
+                    "count": closed[0] or 0,
+                    "realized_pnl": float(closed[1] or 0),
+                    "avg_duration_min": round(float(closed[2] or 0), 1),
+                },
+            }
+    except Exception as exc:
+        logger.warning(f"[engine_narrator] Position metrics failed: {exc}")
+        return {"error": str(exc)}
+
+
 async def gather_engine_metrics() -> dict:
     """Recopila métricas relevantes del motor IA y la plataforma en paralelo."""
     metrics: dict = {"collected_at": datetime.now(timezone.utc).isoformat()}
@@ -157,12 +314,20 @@ async def gather_engine_metrics() -> dict:
     health_task = asyncio.create_task(_gather_health())
     db_task = asyncio.create_task(asyncio.to_thread(_gather_db_metrics))
     model_task = asyncio.create_task(asyncio.to_thread(_gather_model_metrics))
+    shadow_task = asyncio.create_task(asyncio.to_thread(_gather_shadow_metrics))
+    cb_task = asyncio.create_task(asyncio.to_thread(_gather_circuit_breaker_metrics))
+    pos_task = asyncio.create_task(asyncio.to_thread(_gather_position_metrics))
 
-    health, db_data, model = await asyncio.gather(health_task, db_task, model_task)
+    health, db_data, model, shadow, cb, pos = await asyncio.gather(
+        health_task, db_task, model_task, shadow_task, cb_task, pos_task
+    )
 
     metrics["health"] = health
     metrics.update(db_data)
     metrics["model"] = model
+    metrics["shadow_mode"] = shadow
+    metrics["circuit_breaker"] = cb
+    metrics["positions"] = pos
 
     return metrics
 
@@ -174,6 +339,9 @@ def _build_summary_prompt(metrics: dict) -> str:
     model = metrics.get("model", {})
     bots = metrics.get("bots", {})
     sig24 = metrics.get("signals_24h", {})
+    shadow = metrics.get("shadow_mode", {})
+    cb = metrics.get("circuit_breaker", {})
+    pos = metrics.get("positions", {})
 
     health_status = health.get("status", "unknown")
     issues = health.get("summary", {}).get("issues_list", [])
@@ -214,6 +382,20 @@ def _build_summary_prompt(metrics: dict) -> str:
         f"- Señales últimas 24h: {sig24.get('total', 'N/A')} (STRONG={sig24.get('strong', 0)}, MODERATE={sig24.get('moderate', 0)}, WEAK={sig24.get('weak', 0)}, pending={sig24.get('pending', 0)})",
         f"- Señales últimas 2h: {metrics.get('signals_2h', 'N/A')}",
         f"- Score promedio 24h: {sig24.get('avg_score') or 'N/A'}",
+        "",
+        f"- Shadow mode (24h): {shadow.get('total_evaluations', 'N/A')} evaluaciones",
+        f"  • bot_match: {shadow.get('profiles', {}).get('bot_match', {}).get('passed', 0)} pasaron, win rate {shadow.get('profiles', {}).get('bot_match', {}).get('win_rate', 0)}%",
+        f"  • strict: {shadow.get('profiles', {}).get('strict', {}).get('passed', 0)} pasaron",
+        f"  • moderate: {shadow.get('profiles', {}).get('moderate', {}).get('passed', 0)} pasaron",
+        f"  • relaxed: {shadow.get('profiles', {}).get('relaxed', {}).get('passed', 0)} pasaron",
+        f"  • Top confluencias: {shadow.get('top_confluences', [])}",
+        "",
+        f"- Circuit breaker: {cb.get('bots_affected', 0)}/{cb.get('total_active', 0)} bots afectados",
+        f"  • Bots bloqueados: {[k for k,v in cb.get('by_bot', {}).items() if v.get('state') == 'blocked'] or 'Ninguno'}",
+        "",
+        f"- Posiciones: {pos.get('open', {}).get('count', 0)} abiertas, {pos.get('closed_24h', {}).get('count', 0)} cerradas 24h",
+        f"  • PnL cerrado 24h: {pos.get('closed_24h', {}).get('realized_pnl', 0):.2f} USDT",
+        f"  • Duración promedio: {pos.get('closed_24h', {}).get('avg_duration_min', 0):.1f} min",
         "",
         "Contexto adicional:",
         "- El corte de datos limpio es 2026-06-10. Solo se usan señales/trades desde esa fecha.",
