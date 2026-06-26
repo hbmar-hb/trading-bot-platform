@@ -657,6 +657,38 @@ function DivergenceCard({ data, loading, info }) {
     </Section>
   )
   if (!data || data.count === 0) {
+    const paperSummary = data?.paper_summary || []
+    if (paperSummary.length > 0) {
+      return (
+        <Section title="Paper vs Real Divergence" subtitle="Vista previa paper — sin datos reales aún" info={info}>
+          <div className="mb-3 p-2 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+            <p className="text-[10px] font-semibold text-blue-700 dark:text-blue-400">📄 Modo vista previa paper</p>
+            <p className="text-[10px] text-blue-600 dark:text-blue-300">
+              Aún no hay trades reales cerrados. Se muestran los fills simulados por par/dirección; la divergencia real aparecerá cuando ambos lados tengan ≥20 trades.
+            </p>
+          </div>
+          <div className="space-y-1.5">
+            {paperSummary.slice(0, 8).map((item) => (
+              <div key={`${item.symbol}-${item.direction}`} className="flex items-center justify-between text-xs">
+                <span className="font-medium text-slate-600 dark:text-slate-400">
+                  {item.symbol} {item.direction}
+                </span>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] text-slate-400 tabular-nums">P{item.count}</span>
+                  <span className="text-[10px] tabular-nums text-slate-500">
+                    WR {item.win_rate != null ? `${item.win_rate.toFixed(1)}%` : '—'}
+                  </span>
+                  <span className={cn('font-bold tabular-nums', (item.avg_pnl || 0) >= 0 ? 'text-emerald-600' : 'text-red-600')}>
+                    {item.avg_pnl != null ? `$${item.avg_pnl.toFixed(2)}` : '—'}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Section>
+      )
+    }
+
     const noPaperBots = !data?.has_paper_bots
     const noPaperTrades = data?.no_paper_trades
     const hasPaperOpenPositions = data?.has_paper_open_positions

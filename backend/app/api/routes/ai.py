@@ -2005,6 +2005,45 @@ async def get_ai_dashboard(
             .limit(20)
         )
         div_rows = div_result.scalars().all()
+        # 2.1b Paper-only preview (shown while there are no real trades yet)
+        paper_summary = []
+        try:
+            from collections import defaultdict
+            paper_pos_q = await db.execute(
+                select(Position)
+                .where(
+                    Position.exchange == "paper",
+                    Position.status == "closed",
+                    Position.closed_at >= now - timedelta(days=7),
+                )
+            )
+            paper_positions = paper_pos_q.scalars().all()
+            grouped: dict[tuple[str, str], list] = defaultdict(list)
+            for p in paper_positions:
+                grouped[(p.symbol, p.side)].append(p)
+            for (symbol, side), positions in grouped.items():
+                entries = [p.entry_price for p in positions if p.entry_price is not None]
+                pnls = []
+                wins = 0
+                for p in positions:
+                    if p.realized_pnl is not None:
+                        pnls.append(p.realized_pnl)
+                        if p.realized_pnl > 0:
+                            wins += 1
+                paper_summary.append({
+                    "symbol": symbol,
+                    "direction": side,
+                    "count": len(positions),
+                    "avg_entry": float(sum(entries) / len(entries)) if entries else None,
+                    "avg_pnl": float(sum(pnls) / len(pnls)) if pnls else None,
+                    "win_rate": round(wins / len(positions) * 100, 1) if positions else 0.0,
+                    "has_real_data": False,
+                })
+            paper_summary.sort(key=lambda x: (-x["count"], x["symbol"]))
+        except Exception as ps_exc:
+            import logging
+            logging.getLogger(__name__).warning(f"[Dashboard] Paper summary failed: {ps_exc}")
+
         divergence_summary = {
             "count": len(div_rows),
             "items": [
@@ -2026,6 +2065,7 @@ async def get_ai_dashboard(
             "no_paper_trades": not has_paper_trades,
             "has_paper_bots": has_paper_bots,
             "has_paper_open_positions": has_paper_open_positions,
+            "paper_summary": paper_summary,
         }
     except Exception as div_exc:
         import logging
